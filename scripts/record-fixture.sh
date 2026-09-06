@@ -11,5 +11,11 @@ if [ "$source" = "curseforge" ]; then
   : "${CURSEFORGE_API_KEY:?set CURSEFORGE_API_KEY in .env}"
   args+=(-H "x-api-key: $CURSEFORGE_API_KEY")
 fi
-curl "${args[@]}" "$url" | python3 -m json.tool > "$dir/$name.json"
+tmp="$(mktemp)"
+pretty="$(mktemp)"
+trap 'rm -f "$tmp" "$pretty"' EXIT
+curl "${args[@]}" "$url" -o "$tmp"
+python3 -m json.tool < "$tmp" > "$pretty"
+mv "$pretty" "$dir/$name.json"
+rm -f "$tmp"
 echo "wrote $dir/$name.json ($(wc -c < "$dir/$name.json") bytes)"

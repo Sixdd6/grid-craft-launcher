@@ -29,6 +29,7 @@ Add a row here when you add a module.
 | `auth` | Microsoft device-code chain, refresh, keyring, offline accounts | `http`, `config` |
 | `launch` | classpath, arguments, spawn, log streaming | `instances`, `mojang`, `loaders`, `java`, `auth`, `settings` |
 | `events` | `Progress` and `LogLine` event types and the channel | none |
+| `launcher` | `Launcher` handle: owns the tokio runtime, config, HttpClient, and event channel; every binary entry point goes through it | `config`, `http`, `events` |
 
 Rules:
 
@@ -36,6 +37,7 @@ Rules:
 - `sources` never touches `instances`. Placing files is `instances::install`.
 - Blocking work (zip, hashing, processors) runs under `tokio::task::spawn_blocking`.
 - Every remote JSON has a serde struct in the owning module and a fixture under `tests/fixtures/`.
+- `launcher` is the only module binaries call directly.
 
 ## Event flow
 

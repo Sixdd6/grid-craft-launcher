@@ -31,10 +31,12 @@ let server = MockServer::start().await;
 Mock::given(method("GET")).and(path("/v2/search"))
     .respond_with(ResponseTemplate::new(200).set_body_string(include_str!("../../tests/fixtures/modrinth/search-sodium.json")))
     .mount(&server).await;
-let client = HttpClient::with_base_url(&server.uri());
+let client = HttpClient::new();
+let source = ModrinthSource::with_base_url(client.clone(), server.uri());
 ```
 
-Every source client takes a base URL so tests can point it at wiremock.
+`HttpClient` is host-agnostic. Every source client (`ModrinthSource`, `CurseForgeSource`) and the
+`mojang` module take a base URL so tests can point them at wiremock.
 
 ## Filesystem
 

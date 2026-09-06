@@ -23,6 +23,10 @@ pub trait Source: Send + Sync {
 `Version` carries `files[] { url: Option<Url>, filename, size, sha1: Option<String>, sha512: Option<String>, fingerprint: Option<u32>, primary }`
 and `dependencies[] { project_id, version_id, kind: Required | Optional | Incompatible | Embedded }`.
 
+Constructors: `ModrinthSource::with_base_url(client: HttpClient, base: String)`,
+`CurseForgeSource::with_base_url(client: HttpClient, base: String, api_key: String)`. Production
+code passes the real base URLs.
+
 ## Modrinth
 
 - Base `https://api.modrinth.com/v2`. User-Agent is `gcl_core::USER_AGENT`. 300 requests per minute; honor `X-Ratelimit-Remaining` and `X-Ratelimit-Reset`.
@@ -42,8 +46,9 @@ and `dependencies[] { project_id, version_id, kind: Required | Optional | Incomp
 
 ## Null download URL
 
-1. Try `https://edge.forgecdn.net/files/{id/1000}/{id%1000}/{fileName}` with the file name URL-encoded.
-2. If that fails, return `Error::ManualDownload { page_url, expected_fingerprint, file_name }`. The UI and CLI show the page and accept a dropped file, then verify the fingerprint.
+A null `downloadUrl` means the author opted out of third-party distribution. Return
+`Error::ManualDownload { page_url, expected_fingerprint, file_name }`. The UI and CLI show the
+page and accept a dropped file, then verify the fingerprint.
 
 ## Install targets
 
@@ -61,4 +66,3 @@ and `dependencies[] { project_id, version_id, kind: Required | Optional | Incomp
 - Do not build a second `reqwest::Client`. Use `HttpClient`.
 - Do not send the CurseForge key anywhere but `api.curseforge.com`.
 - Do not hardcode class ids as the only source; the runtime fetch wins.
-- Do not treat a null `downloadUrl` as an error before trying the CDN pattern.

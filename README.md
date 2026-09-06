@@ -12,6 +12,8 @@ Requires Rust stable (see `rust-toolchain.toml`) and these tools:
 cargo install just cargo-nextest cargo-deny slint-viewer --locked
 ```
 
+Also requires `python3` (used by the Claude Code hook scripts).
+
 Then:
 
 ```bash

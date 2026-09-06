@@ -6,10 +6,6 @@
       "Bash(git *)",
       "Bash(slint-viewer *)",
       "Bash(scripts/*)",
-      "Bash(ls *)",
-      "Bash(cat *)",
-      "Bash(grep *)",
-      "Bash(find *)",
       "WebFetch(domain:piston-meta.mojang.com)",
       "WebFetch(domain:launchermeta.mojang.com)",
       "WebFetch(domain:meta.fabricmc.net)",
@@ -21,7 +17,17 @@
       "WebFetch(domain:docs.curseforge.com)",
       "WebFetch(domain:docs.slint.dev)",
       "WebFetch(domain:docs.rs)",
-      "WebFetch(domain:minecraft.wiki)"
+      "WebFetch(domain:minecraft.wiki)",
+      "WebFetch(domain:api.curseforge.com)",
+      "WebFetch(domain:login.microsoftonline.com)",
+      "WebFetch(domain:user.auth.xboxlive.com)",
+      "WebFetch(domain:xsts.auth.xboxlive.com)",
+      "WebFetch(domain:api.minecraftservices.com)",
+      "WebFetch(domain:resources.download.minecraft.net)",
+      "WebFetch(domain:libraries.minecraft.net)",
+      "WebFetch(domain:maven.fabricmc.net)",
+      "WebFetch(domain:maven.quiltmc.org)",
+      "WebFetch(domain:api.adoptium.net)"
     ],
     "deny": [
       "Read(./.env)",
@@ -32,12 +38,12 @@
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
-        "hooks": [{ "type": "command", "command": "scripts/hooks/fmt-on-edit.sh" }]
+        "hooks": [{ "type": "command", "command": "$CLAUDE_PROJECT_DIR/scripts/hooks/fmt-on-edit.sh" }]
       }
     ],
     "Stop": [
       {
-        "hooks": [{ "type": "command", "command": "scripts/hooks/check-on-stop.sh", "timeout": 120 }]
+        "hooks": [{ "type": "command", "command": "$CLAUDE_PROJECT_DIR/scripts/hooks/check-on-stop.sh", "timeout": 600 }]
       }
     ]
   }

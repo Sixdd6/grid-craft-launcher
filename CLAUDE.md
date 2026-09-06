@@ -38,7 +38,13 @@ touch. Do not do the work inline.
 ### Commands
 
 - `just check`: fmt, clippy, nextest.
+- `just deny`: license and advisory check.
+- `just fmt`: format the workspace.
+- `just test '<filter>'`: run tests matching a nextest filter.
+- `just run-cli <args>`: run the CLI binary.
+- `just run-ui`: run the UI binary.
 - `just e2e`: CLI end-to-end in a temp root.
 - `just verify-api <source>`: live parser check.
 - `just ui-preview <file>`: live preview of a `.slint` file.
 - `just lint-claude`: frontmatter check for agents and skills.
+- `just record-fixture <source> <name> '<url>'`: save a live JSON response as a test fixture.

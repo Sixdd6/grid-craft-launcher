@@ -8,6 +8,7 @@ description: Content-addressed download cache, parallel queue, hash and size ver
 One `reqwest::Client` with `USER_AGENT`, rustls, gzip, 30 s connect timeout, no overall timeout
 (large jars). `get_json<T>`, `get_bytes`, `stream_to_file`. Retries: 3 attempts with 500 ms, 2 s,
 8 s backoff on connect errors, 5xx, and 429 (honor `Retry-After` and Modrinth `X-Ratelimit-Reset`).
+The client holds no base URL; callers pass full URLs. Source clients own their base URL.
 
 ## Cache
 

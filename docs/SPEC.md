@@ -6,9 +6,10 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 
 - R1.1 The launcher stores everything under one root directory. Default: the platform data dir plus `grid-craft-launcher` (`~/.local/share/grid-craft-launcher` on Linux).
 - R1.2 The user can change the root in settings. The launcher moves nothing; it starts using the new root and tells the user the old one still exists.
-- R1.3 `config.toml` in the root holds: root path override, default JVM min and max memory, default Java path override, API keys when not in env, default game settings preseed, account list.
+- R1.3 `config.toml` in the root holds: root path override, default JVM min and max memory, default Java path override, API keys when not in env, default game settings preseed.
 - R1.4 `CURSEFORGE_API_KEY` and `GCL_MSA_CLIENT_ID` come from env first, then `config.toml`.
 - R1.5 `GCL_ROOT` env overrides the root. Used by tests and e2e.
+- R1.6 `accounts.json` in the root holds the account list with cached short-lived tokens. Refresh tokens live in the OS keyring (R6.1).
 
 ## R2 Instances
 

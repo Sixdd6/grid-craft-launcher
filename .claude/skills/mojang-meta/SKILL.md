@@ -27,9 +27,11 @@ Full detail with JSON shapes: `docs/research/2026-09-06-mojang-and-modloader-api
 
 ## inheritsFrom
 
-Loader profiles set `inheritsFrom`. Resolve parent first, then overlay: child `mainClass` wins,
-child `arguments` append to parent, child `libraries` prepend. Keep both entries when the same
-`group:artifact` appears with different versions.
+Loader profiles set `inheritsFrom`. Resolve parent first. Child `mainClass` wins. Child
+`arguments` append to parent. Libraries are merged by `group:artifact` (ignore classifier
+for the key), with the child's version winning. The one exception: when the child profile
+is Forge or NeoForge, which expects both versions on the classpath, keep both there. See
+`docs/research/2026-09-06-mojang-and-modloader-apis.md` section 6.
 
 ## Natives
 

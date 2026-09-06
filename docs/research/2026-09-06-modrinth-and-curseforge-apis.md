@@ -133,9 +133,8 @@ runtime and cache them rather than hardcode them.
   (`allowModDistribution: false`). The launcher must then show the file's CurseForge page URL
   (`https://www.curseforge.com/minecraft/<class-slug>/<mod-slug>/download/<fileId>`) and let the
   user drop the file in; then verify by fingerprint.
-- When `downloadUrl` is null but the file is not restricted, the URL can be built as
-  `https://edge.forgecdn.net/files/{fileId / 1000}/{fileId % 1000}/{fileName}`. Try it, then
-  fall back to the manual flow.
+- Do not construct a CDN URL to bypass a null `downloadUrl`. Prism Launcher and the Modrinth App
+  both refuse; this launcher does the same (decision 2026-09-06).
 - `relationType`: 1 EmbeddedLibrary, 2 OptionalDependency, 3 RequiredDependency, 4 Tool,
   5 Incompatible, 6 Include. Resolve type 3 recursively when installing.
 

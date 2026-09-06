@@ -25,7 +25,13 @@ $GCL launch e2e --offline-user e2e-tester --dry-run > "$ROOT/launch.txt"
 
 step "check classpath files exist"
 missing=0
+count=0
 while read -r jar; do
+  count=$((count + 1))
   [ -f "$jar" ] || { echo "MISSING $jar"; missing=1; }
 done < <(grep -oE '(^|[:; ])[^:; ]+\.jar' "$ROOT/launch.txt" | tr -d ':; ' | sort -u)
+if [ "$count" -eq 0 ]; then
+  echo "FAIL: no classpath entries in launch output"
+  exit 1
+fi
 if [ "$missing" -eq 0 ]; then echo "PASS: every classpath entry exists"; else exit 1; fi
