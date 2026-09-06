@@ -2,6 +2,7 @@
 //!
 //! Module map lives in `ARCHITECTURE.md`. This crate has no UI and no CLI parsing.
 
+pub mod auth;
 pub mod config;
 pub mod download;
 pub mod error;

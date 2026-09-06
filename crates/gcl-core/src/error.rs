@@ -33,4 +33,7 @@ pub enum Error {
     /// An `options.txt` read, write, preseed, or override failed.
     #[error(transparent)]
     Settings(#[from] crate::settings::Error),
+    /// An account could not be loaded, saved, or resolved.
+    #[error(transparent)]
+    Auth(#[from] crate::auth::Error),
 }
