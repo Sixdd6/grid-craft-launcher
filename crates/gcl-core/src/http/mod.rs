@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use futures_util::StreamExt;
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sha1::{Digest, Sha1};
 use tokio::io::AsyncWriteExt;
@@ -120,12 +121,32 @@ impl HttpClient {
 
     /// Sends a GET with retries and returns the response for any status below 400.
     async fn send(&self, url: &str, headers: &[(&str, &str)]) -> Result<reqwest::Response, Error> {
+        self.send_method(reqwest::Method::GET, url, headers, None)
+            .await
+    }
+
+    /// Sends a request with retries and returns the response for any status below 400.
+    ///
+    /// `body`, when set, is sent as a JSON request body. It is kept as bytes rather than a
+    /// `reqwest::Body` so every retry can send it again.
+    async fn send_method(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        headers: &[(&str, &str)],
+        body: Option<&[u8]>,
+    ) -> Result<reqwest::Response, Error> {
         let attempts = self.retries.max(1);
         let mut last = String::new();
         for attempt in 0..attempts {
-            let mut req = self.inner.get(url);
+            let mut req = self.inner.request(method.clone(), url);
             for (name, value) in headers {
                 req = req.header(*name, *value);
+            }
+            if let Some(bytes) = body {
+                req = req
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(bytes.to_vec());
             }
             let delay = match req.send().await {
                 Ok(resp) => {
@@ -190,6 +211,41 @@ impl HttpClient {
         headers: &[(&str, &str)],
     ) -> Result<T, Error> {
         let resp = self.send(url, headers).await?;
+        let body = resp.bytes().await.map_err(|source| Error::Request {
+            url: url.to_string(),
+            source,
+        })?;
+        serde_json::from_slice(&body).map_err(|source| Error::Json {
+            url: url.to_string(),
+            source,
+        })
+    }
+
+    /// POSTs `body` as JSON and parses the response body as JSON.
+    pub async fn post_json<T: DeserializeOwned, B: Serialize>(
+        &self,
+        url: &str,
+        body: &B,
+    ) -> Result<T, Error> {
+        self.post_json_with_headers(url, body, &[]).await
+    }
+
+    /// POSTs `body` as JSON with extra request headers and parses the response body as JSON.
+    ///
+    /// Retries follow the same policy as GET: 429 and 5xx are retried, everything else fails.
+    pub async fn post_json_with_headers<T: DeserializeOwned, B: Serialize>(
+        &self,
+        url: &str,
+        body: &B,
+        headers: &[(&str, &str)],
+    ) -> Result<T, Error> {
+        let payload = serde_json::to_vec(body).map_err(|source| Error::Json {
+            url: url.to_string(),
+            source,
+        })?;
+        let resp = self
+            .send_method(reqwest::Method::POST, url, headers, Some(&payload))
+            .await?;
         let body = resp.bytes().await.map_err(|source| Error::Request {
             url: url.to_string(),
             source,
@@ -340,7 +396,7 @@ mod tests {
     use crate::USER_AGENT;
     use sha1::Digest;
     use std::time::Duration;
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn test_client() -> HttpClient {
@@ -496,6 +552,59 @@ mod tests {
             .get_json_with_headers(&format!("{}/k", server.uri()), &[("x-api-key", "secret")])
             .await
             .expect("header is sent");
+        assert_eq!(got.id, "a");
+    }
+
+    #[tokio::test]
+    async fn post_json_sends_the_body_and_parses_the_answer() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/lookup"))
+            .and(header("content-type", "application/json"))
+            .and(body_json(serde_json::json!({"hashes": ["aa"]})))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(r#"{"id":"1.20.1","release":true}"#),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let got: Version = test_client()
+            .post_json(
+                &format!("{}/lookup", server.uri()),
+                &serde_json::json!({"hashes": ["aa"]}),
+            )
+            .await
+            .expect("request succeeds");
+        assert_eq!(got.id, "1.20.1");
+    }
+
+    #[tokio::test]
+    async fn post_json_retries_5xx_and_resends_the_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_json(serde_json::json!({"hashes": ["aa"]})))
+            .respond_with(ResponseTemplate::new(500))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(body_json(serde_json::json!({"hashes": ["aa"]})))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(r#"{"id":"a","release":false}"#),
+            )
+            .with_priority(2)
+            .mount(&server)
+            .await;
+
+        let got: Version = test_client()
+            .post_json(
+                &format!("{}/lookup", server.uri()),
+                &serde_json::json!({"hashes": ["aa"]}),
+            )
+            .await
+            .expect("second attempt succeeds");
         assert_eq!(got.id, "a");
     }
 
