@@ -1,0 +1,4 @@
+/target/
+.env
+*.pending-snap
+.claude/settings.local.json
