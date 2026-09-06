@@ -38,6 +38,10 @@ let source = ModrinthSource::with_base_url(client.clone(), server.uri());
 `HttpClient` is host-agnostic. Every source client (`ModrinthSource`, `CurseForgeSource`) and the
 `mojang` module take a base URL so tests can point them at wiremock.
 
+`Launcher::mojang()` reads `GCL_MOJANG_BASE_URL` and uses it instead of `piston-meta`. That env
+var is test-only: set it in CLI tests to point `gcl` at a wiremock server. Never set it in
+production or document it as a user setting.
+
 ## Filesystem
 
 - Use `tempfile::tempdir()` for a root. Set `GCL_ROOT` when testing the CLI.

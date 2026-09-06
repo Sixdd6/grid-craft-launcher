@@ -9,10 +9,12 @@ pub mod events;
 pub mod http;
 pub mod instances;
 pub mod java;
+pub mod launcher;
 pub mod mojang;
 pub mod paths;
 
 pub use error::Error;
+pub use launcher::Launcher;
 
 /// Result alias using the crate-level [`Error`].
 pub type Result<T> = std::result::Result<T, Error>;
