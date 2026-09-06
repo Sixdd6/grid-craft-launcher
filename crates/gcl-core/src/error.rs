@@ -6,4 +6,7 @@ pub enum Error {
     /// An I/O operation failed outside a module that carries its own path context.
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    /// An error resolving or creating the app root layout.
+    #[error(transparent)]
+    Paths(#[from] crate::paths::Error),
 }
