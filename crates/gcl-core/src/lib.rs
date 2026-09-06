@@ -2,6 +2,14 @@
 //!
 //! Module map lives in `ARCHITECTURE.md`. This crate has no UI and no CLI parsing.
 
+pub mod error;
+pub mod events;
+
+pub use error::Error;
+
+/// Result alias using the crate-level [`Error`].
+pub type Result<T> = std::result::Result<T, Error>;
+
 /// Launcher version, taken from the workspace package version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

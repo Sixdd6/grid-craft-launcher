@@ -33,6 +33,9 @@ insta = { version = "1.48", features = ["json"] }
 wiremock = "0.6"
 slint = { version = "1.17", default-features = false, features = ["std", "backend-winit", "renderer-femtovg", "compat-1-2"] }
 slint-build = "1.17"
+tokio-util = { version = "0.7", features = ["rt"] }
+bytes = "1"
+futures-util = "0.3"
 
 [profile.release]
 lto = "thin"
