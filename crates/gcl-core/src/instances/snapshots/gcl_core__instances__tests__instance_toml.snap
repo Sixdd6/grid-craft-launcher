@@ -1,0 +1,14 @@
+---
+source: crates/gcl-core/src/instances/mod.rs
+expression: text
+---
+name = "My Pack"
+minecraft = "1.20.1"
+loader = "fabric"
+created = "[created]"
+content = []
+
+[jvm]
+extra_args = []
+
+[settings_overrides]
