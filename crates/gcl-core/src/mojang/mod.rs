@@ -137,34 +137,63 @@ impl Mojang {
                 }
                 Ok(parsed)
             }
-            Ok(None) => match read_optional(&self.manifest_file())? {
-                Some(body) => parse_json(&self.manifest_file().display().to_string(), &body),
+            Ok(None) => match self.read_cached_manifest()? {
+                Some(cached) => Ok(cached),
                 None => {
-                    tracing::warn!("server sent 304 but the manifest cache is gone; refetching");
-                    let (body, _) = self
-                        .http
-                        .get_text_if_changed(&url, None)
-                        .await?
-                        .ok_or_else(|| Error::UnknownVersion("manifest".to_string()))?;
-                    let parsed = parse_json::<VersionManifest>(&url, &body)?;
-                    write_atomic(&self.manifest_file(), body.as_bytes())?;
-                    Ok(parsed)
+                    tracing::warn!("no usable cached manifest after a 304; refetching");
+                    self.fetch_manifest_fresh(&url).await
                 }
             },
-            Err(err) => match read_optional(&self.manifest_file())? {
-                Some(body) => {
+            Err(err) => match self.read_cached_manifest()? {
+                Some(cached) => {
                     tracing::warn!(%err, "manifest fetch failed; using the cached copy");
-                    parse_json(&self.manifest_file().display().to_string(), &body)
+                    Ok(cached)
                 }
                 None => Err(Error::Http(err)),
             },
         }
     }
 
+    /// Fetches the manifest without `If-None-Match`, so a 304 cannot come back.
+    async fn fetch_manifest_fresh(&self, url: &str) -> Result<VersionManifest, Error> {
+        let (body, new_etag) =
+            self.http
+                .get_text_if_changed(url, None)
+                .await?
+                .ok_or_else(|| Error::Json {
+                    path: url.to_string(),
+                    source: serde::de::Error::custom("server sent 304 to an unconditional request"),
+                })?;
+        let parsed = parse_json::<VersionManifest>(url, &body)?;
+        write_atomic(&self.manifest_file(), body.as_bytes())?;
+        match new_etag {
+            Some(tag) => write_atomic(&self.etag_file(), tag.as_bytes())?,
+            None => remove_if_present(&self.etag_file())?,
+        }
+        Ok(parsed)
+    }
+
+    /// Reads the cached manifest. A file that no longer parses is deleted and reported gone.
+    fn read_cached_manifest(&self) -> Result<Option<VersionManifest>, Error> {
+        let path = self.manifest_file();
+        let Some(body) = read_optional(&path)? else {
+            return Ok(None);
+        };
+        match serde_json::from_str(&body) {
+            Ok(parsed) => Ok(Some(parsed)),
+            Err(source) => {
+                tracing::warn!(path = %path.display(), %source, "discarding a corrupt cached manifest");
+                remove_if_present(&path)?;
+                remove_if_present(&self.etag_file())?;
+                Ok(None)
+            }
+        }
+    }
+
     /// Returns a version JSON, from the cache when present and from the network otherwise.
     #[tracing::instrument(skip(self))]
     pub async fn version(&self, id: &str) -> Result<VersionJson, Error> {
-        if let Some(cached) = self.load_cached_version(id)? {
+        if let Some(cached) = self.read_cached_version(id)? {
             return Ok(cached);
         }
         let manifest = self.manifest().await?;
@@ -191,6 +220,22 @@ impl Mojang {
         match read_optional(&path)? {
             Some(body) => Ok(Some(parse_json(&path.display().to_string(), &body)?)),
             None => Ok(None),
+        }
+    }
+
+    /// Like [`Self::load_cached_version`], but deletes a file that no longer parses.
+    fn read_cached_version(&self, id: &str) -> Result<Option<VersionJson>, Error> {
+        let path = self.version_file(id);
+        let Some(body) = read_optional(&path)? else {
+            return Ok(None);
+        };
+        match serde_json::from_str(&body) {
+            Ok(parsed) => Ok(Some(parsed)),
+            Err(source) => {
+                tracing::warn!(path = %path.display(), %source, "discarding a corrupt cached version json");
+                remove_if_present(&path)?;
+                Ok(None)
+            }
         }
     }
 
@@ -264,10 +309,14 @@ fn merge_arguments(parent: Option<Arguments>, child: Option<Arguments>) -> Optio
 fn merge_libraries(parent: Vec<Library>, child: Vec<Library>, keep_both: bool) -> Vec<Library> {
     let mut out = parent;
     for lib in child {
-        let key = MavenCoord::parse(&lib.name).ok().map(|c| c.key());
+        let key = MavenCoord::parse(&lib.name).ok().map(|c| c.merge_key());
         let existing = match (keep_both, &key) {
             (false, Some(key)) => out.iter().position(|l| {
-                MavenCoord::parse(&l.name).ok().map(|c| c.key()).as_ref() == Some(key)
+                MavenCoord::parse(&l.name)
+                    .ok()
+                    .map(|c| c.merge_key())
+                    .as_ref()
+                    == Some(key)
             }),
             _ => None,
         };
@@ -303,6 +352,9 @@ fn remove_if_present(path: &Path) -> Result<(), Error> {
     }
 }
 
+/// Counter making every temporary cache file name unique within this process.
+static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Writes bytes through a temporary file, so a crash never leaves a half-written cache entry.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     let io = |path: &Path| {
@@ -312,7 +364,12 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(io(parent))?;
     }
-    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "cache".to_string());
+    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_file_name(format!("{name}.{}.{seq}.tmp", std::process::id()));
     std::fs::write(&tmp, bytes).map_err(io(&tmp))?;
     std::fs::rename(&tmp, path).map_err(io(path))
 }
@@ -510,6 +567,116 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn a_corrupt_cached_manifest_is_discarded_and_refetched() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(MANIFEST_PATH))
+            .and(header("if-none-match", "\"v1\""))
+            .respond_with(ResponseTemplate::new(304))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(MANIFEST_PATH))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("etag", "\"v1\"")
+                    .set_body_string(MANIFEST),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        let mojang = Mojang::with_base_url(client(), root.clone(), server.uri());
+
+        // First call: unconditional 200, cache and etag written.
+        mojang.manifest().await.expect("first fetch");
+        // Corrupt the cache, leaving the etag in place.
+        write_atomic(&root.versions_dir().join("manifest.json"), b"{ not json")
+            .expect("plant garbage");
+
+        // Second call: 304, the cache does not parse, so it refetches unconditionally.
+        let m = mojang
+            .manifest()
+            .await
+            .expect("recovers from a corrupt cache");
+        assert_eq!(m.latest.release, "26.2");
+        let repaired = std::fs::read_to_string(root.versions_dir().join("manifest.json"))
+            .expect("cache rewritten");
+        assert!(serde_json::from_str::<VersionManifest>(&repaired).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_corrupt_cached_version_is_discarded_and_refetched() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(MANIFEST_PATH))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(rewritten_manifest(&server.uri())),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(
+                "/v1/packages/19f5ae58f9c31bd3b0923cb822e99e3162bd62ab/1.20.1.json",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_string(V1_20_1))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        write_atomic(&root.versions_dir().join("1.20.1.json"), b"{ not json")
+            .expect("plant garbage");
+        let mojang = Mojang::with_base_url(client(), root.clone(), server.uri());
+
+        let v = mojang.version("1.20.1").await.expect("recovers");
+        assert_eq!(v.id, "1.20.1");
+        assert!(
+            mojang
+                .load_cached_version("1.20.1")
+                .expect("cache rewritten")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn load_cached_version_reports_a_corrupt_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        write_atomic(&root.versions_dir().join("bad.json"), b"{ not json").expect("plant");
+        let mojang = Mojang::new(client(), root);
+        assert!(matches!(
+            mojang.load_cached_version("bad"),
+            Err(Error::Json { .. })
+        ));
+    }
+
+    #[test]
+    fn write_atomic_keeps_neighbouring_files_apart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path().join("versions");
+        write_atomic(&base.join("manifest.json"), b"body").expect("writes json");
+        write_atomic(&base.join("manifest.etag"), b"\"v1\"").expect("writes etag");
+        assert_eq!(
+            std::fs::read_to_string(base.join("manifest.json")).expect("json"),
+            "body"
+        );
+        assert_eq!(
+            std::fs::read_to_string(base.join("manifest.etag")).expect("etag"),
+            "\"v1\""
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(&base)
+            .expect("dir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
     #[test]
     fn load_cached_version_is_none_when_absent() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -603,6 +770,62 @@ mod merge_tests {
         assert!(merged.downloads.is_some());
         assert!(merged.asset_index.is_some());
         assert_eq!(merged.java_version.expect("inherited").major_version, 17);
+    }
+
+    /// Every `group:artifact:classifier` and its version, for one artifact.
+    fn entries_of(v: &VersionJson, key: &str) -> Vec<(String, String)> {
+        v.libraries
+            .iter()
+            .filter_map(|l| MavenCoord::parse(&l.name).ok())
+            .filter(|c| c.key() == key)
+            .map(|c| (c.classifier.clone().unwrap_or_default(), c.version.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn a_child_replaces_the_plain_jar_and_its_classifier_separately() {
+        let mut c = child("fabric-loader-0.15.11-1.20.1");
+        c.libraries = [
+            "org.lwjgl:lwjgl-glfw:3.3.3",
+            "org.lwjgl:lwjgl-glfw:3.3.3:natives-linux",
+        ]
+        .iter()
+        .map(|name| Library {
+            name: (*name).to_string(),
+            downloads: None,
+            url: None,
+            sha1: None,
+            size: None,
+            rules: Vec::new(),
+            natives: None,
+            extract: None,
+        })
+        .collect();
+        let merged = merge(parent(), c);
+        let entries = entries_of(&merged, "org.lwjgl:lwjgl-glfw");
+
+        let plain: Vec<_> = entries.iter().filter(|(cl, _)| cl.is_empty()).collect();
+        assert_eq!(plain.len(), 1, "{entries:?}");
+        assert_eq!(plain[0].1, "3.3.3");
+
+        let linux: Vec<_> = entries
+            .iter()
+            .filter(|(cl, _)| cl == "natives-linux")
+            .collect();
+        assert_eq!(linux.len(), 1, "{entries:?}");
+        assert_eq!(linux[0].1, "3.3.3");
+
+        for classifier in [
+            "natives-windows",
+            "natives-windows-arm64",
+            "natives-windows-x86",
+            "natives-macos",
+            "natives-macos-arm64",
+        ] {
+            let kept: Vec<_> = entries.iter().filter(|(cl, _)| cl == classifier).collect();
+            assert_eq!(kept.len(), 1, "{classifier} in {entries:?}");
+            assert_eq!(kept[0].1, "3.3.1", "{classifier} should stay on the parent");
+        }
     }
 
     #[test]

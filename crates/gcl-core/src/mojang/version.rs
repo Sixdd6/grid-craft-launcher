@@ -260,9 +260,22 @@ impl MavenCoord {
         )
     }
 
-    /// Merge key: `group:artifact`, ignoring version, classifier, and extension.
+    /// Identity key: `group:artifact`, ignoring version, classifier, and extension.
     pub fn key(&self) -> String {
         format!("{}:{}", self.group, self.artifact)
+    }
+
+    /// Key used to merge libraries: `group:artifact:classifier`, empty when there is none.
+    ///
+    /// The plain jar and each natives classifier are separate classpath entries, so they
+    /// must replace each other one for one rather than share a slot.
+    pub fn merge_key(&self) -> String {
+        format!(
+            "{}:{}:{}",
+            self.group,
+            self.artifact,
+            self.classifier.as_deref().unwrap_or("")
+        )
     }
 }
 
@@ -332,6 +345,20 @@ mod tests {
         let text = serde_json::to_string(&v).expect("serializes");
         let again: VersionJson = serde_json::from_str(&text).expect("reparses");
         assert_eq!(v, again);
+    }
+
+    #[test]
+    fn merge_key_separates_the_plain_jar_from_its_classifiers() {
+        let plain = MavenCoord::parse("org.lwjgl:lwjgl-glfw:3.3.1").expect("parses");
+        let natives =
+            MavenCoord::parse("org.lwjgl:lwjgl-glfw:3.3.1:natives-linux").expect("parses");
+        let other =
+            MavenCoord::parse("org.lwjgl:lwjgl-glfw:3.3.1:natives-windows").expect("parses");
+        assert_eq!(plain.key(), natives.key());
+        assert_eq!(plain.merge_key(), "org.lwjgl:lwjgl-glfw:");
+        assert_eq!(natives.merge_key(), "org.lwjgl:lwjgl-glfw:natives-linux");
+        assert_ne!(plain.merge_key(), natives.merge_key());
+        assert_ne!(natives.merge_key(), other.merge_key());
     }
 
     #[test]
