@@ -1,0 +1,44 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo *)",
+      "Bash(just *)",
+      "Bash(git *)",
+      "Bash(slint-viewer *)",
+      "Bash(scripts/*)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(grep *)",
+      "Bash(find *)",
+      "WebFetch(domain:piston-meta.mojang.com)",
+      "WebFetch(domain:launchermeta.mojang.com)",
+      "WebFetch(domain:meta.fabricmc.net)",
+      "WebFetch(domain:meta.quiltmc.org)",
+      "WebFetch(domain:maven.minecraftforge.net)",
+      "WebFetch(domain:maven.neoforged.net)",
+      "WebFetch(domain:api.modrinth.com)",
+      "WebFetch(domain:docs.modrinth.com)",
+      "WebFetch(domain:docs.curseforge.com)",
+      "WebFetch(domain:docs.slint.dev)",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:minecraft.wiki)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Bash(cat .env)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [{ "type": "command", "command": "scripts/hooks/fmt-on-edit.sh" }]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [{ "type": "command", "command": "scripts/hooks/check-on-stop.sh", "timeout": 120 }]
+      }
+    ]
+  }
+}
