@@ -39,6 +39,12 @@ pub enum Error {
     /// Mojang publishes no runtimes for the OS and architecture this binary runs on.
     #[error("no mojang java runtime for this platform")]
     UnsupportedPlatform,
+    /// A runtime manifest named a path that would escape the runtime directory.
+    #[error("unsafe runtime path: {path}")]
+    UnsafePath {
+        /// The offending manifest path or link target.
+        path: String,
+    },
     /// A candidate JVM could not be run or its output could not be read.
     #[error("cannot probe java at {path}: {reason}")]
     Probe {

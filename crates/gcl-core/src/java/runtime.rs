@@ -1,7 +1,7 @@
 //! Installs a Mojang Java runtime component into the launcher cache.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -148,7 +148,7 @@ pub async fn install_runtime(
         .unwrap_or_default();
     let major = parse_java_version(&version)
         .map(|(major, _)| major)
-        .unwrap_or_default();
+        .unwrap_or_else(|| major_for_component(component));
     Ok(JavaInstall {
         path: java,
         major,
@@ -158,12 +158,66 @@ pub async fn install_runtime(
     })
 }
 
+/// The major version a component name implies, for builds that publish no version string.
+fn major_for_component(component: &str) -> u32 {
+    match component {
+        "jre-legacy" => 8,
+        "java-runtime-alpha" => 16,
+        "java-runtime-gamma" => 17,
+        _ => 21,
+    }
+}
+
+/// Joins a manifest path onto the runtime directory, refusing anything that escapes it.
+fn safe_join(base: &Path, rel: &str) -> Result<PathBuf, Error> {
+    let escape = || Error::UnsafePath {
+        path: rel.to_string(),
+    };
+    let mut out = base.to_path_buf();
+    for component in Path::new(rel).components() {
+        match component {
+            Component::Normal(part) => out.push(part),
+            Component::CurDir => {}
+            _ => return Err(escape()),
+        }
+    }
+    if !out.starts_with(base) {
+        return Err(escape());
+    }
+    Ok(out)
+}
+
+/// Checks that a link target, resolved against the link's own directory, stays inside `base`.
+fn check_link_target(base: &Path, dest: &Path, target: &str) -> Result<(), Error> {
+    let escape = || Error::UnsafePath {
+        path: target.to_string(),
+    };
+    let mut out = dest.parent().unwrap_or(base).to_path_buf();
+    for component in Path::new(target).components() {
+        match component {
+            Component::Normal(part) => out.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    return Err(escape());
+                }
+            }
+            _ => return Err(escape()),
+        }
+    }
+    if out.starts_with(base) {
+        Ok(())
+    } else {
+        Err(escape())
+    }
+}
+
 /// Creates the directories and links a manifest names, and returns the files to fetch.
 fn lay_out(files: &FileManifest, base: &Path) -> Result<(Vec<DownloadSpec>, Vec<PathBuf>), Error> {
     let mut specs = Vec::new();
     let mut executables = Vec::new();
     for (path, entry) in &files.files {
-        let dest = base.join(path);
+        let dest = safe_join(base, path)?;
         match entry.kind.as_str() {
             "directory" => create_dir(&dest)?,
             "file" => {
@@ -184,7 +238,12 @@ fn lay_out(files: &FileManifest, base: &Path) -> Result<(Vec<DownloadSpec>, Vec<
                     executables.push(dest);
                 }
             }
-            "link" => link(entry.target.as_deref(), &dest)?,
+            "link" => {
+                if let Some(target) = entry.target.as_deref() {
+                    check_link_target(base, &dest, target)?;
+                }
+                link(entry.target.as_deref(), &dest)?
+            }
             other => tracing::warn!(kind = other, path, "unknown runtime manifest entry"),
         }
     }
@@ -439,6 +498,116 @@ mod tests {
                     .is_symlink()
             );
         }
+    }
+
+    #[test]
+    fn safe_join_refuses_paths_that_escape() {
+        let base = Path::new("/cache/runtimes/gamma/linux");
+        assert!(safe_join(base, "bin/java").is_ok());
+        assert!(safe_join(base, "./bin/java").is_ok());
+        assert!(matches!(
+            safe_join(base, "../escape"),
+            Err(Error::UnsafePath { .. })
+        ));
+        assert!(matches!(
+            safe_join(base, "bin/../../escape"),
+            Err(Error::UnsafePath { .. })
+        ));
+        assert!(matches!(
+            safe_join(base, "/etc/passwd"),
+            Err(Error::UnsafePath { .. })
+        ));
+    }
+
+    #[test]
+    fn link_targets_may_climb_but_not_escape() {
+        let base = Path::new("/cache/runtimes/gamma/mac-os");
+        let dest = base.join("jre.bundle/Contents/MacOS/libjli.dylib");
+        assert!(check_link_target(base, &dest, "../Home/lib/jli/libjli.dylib").is_ok());
+        assert!(matches!(
+            check_link_target(base, &dest, "../../../../../../etc/passwd"),
+            Err(Error::UnsafePath { .. })
+        ));
+        assert!(matches!(
+            check_link_target(base, &dest, "/etc/passwd"),
+            Err(Error::UnsafePath { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_escaping_manifest_path_is_rejected() {
+        let Some(platform) = platform_key() else {
+            return;
+        };
+        let server = MockServer::start().await;
+        let base = server.uri();
+        let all = ALL_JSON.replace("https://piston-meta.mojang.com", &base);
+        let parsed: serde_json::Value = serde_json::from_str(&all).expect("fixture parses");
+        let manifest_url = parsed[platform]["java-runtime-gamma"][0]["manifest"]["url"]
+            .as_str()
+            .expect("a gamma build for this platform")
+            .to_string();
+        let manifest_path = manifest_url
+            .strip_prefix(&base)
+            .expect("rewritten to the mock")
+            .to_string();
+        let body = b"pwned".to_vec();
+        let files = serde_json::json!({
+            "files": {
+                "../escape": {
+                    "type": "file",
+                    "executable": true,
+                    "downloads": { "raw": {
+                        "sha1": crate::download::hash::sha1_hex(&body),
+                        "size": body.len(),
+                        "url": format!("{base}/files/escape"),
+                    }},
+                },
+            }
+        })
+        .to_string();
+        serve(&server, "/all.json", all).await;
+        serve(&server, &manifest_path, files).await;
+        serve(&server, "/files/escape", "pwned".to_string()).await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path().join("root"));
+        root.ensure_layout().expect("layout");
+        let http = HttpClient::new().expect("client builds");
+        let sink = null_sink();
+        let cancel = CancellationToken::new();
+        let dl = DownloadCtx {
+            http: &http,
+            root: &root,
+            sink: &sink,
+            cancel: &cancel,
+            parallel: 2,
+        };
+
+        let err = install_runtime(
+            &http,
+            &dl,
+            &format!("{base}/all.json"),
+            "java-runtime-gamma",
+        )
+        .await
+        .expect_err("the escaping path is refused");
+        assert!(matches!(err, Error::UnsafePath { .. }), "{err:?}");
+        let outside = root
+            .runtimes_dir()
+            .join("java-runtime-gamma")
+            .join("escape");
+        assert!(!outside.exists(), "{}", outside.display());
+        assert!(!dir.path().join("escape").exists());
+    }
+
+    #[test]
+    fn a_component_without_a_version_still_gets_a_major() {
+        assert_eq!(major_for_component("jre-legacy"), 8);
+        assert_eq!(major_for_component("java-runtime-alpha"), 16);
+        assert_eq!(major_for_component("java-runtime-gamma"), 17);
+        assert_eq!(major_for_component("java-runtime-delta"), 21);
+        assert_eq!(major_for_component("java-runtime-omega"), 21);
     }
 
     #[tokio::test]
