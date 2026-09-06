@@ -1,0 +1,17 @@
+        0  10-09-2025 23:02   META-INF/maven/
+        0  10-09-2025 23:02   META-INF/maven/com.google.code.gson/
+        0  10-09-2025 23:02   META-INF/maven/com.google.code.gson/gson/
+       60  01-06-2023 15:43   META-INF/maven/com.google.code.gson/gson/pom.properties
+     9365  01-06-2023 15:43   META-INF/maven/com.google.code.gson/gson/pom.xml
+        0  10-09-2025 23:02   META-INF/maven/net.sf.jopt-simple/
+        0  10-09-2025 23:02   META-INF/maven/net.sf.jopt-simple/jopt-simple/
+      144  09-11-2018 01:59   META-INF/maven/net.sf.jopt-simple/jopt-simple/pom.properties
+    14128  09-11-2018 01:59   META-INF/maven/net.sf.jopt-simple/jopt-simple/pom.xml
+        0  10-09-2025 23:02   data/
+  2775206  10-09-2025 23:02   data/client.lzma
+      374  10-09-2025 22:52   data/run.bat
+      366  10-09-2025 22:52   data/run.sh
+  2762878  10-09-2025 23:02   data/server.lzma
+     5172  10-09-2025 22:52   data/unix_args.txt
+      339  10-09-2025 22:52   data/user_jvm_args.txt
+     5172  10-09-2025 22:52   data/win_args.txt
