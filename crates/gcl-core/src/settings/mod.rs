@@ -23,6 +23,40 @@ pub enum Error {
         /// The underlying I/O error.
         source: std::io::Error,
     },
+    /// An override key could not be written as an `options.txt` key.
+    #[error("not a valid options.txt key: {0:?}")]
+    BadKey(String),
+    /// An override value could not be written as an `options.txt` value.
+    #[error("not a valid options.txt value: {0:?}")]
+    BadValue(String),
+}
+
+/// Checks that `key` can be written as an `options.txt` key and read back unchanged.
+///
+/// A key must be non-empty, must not hold a `:`, which is the separator, must not hold a
+/// carriage return or a newline, which would split it into two lines, and must not start or
+/// end with whitespace, which the file format does not preserve as part of the key.
+pub fn validate_key(key: &str) -> Result<(), Error> {
+    let bad = key.is_empty()
+        || key.contains(':')
+        || key.contains('\r')
+        || key.contains('\n')
+        || key.trim() != key;
+    if bad {
+        return Err(Error::BadKey(key.to_string()));
+    }
+    Ok(())
+}
+
+/// Checks that `value` can be written as an `options.txt` value.
+///
+/// A value may hold a `:`, because only the first one separates the key, but it must stay on
+/// one line.
+pub fn validate_value(value: &str) -> Result<(), Error> {
+    if value.contains('\r') || value.contains('\n') {
+        return Err(Error::BadValue(value.to_string()));
+    }
+    Ok(())
 }
 
 /// One line of `options.txt`: a `key:value` pair, or any other line kept verbatim.
@@ -184,10 +218,18 @@ pub fn write(path: &Path, f: &OptionsFile) -> Result<(), Error> {
 /// Returns the number of keys whose value actually changed (added or different from what was
 /// already there). The file is only rewritten when that count is non-zero, so applying the
 /// same overrides twice leaves the file untouched on the second call.
+///
+/// Every key and value is checked first, by [`validate_key`] and [`validate_value`]. One bad
+/// entry fails the whole call and writes nothing, so a hand-edited `instance.toml` cannot
+/// corrupt `options.txt`.
 pub fn apply_overrides_to(
     game_dir: &Path,
     overrides: &BTreeMap<String, String>,
 ) -> Result<usize, Error> {
+    for (key, value) in overrides {
+        validate_key(key)?;
+        validate_value(value)?;
+    }
     let path = game_dir.join(OPTIONS_FILE);
     let mut file = read(&path)?;
     let mut changed = 0usize;
@@ -232,6 +274,35 @@ mod tests {
         let text = "renderDistance:8\n# a comment\nguiScale:2\nnoColonHere\n";
         let file = OptionsFile::parse(text);
         assert_eq!(file.to_string(), text);
+    }
+
+    #[test]
+    fn validate_key_rejects_anything_the_file_format_cannot_hold() {
+        assert!(validate_key("renderDistance").is_ok());
+        assert!(validate_key("a.b-c_d").is_ok());
+        assert!(matches!(validate_key(""), Err(Error::BadKey(_))));
+        assert!(matches!(validate_key("a:b"), Err(Error::BadKey(_))));
+        assert!(matches!(validate_key("a\nb"), Err(Error::BadKey(_))));
+        assert!(matches!(validate_key("a\rb"), Err(Error::BadKey(_))));
+        assert!(matches!(validate_key(" a"), Err(Error::BadKey(_))));
+        assert!(matches!(validate_key("a "), Err(Error::BadKey(_))));
+    }
+
+    #[test]
+    fn validate_value_allows_a_colon_but_not_a_line_break() {
+        assert!(validate_value("[\"a:b\"]").is_ok());
+        assert!(validate_value("").is_ok());
+        assert!(matches!(validate_value("a\nb"), Err(Error::BadValue(_))));
+        assert!(matches!(validate_value("a\rb"), Err(Error::BadValue(_))));
+    }
+
+    #[test]
+    fn apply_overrides_to_rejects_a_key_with_a_colon_and_writes_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = apply_overrides_to(dir.path(), &defaults(&[("a:b", "1")]))
+            .expect_err("a key with a colon");
+        assert!(matches!(err, Error::BadKey(_)), "{err:?}");
+        assert!(!dir.path().join(OPTIONS_FILE).exists());
     }
 
     #[test]

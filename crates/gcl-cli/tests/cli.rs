@@ -488,3 +488,48 @@ fn debug_verify_source_still_rejects_an_unknown_source() {
         .assert()
         .code(2);
 }
+
+#[test]
+fn settings_set_rejects_a_key_options_txt_cannot_hold() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    gcl(dir.path())
+        .args(["instance", "create", "Demo", "--minecraft", MC])
+        .assert()
+        .success();
+    let toml_path = dir
+        .path()
+        .join("instances")
+        .join("demo")
+        .join("instance.toml");
+    let before = std::fs::read_to_string(&toml_path).expect("instance.toml");
+
+    for key in ["a:b", "", " a", "a\nb"] {
+        gcl(dir.path())
+            .args(["settings", "set", "demo", key, "x"])
+            .assert()
+            .code(1)
+            .stderr(predicates::str::contains("error:"));
+    }
+    gcl(dir.path())
+        .args(["settings", "defaults", "set", "a:b", "x"])
+        .assert()
+        .code(1)
+        .stderr(predicates::str::contains("error:"));
+
+    let after = std::fs::read_to_string(&toml_path).expect("instance.toml");
+    assert_eq!(before, after, "instance.toml was rewritten");
+}
+
+#[test]
+fn account_remove_of_the_active_account_says_none_is_active() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    gcl(dir.path())
+        .args(["account", "add-offline", "alice"])
+        .assert()
+        .success();
+    gcl(dir.path())
+        .args(["account", "remove", "alice"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("no active account now"));
+}

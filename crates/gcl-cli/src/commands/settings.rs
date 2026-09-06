@@ -96,6 +96,7 @@ pub fn run(launcher: &mut Launcher, format: Format, command: SettingsCommand) ->
             }
         }
         SettingsCommand::Set { slug, key, value } => {
+            check(&key, &value)?;
             let mut instance = launcher.instances().get(&slug)?;
             instance
                 .config
@@ -128,6 +129,7 @@ fn defaults(launcher: &mut Launcher, format: Format, command: DefaultsCommand) -
             }
         }
         DefaultsCommand::Set { key, value } => {
+            check(&key, &value)?;
             launcher
                 .config_mut()
                 .game_defaults
@@ -141,6 +143,16 @@ fn defaults(launcher: &mut Launcher, format: Format, command: DefaultsCommand) -
             report_change(format, &key, None)
         }
     }
+}
+
+/// Rejects a key or value `options.txt` cannot hold, before anything is saved.
+///
+/// A key with a `:` in it would be read back as a different key, and a line break in either
+/// would split the entry into two lines.
+fn check(key: &str, value: &str) -> Result<()> {
+    gcl_core::settings::validate_key(key)?;
+    gcl_core::settings::validate_value(value)?;
+    Ok(())
 }
 
 /// Prints one `  key: value` line per entry, or a placeholder when there are none.

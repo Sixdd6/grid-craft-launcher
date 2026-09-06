@@ -100,11 +100,19 @@ pub fn run(launcher: &Launcher, format: Format, command: AccountCommand) -> Resu
                 .or_else(|| saved.iter().find(|a| a.name == id_or_name))
                 .ok_or_else(|| gcl_core::auth::Error::NotFound(id_or_name.clone()))?;
             let id = found.id.clone();
+            // Removing the active account leaves none active, which the report says so the
+            // next launch's "no account selected" is not a surprise.
+            let was_active = accounts.active()?.map(|a| a.id) == Some(id.clone());
             accounts.remove(&id)?;
             match format {
-                Format::Json => print_json(&serde_json::json!({ "removed": id })),
+                Format::Json => print_json(&serde_json::json!({
+                    "removed": id, "was_active": was_active,
+                })),
                 Format::Text => {
-                    println!("removed {id}");
+                    match was_active {
+                        true => println!("removed {id} (was active; no active account now)"),
+                        false => println!("removed {id}"),
+                    }
                     Ok(())
                 }
             }
