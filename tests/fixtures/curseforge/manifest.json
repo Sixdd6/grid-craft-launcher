@@ -1,0 +1,34 @@
+{
+  "manifestVersion": 1,
+  "manifestType": "minecraftModpack",
+  "name": "GRID Test Pack",
+  "version": "1.0.0",
+  "author": "sixdd6",
+  "overrides": "overrides",
+  "minecraft": {
+    "version": "1.20.1",
+    "modLoaders": [
+      {
+        "id": "fabric-0.15.11",
+        "primary": true
+      }
+    ]
+  },
+  "files": [
+    {
+      "projectID": 394468,
+      "fileID": 5230381,
+      "required": true
+    },
+    {
+      "projectID": 306612,
+      "fileID": 5198342,
+      "required": false
+    },
+    {
+      "projectID": 238222,
+      "fileID": 5246076,
+      "required": true
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "resourcepack": {
+    "project_id": "50dA9Sha",
+    "slug": "fresh-animations",
+    "project_type": "resourcepack",
+    "version_loaders": [
+      "minecraft"
+    ],
+    "first_file_filename": "FreshAnimations_v1.10.5.zip"
+  },
+  "shader": {
+    "project_id": "HVnmMxH1",
+    "slug": "complementary-reimagined",
+    "project_type": "shader",
+    "version_loaders": [
+      "iris",
+      "optifine"
+    ],
+    "first_file_filename": "ComplementaryReimagined_r5.9.zip"
+  },
+  "datapack": {
+    "project_id": "OhduvhIc",
+    "slug": "veinminer",
+    "project_type": "mod",
+    "version_loaders": [
+      "neoforge"
+    ],
+    "first_file_filename": "veinminer-neoforge-2.12.1.jar"
+  }
+}

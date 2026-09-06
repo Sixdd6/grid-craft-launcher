@@ -1,0 +1,207 @@
+{
+  "data": [
+    {
+      "id": 5230381,
+      "gameId": 432,
+      "modId": 394468,
+      "isAvailable": true,
+      "displayName": "sodium-fabric-0.5.13+mc1.20.1.jar",
+      "fileName": "sodium-fabric-0.5.13+mc1.20.1.jar",
+      "releaseType": 1,
+      "fileStatus": 4,
+      "hashes": [
+        {
+          "value": "9f3c1a2b7e4d5f60718293a4b5c6d7e8f9012345",
+          "algo": 1
+        },
+        {
+          "value": "d41d8cd98f00b204e9800998ecf8427e",
+          "algo": 2
+        }
+      ],
+      "fileDate": "2026-06-01T12:00:00Z",
+      "fileLength": 1542332,
+      "downloadCount": 45123987,
+      "fileSizeOnDisk": 1542332,
+      "downloadUrl": "https://edge.forgecdn.net/files/5230/381/sodium-fabric-0.5.13+mc1.20.1.jar",
+      "gameVersions": [
+        "1.20.1",
+        "Fabric"
+      ],
+      "sortableGameVersions": [
+        {
+          "gameVersionName": "1.20.1",
+          "gameVersionPadded": "0000000001.0000000020.0000000001",
+          "gameVersion": "1.20.1",
+          "gameVersionReleaseDate": "2023-06-12T00:00:00Z",
+          "gameVersionTypeId": 75125
+        },
+        {
+          "gameVersionName": "Fabric",
+          "gameVersionPadded": "0",
+          "gameVersion": "",
+          "gameVersionReleaseDate": "2019-01-01T00:00:00Z",
+          "gameVersionTypeId": 68441
+        }
+      ],
+      "dependencies": [
+        {
+          "modId": 306612,
+          "relationType": 2
+        }
+      ],
+      "modules": [
+        {
+          "name": "META-INF",
+          "fingerprint": 1234567890
+        },
+        {
+          "name": "sodium-fabric-0.5.13+mc1.20.1.jar",
+          "fingerprint": 987654321
+        }
+      ],
+      "exposeAsAlternative": false,
+      "parentProjectFileId": null,
+      "alternateFileId": 0,
+      "isServerPack": false,
+      "serverPackFileId": null,
+      "isEarlyAccessContent": false,
+      "earlyAccessEndDate": null,
+      "fileFingerprint": 3735928559
+    },
+    {
+      "id": 5109221,
+      "gameId": 432,
+      "modId": 394468,
+      "isAvailable": true,
+      "displayName": "sodium-fabric-0.4.10+mc1.19.4.jar",
+      "fileName": "sodium-fabric-0.4.10+mc1.19.4.jar",
+      "releaseType": 1,
+      "fileStatus": 4,
+      "hashes": [
+        {
+          "value": "2b7e4d5f60718293a4b5c6d7e8f901234abc123",
+          "algo": 1
+        },
+        {
+          "value": "e2fc714c4727ee9395f324cd2e7f331f",
+          "algo": 2
+        }
+      ],
+      "fileDate": "2025-04-18T09:30:00Z",
+      "fileLength": 1398201,
+      "downloadCount": 20988112,
+      "fileSizeOnDisk": 1398201,
+      "downloadUrl": "https://edge.forgecdn.net/files/5109/221/sodium-fabric-0.4.10+mc1.19.4.jar",
+      "gameVersions": [
+        "1.19.4",
+        "Fabric"
+      ],
+      "sortableGameVersions": [
+        {
+          "gameVersionName": "1.19.4",
+          "gameVersionPadded": "0000000001.0000000019.0000000004",
+          "gameVersion": "1.19.4",
+          "gameVersionReleaseDate": "2023-03-14T00:00:00Z",
+          "gameVersionTypeId": 73407
+        },
+        {
+          "gameVersionName": "Fabric",
+          "gameVersionPadded": "0",
+          "gameVersion": "",
+          "gameVersionReleaseDate": "2019-01-01T00:00:00Z",
+          "gameVersionTypeId": 68441
+        }
+      ],
+      "dependencies": [],
+      "modules": [
+        {
+          "name": "META-INF",
+          "fingerprint": 2233445566
+        },
+        {
+          "name": "sodium-fabric-0.4.10+mc1.19.4.jar",
+          "fingerprint": 665544332
+        }
+      ],
+      "exposeAsAlternative": false,
+      "parentProjectFileId": null,
+      "alternateFileId": 0,
+      "isServerPack": false,
+      "serverPackFileId": null,
+      "isEarlyAccessContent": false,
+      "earlyAccessEndDate": null,
+      "fileFingerprint": 892374615
+    },
+    {
+      "id": 4998877,
+      "gameId": 432,
+      "modId": 394468,
+      "isAvailable": false,
+      "displayName": "sodium-fabric-0.4.9+mc1.19.3.jar",
+      "fileName": "sodium-fabric-0.4.9+mc1.19.3.jar",
+      "releaseType": 3,
+      "fileStatus": 6,
+      "hashes": [
+        {
+          "value": "4d5f60718293a4b5c6d7e8f901234abc1237e2b",
+          "algo": 1
+        },
+        {
+          "value": "098f6bcd4621d373cade4e832627b4f6",
+          "algo": 2
+        }
+      ],
+      "fileDate": "2023-02-01T08:00:00Z",
+      "fileLength": 1287654,
+      "downloadCount": 512873,
+      "fileSizeOnDisk": 1287654,
+      "downloadUrl": null,
+      "gameVersions": [
+        "1.19.3",
+        "Fabric"
+      ],
+      "sortableGameVersions": [
+        {
+          "gameVersionName": "1.19.3",
+          "gameVersionPadded": "0000000001.0000000019.0000000003",
+          "gameVersion": "1.19.3",
+          "gameVersionReleaseDate": "2022-12-07T00:00:00Z",
+          "gameVersionTypeId": 73407
+        },
+        {
+          "gameVersionName": "Fabric",
+          "gameVersionPadded": "0",
+          "gameVersion": "",
+          "gameVersionReleaseDate": "2019-01-01T00:00:00Z",
+          "gameVersionTypeId": 68441
+        }
+      ],
+      "dependencies": [],
+      "modules": [
+        {
+          "name": "META-INF",
+          "fingerprint": 445566778
+        },
+        {
+          "name": "sodium-fabric-0.4.9+mc1.19.3.jar",
+          "fingerprint": 778899001
+        }
+      ],
+      "exposeAsAlternative": false,
+      "parentProjectFileId": null,
+      "alternateFileId": 0,
+      "isServerPack": false,
+      "serverPackFileId": null,
+      "isEarlyAccessContent": false,
+      "earlyAccessEndDate": null,
+      "fileFingerprint": 1088490427
+    }
+  ],
+  "pagination": {
+    "index": 0,
+    "pageSize": 50,
+    "resultCount": 3,
+    "totalCount": 3
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "mod": {
+    "ok": true,
+    "status": 200,
+    "total_hits": 74821
+  },
+  "modpack": {
+    "ok": true,
+    "status": 200,
+    "total_hits": 18226
+  },
+  "resourcepack": {
+    "ok": true,
+    "status": 200,
+    "total_hits": 34464
+  },
+  "shader": {
+    "ok": true,
+    "status": 200,
+    "total_hits": 882
+  },
+  "datapack": {
+    "ok": true,
+    "status": 200,
+    "total_hits": 14551
+  },
+  "world": {
+    "ok": true,
+    "status": 200,
+    "total_hits": 0
+  }
+}

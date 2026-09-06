@@ -1,0 +1,88 @@
+{
+  "data": {
+    "isCacheBuilt": true,
+    "exactMatches": [
+      {
+        "id": 394468,
+        "file": {
+          "id": 5230381,
+          "gameId": 432,
+          "modId": 394468,
+          "isAvailable": true,
+          "displayName": "sodium-fabric-0.5.13+mc1.20.1.jar",
+          "fileName": "sodium-fabric-0.5.13+mc1.20.1.jar",
+          "releaseType": 1,
+          "fileStatus": 4,
+          "hashes": [
+            {
+              "value": "9f3c1a2b7e4d5f60718293a4b5c6d7e8f9012345",
+              "algo": 1
+            },
+            {
+              "value": "d41d8cd98f00b204e9800998ecf8427e",
+              "algo": 2
+            }
+          ],
+          "fileDate": "2026-06-01T12:00:00Z",
+          "fileLength": 1542332,
+          "downloadCount": 45123987,
+          "fileSizeOnDisk": 1542332,
+          "downloadUrl": "https://edge.forgecdn.net/files/5230/381/sodium-fabric-0.5.13+mc1.20.1.jar",
+          "gameVersions": [
+            "1.20.1",
+            "Fabric"
+          ],
+          "sortableGameVersions": [
+            {
+              "gameVersionName": "1.20.1",
+              "gameVersionPadded": "0000000001.0000000020.0000000001",
+              "gameVersion": "1.20.1",
+              "gameVersionReleaseDate": "2023-06-12T00:00:00Z",
+              "gameVersionTypeId": 75125
+            },
+            {
+              "gameVersionName": "Fabric",
+              "gameVersionPadded": "0",
+              "gameVersion": "",
+              "gameVersionReleaseDate": "2019-01-01T00:00:00Z",
+              "gameVersionTypeId": 68441
+            }
+          ],
+          "dependencies": [
+            {
+              "modId": 306612,
+              "relationType": 2
+            }
+          ],
+          "modules": [
+            {
+              "name": "META-INF",
+              "fingerprint": 1234567890
+            },
+            {
+              "name": "sodium-fabric-0.5.13+mc1.20.1.jar",
+              "fingerprint": 987654321
+            }
+          ],
+          "exposeAsAlternative": false,
+          "parentProjectFileId": null,
+          "alternateFileId": 0,
+          "isServerPack": false,
+          "serverPackFileId": null,
+          "isEarlyAccessContent": false,
+          "earlyAccessEndDate": null,
+          "fileFingerprint": 3735928559
+        },
+        "latestFiles": [],
+        "latestFilesIndexes": []
+      }
+    ],
+    "partialMatches": [],
+    "installedFingerprints": [
+      3735928559
+    ],
+    "unmatchedFingerprints": [
+      1122334455
+    ]
+  }
+}

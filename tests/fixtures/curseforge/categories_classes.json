@@ -1,0 +1,82 @@
+{
+  "data": [
+    {
+      "id": 6,
+      "gameId": 432,
+      "name": "Mods",
+      "slug": "mc-mods",
+      "url": "https://www.curseforge.com/minecraft/mc-mods",
+      "iconUrl": "https://media.forgecdn.net/avatars/6/6/636512271254102454.png",
+      "dateModified": "2014-05-08T17:42:23.94Z",
+      "isClass": true,
+      "classId": null,
+      "parentCategoryId": null,
+      "displayIndex": 0
+    },
+    {
+      "id": 4471,
+      "gameId": 432,
+      "name": "Modpacks",
+      "slug": "modpacks",
+      "url": "https://www.curseforge.com/minecraft/modpacks",
+      "iconUrl": "https://media.forgecdn.net/avatars/44/71/637239028160000000.png",
+      "dateModified": "2018-03-01T00:00:00Z",
+      "isClass": true,
+      "classId": null,
+      "parentCategoryId": null,
+      "displayIndex": 1
+    },
+    {
+      "id": 12,
+      "gameId": 432,
+      "name": "Resource Packs",
+      "slug": "texture-packs",
+      "url": "https://www.curseforge.com/minecraft/texture-packs",
+      "iconUrl": "https://media.forgecdn.net/avatars/12/12/636512271254102460.png",
+      "dateModified": "2014-05-08T17:42:23.94Z",
+      "isClass": true,
+      "classId": null,
+      "parentCategoryId": null,
+      "displayIndex": 2
+    },
+    {
+      "id": 17,
+      "gameId": 432,
+      "name": "Worlds",
+      "slug": "worlds",
+      "url": "https://www.curseforge.com/minecraft/worlds",
+      "iconUrl": "https://media.forgecdn.net/avatars/17/17/636512271254102470.png",
+      "dateModified": "2014-05-08T17:42:23.94Z",
+      "isClass": true,
+      "classId": null,
+      "parentCategoryId": null,
+      "displayIndex": 3
+    },
+    {
+      "id": 6552,
+      "gameId": 432,
+      "name": "Shaders",
+      "slug": "shaders",
+      "url": "https://www.curseforge.com/minecraft/shaders",
+      "iconUrl": "https://media.forgecdn.net/avatars/65/52/637751623456789000.png",
+      "dateModified": "2021-06-15T00:00:00Z",
+      "isClass": true,
+      "classId": null,
+      "parentCategoryId": null,
+      "displayIndex": 4
+    },
+    {
+      "id": 6945,
+      "gameId": 432,
+      "name": "Data Packs",
+      "slug": "data-packs",
+      "url": "https://www.curseforge.com/minecraft/data-packs",
+      "iconUrl": "https://media.forgecdn.net/avatars/69/45/637825612345678900.png",
+      "dateModified": "2022-01-10T00:00:00Z",
+      "isClass": true,
+      "classId": null,
+      "parentCategoryId": null,
+      "displayIndex": 5
+    }
+  ]
+}

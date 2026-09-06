@@ -1,0 +1,193 @@
+{
+  "data": [
+    {
+      "id": 394468,
+      "gameId": 432,
+      "name": "Sodium",
+      "slug": "sodium",
+      "links": {
+        "websiteUrl": "https://www.curseforge.com/minecraft/mc-mods/sodium",
+        "wikiUrl": "",
+        "issuesUrl": "https://github.com/CaffeineMC/sodium/issues",
+        "sourceUrl": "https://github.com/CaffeineMC/sodium"
+      },
+      "summary": "A modern rendering engine for Minecraft which greatly improves performance.",
+      "status": 4,
+      "downloadCount": 182345123,
+      "isFeatured": true,
+      "primaryCategoryId": 6,
+      "categories": [
+        {
+          "id": 6,
+          "gameId": 432,
+          "name": "Mods",
+          "slug": "mc-mods",
+          "url": "https://www.curseforge.com/minecraft/mc-mods",
+          "iconUrl": "https://media.forgecdn.net/avatars/6/6/636512271254102454.png",
+          "dateModified": "2014-05-08T17:42:23.94Z",
+          "isClass": true,
+          "classId": null,
+          "parentCategoryId": null,
+          "displayIndex": 0
+        }
+      ],
+      "classId": 6,
+      "authors": [
+        {
+          "id": 62945,
+          "name": "jellysquid3",
+          "url": "https://www.curseforge.com/members/jellysquid3"
+        }
+      ],
+      "logo": {
+        "id": 305563,
+        "modId": 394468,
+        "title": "636663849169721676.png",
+        "description": "",
+        "thumbnailUrl": "https://media.forgecdn.net/avatars/thumbnails/305/563/256/256/636663849169721676.png",
+        "url": "https://media.forgecdn.net/avatars/305/563/636663849169721676.png"
+      },
+      "screenshots": [],
+      "mainFileId": 5230381,
+      "latestFiles": [],
+      "latestFilesIndexes": [],
+      "latestEarlyAccessFilesIndexes": [],
+      "dateCreated": "2019-04-30T02:33:52.07Z",
+      "dateModified": "2026-08-15T10:02:11.5Z",
+      "dateReleased": "2026-08-15T10:02:11.5Z",
+      "allowModDistribution": true,
+      "gamePopularityRank": 5,
+      "isAvailable": true,
+      "thumbsUpCount": 0,
+      "rating": 0
+    },
+    {
+      "id": 306612,
+      "gameId": 432,
+      "name": "Iris Shaders",
+      "slug": "irisshaders",
+      "links": {
+        "websiteUrl": "https://www.curseforge.com/minecraft/mc-mods/irisshaders",
+        "wikiUrl": "https://github.com/IrisShaders/Iris/wiki",
+        "issuesUrl": "https://github.com/IrisShaders/Iris/issues",
+        "sourceUrl": "https://github.com/IrisShaders/Iris"
+      },
+      "summary": "A modern shaders mod for Minecraft intended to be compatible with existing shader packs.",
+      "status": 4,
+      "downloadCount": 61234789,
+      "isFeatured": true,
+      "primaryCategoryId": 6,
+      "categories": [
+        {
+          "id": 6,
+          "gameId": 432,
+          "name": "Mods",
+          "slug": "mc-mods",
+          "url": "https://www.curseforge.com/minecraft/mc-mods",
+          "iconUrl": "https://media.forgecdn.net/avatars/6/6/636512271254102454.png",
+          "dateModified": "2014-05-08T17:42:23.94Z",
+          "isClass": true,
+          "classId": null,
+          "parentCategoryId": null,
+          "displayIndex": 0
+        }
+      ],
+      "classId": 6,
+      "authors": [
+        {
+          "id": 71234,
+          "name": "coderbot16",
+          "url": "https://www.curseforge.com/members/coderbot16"
+        }
+      ],
+      "logo": {
+        "id": 361882,
+        "modId": 306612,
+        "title": "637751623456789012.png",
+        "description": "",
+        "thumbnailUrl": "https://media.forgecdn.net/avatars/thumbnails/361/882/256/256/637751623456789012.png",
+        "url": "https://media.forgecdn.net/avatars/361/882/637751623456789012.png"
+      },
+      "screenshots": [],
+      "mainFileId": 5198342,
+      "latestFiles": [],
+      "latestFilesIndexes": [],
+      "latestEarlyAccessFilesIndexes": [],
+      "dateCreated": "2021-01-05T18:10:00.0Z",
+      "dateModified": "2026-07-30T14:22:09.0Z",
+      "dateReleased": "2026-07-30T14:22:09.0Z",
+      "allowModDistribution": true,
+      "gamePopularityRank": 12,
+      "isAvailable": true,
+      "thumbsUpCount": 0,
+      "rating": 0
+    },
+    {
+      "id": 238222,
+      "gameId": 432,
+      "name": "JEI",
+      "slug": "jei",
+      "links": {
+        "websiteUrl": "https://www.curseforge.com/minecraft/mc-mods/jei",
+        "wikiUrl": "https://github.com/mezz/JustEnoughItems/wiki",
+        "issuesUrl": "https://github.com/mezz/JustEnoughItems/issues",
+        "sourceUrl": "https://github.com/mezz/JustEnoughItems"
+      },
+      "summary": "View Items and Recipes.",
+      "status": 4,
+      "downloadCount": 421987654,
+      "isFeatured": true,
+      "primaryCategoryId": 6,
+      "categories": [
+        {
+          "id": 6,
+          "gameId": 432,
+          "name": "Mods",
+          "slug": "mc-mods",
+          "url": "https://www.curseforge.com/minecraft/mc-mods",
+          "iconUrl": "https://media.forgecdn.net/avatars/6/6/636512271254102454.png",
+          "dateModified": "2014-05-08T17:42:23.94Z",
+          "isClass": true,
+          "classId": null,
+          "parentCategoryId": null,
+          "displayIndex": 0
+        }
+      ],
+      "classId": 6,
+      "authors": [
+        {
+          "id": 21445,
+          "name": "mezz",
+          "url": "https://www.curseforge.com/members/mezz"
+        }
+      ],
+      "logo": {
+        "id": 132145,
+        "modId": 238222,
+        "title": "635902341234567890.png",
+        "description": "",
+        "thumbnailUrl": "https://media.forgecdn.net/avatars/thumbnails/132/145/256/256/635902341234567890.png",
+        "url": "https://media.forgecdn.net/avatars/132/145/635902341234567890.png"
+      },
+      "screenshots": [],
+      "mainFileId": 5246076,
+      "latestFiles": [],
+      "latestFilesIndexes": [],
+      "latestEarlyAccessFilesIndexes": [],
+      "dateCreated": "2014-01-11T05:00:00.0Z",
+      "dateModified": "2026-08-01T09:15:00.0Z",
+      "dateReleased": "2026-08-01T09:15:00.0Z",
+      "allowModDistribution": true,
+      "gamePopularityRank": 1,
+      "isAvailable": true,
+      "thumbsUpCount": 0,
+      "rating": 0
+    }
+  ],
+  "pagination": {
+    "index": 0,
+    "pageSize": 50,
+    "resultCount": 3,
+    "totalCount": 3
+  }
+}
