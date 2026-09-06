@@ -239,6 +239,36 @@ pub async fn import(
     let (format, plan) = tokio::task::spawn_blocking(move || read_plan(&zip, &extra_hosts))
         .await
         .map_err(join_at(&req.zip))??;
+    import_plan(
+        ctx,
+        instances,
+        loader_ctx,
+        ep,
+        game_defaults,
+        format,
+        plan,
+        req,
+    )
+    .await
+}
+
+/// [`import`] over a [`PackPlan`] the caller has already read.
+///
+/// A caller that has to look at the manifest before it can build the [`LoaderCtx`] — a
+/// Forge pack needs a JVM for the Minecraft version the manifest names — reads the plan
+/// with [`read_plan`] and hands it over here, so the zip is parsed once. `format` and
+/// `plan` are the pair [`read_plan`] returned for `req.zip`.
+#[tracing::instrument(skip(ctx, instances, loader_ctx, ep, game_defaults, plan))]
+pub async fn import_plan(
+    ctx: &ContentCtx<'_>,
+    instances: &Instances,
+    loader_ctx: &LoaderCtx<'_>,
+    ep: &LoaderEndpoints,
+    game_defaults: &BTreeMap<String, String>,
+    format: PackFormat,
+    plan: PackPlan,
+    req: ImportRequest,
+) -> Result<ImportOutcome, Error> {
     ctx.log(format!(
         "parsed {} {} for Minecraft {} on {}",
         plan.name, plan.version, plan.minecraft, plan.loader

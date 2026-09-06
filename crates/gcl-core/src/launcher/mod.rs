@@ -701,9 +701,14 @@ impl Launcher {
 
     /// Shared body of the two modpack imports.
     ///
-    /// The pack's manifest is parsed first, because a Forge or NeoForge pack needs a JVM for
-    /// its installer processors and only the manifest says which Minecraft version that JVM
-    /// has to match.
+    /// The pack's manifest is read here, not inside [`crate::modpacks::import`], because a
+    /// Forge or NeoForge pack needs a JVM for its installer processors and only the manifest
+    /// says which Minecraft version that JVM has to match. The plan is then handed to
+    /// [`crate::modpacks::import_plan`], so the zip is parsed once.
+    ///
+    /// A file the pack's author opted out of third-party distribution is appended to
+    /// `pending-manual.json` under the new instance, the same way [`Launcher::add_content`]
+    /// appends one.
     fn import_pack(
         &self,
         zip: &Path,
@@ -719,9 +724,20 @@ impl Launcher {
             // specification names. `extra_hosts` exists for tests that serve them locally.
             extra_hosts: Vec::new(),
         };
-        let (_, plan) = crate::modpacks::read_plan(zip, &req.extra_hosts)?;
+        let target = req.zip.clone();
+        let hosts = req.extra_hosts.clone();
+        let (format, plan) = self
+            .block_on(async move {
+                tokio::task::spawn_blocking(move || crate::modpacks::read_plan(&target, &hosts))
+                    .await
+            })
+            // A `JoinError` here means the parse panicked; there is nothing better to say.
+            .map_err(|err| std::io::Error::other(err.to_string()))??;
         let java = match plan.loader {
-            Loader::Forge | Loader::NeoForge => Some(self.java_for_version(&plan.minecraft)?),
+            Loader::Forge | Loader::NeoForge => {
+                // An imported pack has no instance yet, so only `config.toml` can name a JVM.
+                Some(self.configured_or_detected_java(None, &plan.minecraft)?)
+            }
             _ => None,
         };
 
@@ -734,12 +750,14 @@ impl Launcher {
             mojang: Some(&mojang),
             ..self.loader_ctx(&dl, java.as_ref(), self.process_runner.as_deref())
         };
-        let outcome = self.block_on(crate::modpacks::import(
+        let outcome = self.block_on(crate::modpacks::import_plan(
             &ctx,
             &instances,
             &loader_ctx,
             &endpoints,
             &self.config.game_defaults,
+            format,
+            plan,
             req,
         ))?;
         append_pending(&self.pending_path(&outcome.instance.slug), &outcome.manual)?;
@@ -765,18 +783,26 @@ impl Launcher {
         self.root.instance_dir(slug).join(PENDING_MANUAL_FILE)
     }
 
-    /// The JVM the Forge or NeoForge installer runs its processors under.
-    ///
-    /// A `java_path` set on the instance or in `config.toml` is taken as given, the same way a
-    /// launch takes it, so an install never probes or downloads a runtime the user has already
-    /// pointed at. Only the path is read from here; the version fields are placeholders.
-    /// Without a configured path, a runtime for the Minecraft version is found or installed.
+    /// The JVM this instance's Forge or NeoForge installer runs its processors under.
     fn installer_java(&self, instance: &Instance, mc: &str) -> Result<JavaInstall, crate::Error> {
-        match instance
-            .config
-            .jvm
-            .java_path
-            .clone()
+        self.configured_or_detected_java(instance.config.jvm.java_path.as_deref(), mc)
+    }
+
+    /// The JVM an installer runs under: the configured one, or one found or installed.
+    ///
+    /// `instance_java` is the instance's own `java_path`, and it wins; `config.toml`'s
+    /// `java_path` is next. Either is taken as given, the same way a launch takes it, so an
+    /// install never probes or downloads a runtime the user has already pointed at. Only the
+    /// path is read from a configured JVM; the version fields are placeholders. With neither
+    /// set, a runtime for the Minecraft version is found or installed, which reaches the
+    /// network. A modpack import passes `None`, because the instance does not exist yet.
+    fn configured_or_detected_java(
+        &self,
+        instance_java: Option<&Path>,
+        mc: &str,
+    ) -> Result<JavaInstall, crate::Error> {
+        match instance_java
+            .map(Path::to_path_buf)
             .or_else(|| self.config.jvm.java_path.clone())
         {
             Some(path) => Ok(JavaInstall {
@@ -1496,5 +1522,41 @@ mod tests {
         }
         assert_eq!(endpoints.modrinth, "http://modrinth-from-env.invalid");
         assert_eq!(endpoints.curseforge, "http://cf-from-env.invalid");
+    }
+
+    #[test]
+    fn a_configured_java_path_is_used_without_probing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut launcher = seamed(&dir);
+        let fake = dir.path().join("java");
+        std::fs::write(&fake, b"not really java").expect("write fake java");
+        launcher.config_mut().jvm.java_path = Some(fake.clone());
+
+        // The Mojang host of a `seamed` launcher is unreachable, so this can only return
+        // without asking for a version, or a runtime.
+        let java = launcher
+            .configured_or_detected_java(None, "1.20.1")
+            .expect("configured java");
+        assert_eq!(java.path, fake);
+        assert_eq!(java.source, JavaSource::Manual);
+
+        // An instance's own path wins over the one in `config.toml`.
+        let own = dir.path().join("own-java");
+        let java = launcher
+            .configured_or_detected_java(Some(&own), "1.20.1")
+            .expect("instance java");
+        assert_eq!(java.path, own);
+    }
+
+    #[test]
+    fn without_a_configured_java_path_a_runtime_is_looked_up() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+        // Nothing is configured, so this falls through to `java_for_version`, which asks the
+        // Mojang host. That host does not exist, and the failure is the proof it was asked.
+        let err = launcher
+            .configured_or_detected_java(None, "1.20.1")
+            .expect_err("the metadata host is unreachable");
+        assert!(matches!(err, crate::Error::Mojang(_)), "{err:?}");
     }
 }
