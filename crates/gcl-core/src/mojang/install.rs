@@ -243,18 +243,15 @@ pub async fn install_version_with(
     resources_base: &str,
 ) -> Result<InstallPlan, Error> {
     let resolved = m.resolve_auto(m.version(id).await?)?;
-    install_resolved(m, dl, resolved, override_all_library_urls, resources_base).await
+    install_resolved(dl, resolved, override_all_library_urls, resources_base).await
 }
 
 /// Installs an already-resolved version: libraries, log config, assets, and natives.
 ///
 /// Callers that resolved the version themselves — a loader install knows whether to keep both
 /// copies of a library — use this instead of [`install_version_with`], which resolves first.
-/// `_m` is taken for symmetry with [`install_version_with`] and for the metadata fetches this
-/// step will grow; nothing here needs it yet.
-#[tracing::instrument(skip(_m, dl, resolved), fields(id = %resolved.id))]
+#[tracing::instrument(skip(dl, resolved), fields(id = %resolved.id))]
 pub async fn install_resolved(
-    _m: &Mojang,
     dl: &DownloadCtx<'_>,
     resolved: VersionJson,
     override_all_library_urls: Option<&str>,

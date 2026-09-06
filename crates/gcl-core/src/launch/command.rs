@@ -67,11 +67,37 @@ pub struct LaunchCommand {
     /// The java binary to run.
     pub program: PathBuf,
     /// Every argument, in order: heap flags, JVM args, main class, then game args.
+    ///
+    /// Serialized in the [`LaunchCommand::redacted`] form, so a `--json` dry run cannot print
+    /// an access token. Read the field directly to spawn the real command.
+    #[serde(serialize_with = "serialize_redacted_args")]
     pub args: Vec<String>,
     /// Working directory, the instance's `.minecraft`.
     pub cwd: PathBuf,
     /// Extra environment variables. Empty today; the UI fills it in later.
     pub env: Vec<(String, String)>,
+}
+
+/// Replaces the value after every `--accessToken` with [`REDACTED`].
+///
+/// The offline placeholder `"0"` is kept, because it is not a secret and hiding it would make
+/// an offline command line harder to read.
+fn redact_args(args: &[String]) -> Vec<String> {
+    let mut out = args.to_vec();
+    for i in 0..out.len().saturating_sub(1) {
+        if out[i] == ACCESS_TOKEN_FLAG && out[i + 1] != "0" {
+            out[i + 1] = REDACTED.to_string();
+        }
+    }
+    out
+}
+
+/// Serializes the argument list through [`redact_args`].
+fn serialize_redacted_args<S>(args: &[String], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    redact_args(args).serialize(serializer)
 }
 
 impl LaunchCommand {
@@ -80,15 +106,9 @@ impl LaunchCommand {
     /// The offline placeholder `"0"` is kept, because it is not a secret and hiding it would
     /// make an offline command line harder to read.
     pub fn redacted(&self) -> LaunchCommand {
-        let mut args = self.args.clone();
-        for i in 0..args.len().saturating_sub(1) {
-            if args[i] == ACCESS_TOKEN_FLAG && args[i + 1] != "0" {
-                args[i + 1] = REDACTED.to_string();
-            }
-        }
         LaunchCommand {
             program: self.program.clone(),
-            args,
+            args: redact_args(&self.args),
             cwd: self.cwd.clone(),
             env: self.env.clone(),
         }
@@ -568,6 +588,21 @@ mod tests {
     fn redacted_keeps_the_offline_placeholder_token() {
         let hidden = command_with_token("0").redacted();
         assert_eq!(hidden.args[3], "0");
+    }
+
+    #[test]
+    fn serializing_never_emits_the_access_token() {
+        let json = serde_json::to_string(&command_with_token("ey.super.secret"))
+            .expect("command serializes");
+        assert!(!json.contains("ey.super.secret"), "{json}");
+        assert!(json.contains("<redacted>"), "{json}");
+    }
+
+    #[test]
+    fn serializing_keeps_the_offline_placeholder_token() {
+        let json = serde_json::to_string(&command_with_token("0")).expect("command serializes");
+        assert!(json.contains(r#""0""#), "{json}");
+        assert!(!json.contains("<redacted>"), "{json}");
     }
 
     #[test]

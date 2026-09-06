@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use gcl_core::instances::model::Loader;
-use gcl_core::launcher::LaunchOutcome;
+use gcl_core::launcher::{Endpoints, LaunchOutcome};
 use gcl_core::loaders::LoaderEndpoints;
 use gcl_core::{Launcher, auth};
 use wiremock::MockServer;
@@ -16,15 +16,20 @@ const FABRIC: &str = "0.19.5";
 const FABRIC_LOADERS: &str = include_str!("../../../tests/fixtures/fabric/loader_1.20.1.json");
 const FABRIC_PROFILE: &str = include_str!("../../../tests/fixtures/fabric/profile_1.20.1.json");
 
-/// A launcher over a fresh root, with Fabric and Mojang pointed at `endpoints`.
+/// A launcher over a fresh root, with the Mojang and Fabric hosts pointed at the mock server.
+///
+/// Anything left `None` keeps a host that no test reaches, so an accidental request fails
+/// rather than leaving the machine.
 fn launcher(dir: &tempfile::TempDir, mojang: Option<String>, fabric: Option<String>) -> Launcher {
-    let endpoints = LoaderEndpoints {
-        fabric: fabric.unwrap_or_else(|| LoaderEndpoints::default().fabric),
-        ..LoaderEndpoints::default()
+    let endpoints = Endpoints {
+        mojang: mojang.unwrap_or_else(|| "http://mojang.invalid".to_string()),
+        loaders: LoaderEndpoints {
+            fabric: fabric.unwrap_or_else(|| "http://fabric.invalid".to_string()),
+            ..LoaderEndpoints::default()
+        },
     };
     let (launcher, _rx) =
-        Launcher::open_with_endpoints(dir.path().to_path_buf(), mojang, endpoints)
-            .expect("build launcher");
+        Launcher::open_with_endpoints(dir.path().to_path_buf(), endpoints).expect("build launcher");
     launcher
 }
 

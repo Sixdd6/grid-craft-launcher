@@ -320,9 +320,24 @@ pub fn merge(parent: VersionJson, child: VersionJson, keep_both_libraries: bool)
         asset_index: child.asset_index.or(parent.asset_index),
         assets: child.assets.or(parent.assets),
         java_version: child.java_version.or(parent.java_version),
-        logging: child.logging.or(parent.logging),
+        logging: merge_logging(parent.logging, child.logging),
         kind: child.kind.or(parent.kind),
         release_time: child.release_time.or(parent.release_time),
+    }
+}
+
+/// Picks the logging block a launch uses.
+///
+/// A Forge or NeoForge profile publishes an empty `"logging": {}`, which parses to a config
+/// with no `client`. Taking the child whole would drop vanilla's log4j configuration and leave
+/// the game with no `-Dlog4j.configurationFile`, so the child wins only when it names a client.
+fn merge_logging(
+    parent: Option<LoggingConfig>,
+    child: Option<LoggingConfig>,
+) -> Option<LoggingConfig> {
+    match child {
+        Some(c) if c.client.is_some() => Some(c),
+        _ => parent,
     }
 }
 
@@ -761,6 +776,56 @@ mod merge_tests {
             .filter(|c| c.key() == key)
             .map(|c| c.version)
             .collect()
+    }
+
+    #[test]
+    fn an_empty_child_logging_block_keeps_the_parent_config() {
+        // Forge profiles publish `"logging": {}`, which must not shadow vanilla's real block.
+        let mut c = child("1.20.1-forge-47.4.10");
+        c.logging = Some(LoggingConfig::default());
+        let merged = merge(parent(), c, true);
+        let client = merged
+            .logging
+            .as_ref()
+            .and_then(|l| l.client.as_ref())
+            .expect("the parent's logging config survives");
+        assert_eq!(client.file.id, "client-1.12.xml");
+    }
+
+    #[test]
+    fn a_child_with_its_own_logging_client_wins() {
+        let mut c = child("fabric-loader-0.15.11-1.20.1");
+        c.logging = Some(LoggingConfig {
+            client: Some(LoggingClient {
+                argument: "-Dlog4j.configurationFile=${path}".to_string(),
+                file: LoggingFile {
+                    id: "child.xml".to_string(),
+                    sha1: "0".repeat(40),
+                    size: 1,
+                    url: "https://example.invalid/child.xml".to_string(),
+                },
+                kind: None,
+            }),
+        });
+        let merged = merge(parent(), c, false);
+        let client = merged
+            .logging
+            .as_ref()
+            .and_then(|l| l.client.as_ref())
+            .expect("the child's logging config");
+        assert_eq!(client.file.id, "child.xml");
+    }
+
+    #[test]
+    fn a_child_without_logging_keeps_the_parent_config() {
+        let merged = merge(parent(), child("fabric-loader-0.15.11-1.20.1"), false);
+        assert!(
+            merged
+                .logging
+                .as_ref()
+                .and_then(|l| l.client.as_ref())
+                .is_some()
+        );
     }
 
     #[test]

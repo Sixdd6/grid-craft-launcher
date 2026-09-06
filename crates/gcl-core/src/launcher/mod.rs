@@ -44,6 +44,43 @@ pub const FORGE_MAVEN_BASE_URL_ENV: &str = "GCL_FORGE_MAVEN_BASE_URL";
 /// Test-only override for the NeoForge maven host, read by [`Launcher::loader_endpoints`].
 pub const NEOFORGE_BASE_URL_ENV: &str = "GCL_NEOFORGE_BASE_URL";
 
+/// Every metadata host the launcher talks to.
+///
+/// [`Launcher::new`] fills it from the test-only environment overrides;
+/// [`Launcher::open_with_endpoints`] takes one whole, and reads no environment at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Endpoints {
+    /// Mojang metadata base URL.
+    pub mojang: String,
+    /// Loader metadata and maven hosts.
+    pub loaders: LoaderEndpoints,
+}
+
+impl Default for Endpoints {
+    fn default() -> Self {
+        Endpoints {
+            mojang: PISTON_META.to_string(),
+            loaders: LoaderEndpoints::default(),
+        }
+    }
+}
+
+impl Endpoints {
+    /// Reads every test-only base URL override, falling back to the production hosts.
+    pub fn from_env() -> Endpoints {
+        Endpoints {
+            mojang: env_base(MOJANG_BASE_URL_ENV, PISTON_META),
+            loaders: LoaderEndpoints {
+                fabric: env_base(FABRIC_BASE_URL_ENV, crate::loaders::fabric::BASE),
+                quilt: env_base(QUILT_BASE_URL_ENV, crate::loaders::quilt::BASE),
+                forge_meta: env_base(FORGE_META_BASE_URL_ENV, crate::loaders::forge::META),
+                forge_maven: env_base(FORGE_MAVEN_BASE_URL_ENV, crate::loaders::forge::MAVEN),
+                neoforge: env_base(NEOFORGE_BASE_URL_ENV, crate::loaders::neoforge::MAVEN),
+            },
+        }
+    }
+}
+
 /// The `${launcher_name}` every launch command reports.
 pub const LAUNCHER_NAME: &str = "grid-craft-launcher";
 
@@ -69,8 +106,7 @@ pub struct Launcher {
     http: HttpClient,
     events: EventSink,
     cancel: CancellationToken,
-    mojang_base: String,
-    loaders: LoaderEndpoints,
+    endpoints: Endpoints,
 }
 
 impl Launcher {
@@ -82,16 +118,18 @@ impl Launcher {
     ) -> Result<(Launcher, tokio::sync::mpsc::UnboundedReceiver<Event>), crate::Error> {
         let overridden = root_override.is_some() || std::env::var_os("GCL_ROOT").is_some();
         let resolved = Root::resolve(root_override.as_deref())?;
-        Self::open(resolved, overridden)
+        Self::open(resolved, overridden, Endpoints::from_env())
     }
 
     /// Builds a launcher over an already-resolved root.
     ///
     /// `overridden` says whether `GCL_ROOT` or a caller override decided the root, in which
-    /// case the config's own `root` is ignored.
+    /// case the config's own `root` is ignored. `endpoints` are used as given: this function
+    /// reads no environment of its own.
     fn open(
         resolved: Root,
         overridden: bool,
+        endpoints: Endpoints,
     ) -> Result<(Launcher, tokio::sync::mpsc::UnboundedReceiver<Event>), crate::Error> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .thread_name("gcl")
@@ -122,35 +160,21 @@ impl Launcher {
             http,
             events,
             cancel: CancellationToken::new(),
-            mojang_base: env_base(MOJANG_BASE_URL_ENV, PISTON_META),
-            loaders: LoaderEndpoints {
-                fabric: env_base(FABRIC_BASE_URL_ENV, crate::loaders::fabric::BASE),
-                quilt: env_base(QUILT_BASE_URL_ENV, crate::loaders::quilt::BASE),
-                forge_meta: env_base(FORGE_META_BASE_URL_ENV, crate::loaders::forge::META),
-                forge_maven: env_base(FORGE_MAVEN_BASE_URL_ENV, crate::loaders::forge::MAVEN),
-                neoforge: env_base(NEOFORGE_BASE_URL_ENV, crate::loaders::neoforge::MAVEN),
-            },
+            endpoints,
         };
         Ok((launcher, receiver))
     }
 
-    /// Test seam: a launcher over `root` with explicit metadata base URLs.
+    /// Test seam: a launcher over `root` with the given metadata hosts.
     ///
-    /// `mojang_base` and `loaders` replace what [`Launcher::new`] reads from the environment,
-    /// so a test can point one launcher at a mock server without touching process env. The
-    /// root is treated as overridden, exactly as an explicit root passed to
-    /// [`Launcher::new`] is.
+    /// Nothing here reads the environment, so a test points one launcher at a mock server
+    /// without touching process env and without disturbing another test. The root is treated
+    /// as overridden, exactly as an explicit root passed to [`Launcher::new`] is.
     pub fn open_with_endpoints(
         root: PathBuf,
-        mojang_base: Option<String>,
-        loaders: LoaderEndpoints,
+        endpoints: Endpoints,
     ) -> Result<(Launcher, tokio::sync::mpsc::UnboundedReceiver<Event>), crate::Error> {
-        let (mut launcher, receiver) = Self::open(Root::from_path(root), true)?;
-        if let Some(base) = mojang_base {
-            launcher.mojang_base = base;
-        }
-        launcher.loaders = loaders;
-        Ok((launcher, receiver))
+        Self::open(Root::from_path(root), true, endpoints)
     }
 
     /// The resolved app root.
@@ -199,13 +223,13 @@ impl Launcher {
         Mojang::with_base_url(
             self.http.clone(),
             self.root.clone(),
-            self.mojang_base.clone(),
+            self.endpoints.mojang.clone(),
         )
     }
 
     /// The loader metadata and maven hosts this launcher talks to.
     pub fn loader_endpoints(&self) -> LoaderEndpoints {
-        self.loaders.clone()
+        self.endpoints.loaders.clone()
     }
 
     /// The account store over this root.
@@ -262,6 +286,20 @@ impl Launcher {
         self.ensure_java_component(plan.java_major, plan.java_component.as_deref())
     }
 
+    /// Returns a Java runtime for a Minecraft version, without installing the game.
+    ///
+    /// It fetches and plans the version to read its `javaVersion`, which downloads nothing,
+    /// then hands the plan to [`Launcher::ensure_java_for`]. Blocks.
+    pub fn java_for_version(&self, mc: &str) -> Result<JavaInstall, crate::Error> {
+        let mojang = self.mojang();
+        let root = self.root.clone();
+        let plan = self.block_on(async move {
+            let resolved = mojang.resolve_auto(mojang.version(mc).await?)?;
+            crate::mojang::plan_install(&resolved, &root, &RuleContext::current(), None)
+        })?;
+        self.ensure_java_for(&plan)
+    }
+
     /// Rewrites this instance's `options.txt` keys. Returns how many lines changed.
     pub fn apply_settings_overrides(&self, instance: &Instance) -> Result<usize, crate::Error> {
         Ok(crate::settings::apply_overrides_to(
@@ -300,12 +338,10 @@ impl Launcher {
         let version =
             self.resolve_loader_version(loader, &mc, instance.config.loader_version.as_deref())?;
 
-        // Forge and NeoForge run installer processors, which need the vanilla install and a JVM.
+        // Forge and NeoForge run installer processors, which need a JVM. The vanilla files
+        // themselves are fetched by the installer, so only the metadata is needed here.
         let java = match loader {
-            Loader::Forge | Loader::NeoForge => {
-                let plan = self.install_version(&mc)?;
-                Some(self.ensure_java_for(&plan)?)
-            }
+            Loader::Forge | Loader::NeoForge => Some(self.java_for_version(&mc)?),
             _ => None,
         };
         let endpoints = self.loader_endpoints();
@@ -349,7 +385,7 @@ impl Launcher {
             }
             let profile = mojang.version(&id).await?;
             let resolved = mojang.resolve(profile, keep_both_libraries(loader))?;
-            crate::mojang::install_resolved(&mojang, &dl, resolved, None, RESOURCES_BASE).await
+            crate::mojang::install_resolved(&dl, resolved, None, RESOURCES_BASE).await
         })?)
     }
 
@@ -625,13 +661,15 @@ mod tests {
             .expect("save pointer config");
 
         let (mut launcher, _rx) =
-            Launcher::open(Root::from_path(outer.path()), false).expect("first launcher");
+            Launcher::open(Root::from_path(outer.path()), false, Endpoints::default())
+                .expect("first launcher");
         assert_eq!(launcher.root().path(), target.path());
         launcher.config_mut().jvm.max_mib = 8192;
         launcher.save_config().expect("save config");
 
         let (again, _rx) =
-            Launcher::open(Root::from_path(outer.path()), false).expect("second launcher");
+            Launcher::open(Root::from_path(outer.path()), false, Endpoints::default())
+                .expect("second launcher");
         assert_eq!(again.root().path(), target.path());
         assert_eq!(again.config().jvm.max_mib, 8192);
     }
@@ -650,7 +688,8 @@ mod tests {
             .expect("save pointer config");
 
         let (launcher, _rx) =
-            Launcher::open(Root::from_path(outer.path()), false).expect("launcher");
+            Launcher::open(Root::from_path(outer.path()), false, Endpoints::default())
+                .expect("launcher");
         assert_eq!(launcher.root().path(), target.path());
         assert_eq!(launcher.config().parallel_downloads, 2);
         assert_eq!(launcher.config().root.as_deref(), Some(target.path()));
@@ -712,20 +751,51 @@ mod tests {
 
     /// A launcher over a fresh root with explicit, non-production loader hosts.
     fn seamed(dir: &tempfile::TempDir) -> Launcher {
-        let endpoints = LoaderEndpoints {
-            fabric: "http://fabric.invalid".to_string(),
-            quilt: "http://quilt.invalid".to_string(),
-            forge_meta: "http://forge-meta.invalid".to_string(),
-            forge_maven: "http://forge-maven.invalid".to_string(),
-            neoforge: "http://neoforge.invalid".to_string(),
+        let endpoints = Endpoints {
+            mojang: "http://mojang.invalid".to_string(),
+            loaders: LoaderEndpoints {
+                fabric: "http://fabric.invalid".to_string(),
+                quilt: "http://quilt.invalid".to_string(),
+                forge_meta: "http://forge-meta.invalid".to_string(),
+                forge_maven: "http://forge-maven.invalid".to_string(),
+                neoforge: "http://neoforge.invalid".to_string(),
+            },
         };
-        let (launcher, _rx) = Launcher::open_with_endpoints(
-            dir.path().to_path_buf(),
-            Some("http://mojang.invalid".to_string()),
-            endpoints,
-        )
-        .expect("build launcher");
+        let (launcher, _rx) = Launcher::open_with_endpoints(dir.path().to_path_buf(), endpoints)
+            .expect("build launcher");
         launcher
+    }
+
+    #[test]
+    fn open_with_endpoints_ignores_the_environment() {
+        let _guard = clean_env();
+        // SAFETY: guarded by ENV_LOCK; removed before the assert.
+        unsafe {
+            std::env::set_var(FABRIC_BASE_URL_ENV, "http://from-env.invalid");
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let built = Launcher::open_with_endpoints(dir.path().to_path_buf(), Endpoints::default());
+        unsafe {
+            std::env::remove_var(FABRIC_BASE_URL_ENV);
+        }
+        let (launcher, _rx) = built.expect("build launcher");
+        assert_eq!(launcher.loader_endpoints(), LoaderEndpoints::default());
+    }
+
+    #[test]
+    fn from_env_reads_a_loader_override_and_defaults_the_rest() {
+        let _guard = clean_env();
+        // SAFETY: guarded by ENV_LOCK; both variables are restored before the assert.
+        unsafe {
+            std::env::remove_var(FABRIC_BASE_URL_ENV);
+            std::env::set_var(QUILT_BASE_URL_ENV, "http://quilt-from-env.invalid");
+        }
+        let endpoints = Endpoints::from_env();
+        unsafe {
+            std::env::remove_var(QUILT_BASE_URL_ENV);
+        }
+        assert_eq!(endpoints.loaders.quilt, "http://quilt-from-env.invalid");
+        assert_eq!(endpoints.loaders.fabric, crate::loaders::fabric::BASE);
     }
 
     #[test]
