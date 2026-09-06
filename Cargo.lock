@@ -1828,6 +1828,7 @@ dependencies = [
 name = "gcl-core"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "directories",
  "futures-util",

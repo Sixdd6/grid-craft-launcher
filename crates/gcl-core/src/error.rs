@@ -27,4 +27,7 @@ pub enum Error {
     /// A Mojang metadata fetch, cache read, or parse failed.
     #[error(transparent)]
     Mojang(#[from] crate::mojang::Error),
+    /// A mod loader could not be listed or installed.
+    #[error(transparent)]
+    Loaders(#[from] crate::loaders::Error),
 }

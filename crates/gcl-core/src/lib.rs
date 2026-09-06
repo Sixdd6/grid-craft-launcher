@@ -10,6 +10,7 @@ pub mod http;
 pub mod instances;
 pub mod java;
 pub mod launcher;
+pub mod loaders;
 pub mod mojang;
 pub mod paths;
 
