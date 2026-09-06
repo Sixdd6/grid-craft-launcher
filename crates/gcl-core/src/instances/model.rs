@@ -23,12 +23,27 @@ pub struct InstanceConfig {
     pub created: String,
     /// Last launch time, RFC 3339 in UTC, if it has ever launched.
     pub last_launched: Option<String>,
+    /// The modpack this instance was created from, when it came from one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack: Option<PackSource>,
     /// Per-instance JVM overrides.
     pub jvm: InstanceJvm,
     /// `options.txt` keys rewritten on every launch.
     pub settings_overrides: BTreeMap<String, String>,
     /// Content installed into this instance.
     pub content: Vec<ContentEntry>,
+}
+
+/// The modpack an instance was installed from.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct PackSource {
+    /// Where the pack came from: `modrinth`, `curseforge`, or `file`.
+    pub source: String,
+    /// Project id at the source.
+    pub project_id: String,
+    /// Version id at the source.
+    pub version_id: String,
 }
 
 /// Mod loader for an instance.
@@ -92,10 +107,17 @@ pub struct ContentEntry {
     pub version_id: String,
     /// File name inside the instance folder.
     pub file_name: String,
-    /// Lowercase hex sha1 of the file.
-    pub sha1: String,
+    /// Lowercase hex sha1 of the file, when the source publishes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha1: Option<String>,
+    /// CurseForge murmur2 fingerprint of the file, when the source publishes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<u32>,
     /// What kind of content this is.
     pub kind: ContentKind,
+    /// Target world folder name, for a data pack installed into one world's `datapacks/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub world: Option<String>,
     /// Whether the file is enabled. Disabled files are renamed with a `.disabled` suffix.
     /// Absent in `instance.toml` means enabled.
     #[serde(default = "default_true")]
@@ -109,8 +131,10 @@ impl Default for ContentEntry {
             project_id: String::new(),
             version_id: String::new(),
             file_name: String::new(),
-            sha1: String::new(),
+            sha1: None,
+            fingerprint: None,
             kind: ContentKind::default(),
+            world: None,
             enabled: true,
         }
     }
@@ -173,6 +197,49 @@ mod tests {
         let entry: ContentEntry =
             toml::from_str("file_name = \"x.jar\"\nenabled = false\n").expect("parse");
         assert!(!entry.enabled);
+    }
+
+    #[test]
+    fn a_config_with_a_pack_and_content_round_trips_and_snapshots() {
+        let config = InstanceConfig {
+            name: "My Pack".to_string(),
+            minecraft: "1.20.1".to_string(),
+            loader: Loader::Fabric,
+            loader_version: Some("0.15.11".to_string()),
+            created: "2026-09-06T12:00:00Z".to_string(),
+            pack: Some(PackSource {
+                source: "modrinth".to_string(),
+                project_id: "AANobbMI".to_string(),
+                version_id: "abc123".to_string(),
+            }),
+            content: vec![
+                ContentEntry {
+                    source: "modrinth".to_string(),
+                    project_id: "AANobbMI".to_string(),
+                    version_id: "abc123".to_string(),
+                    file_name: "sodium.jar".to_string(),
+                    sha1: Some("da39a3ee5e6b4b0d3255bfef95601890afd80709".to_string()),
+                    ..ContentEntry::default()
+                },
+                ContentEntry {
+                    source: "curseforge".to_string(),
+                    project_id: "238222".to_string(),
+                    version_id: "4567".to_string(),
+                    file_name: "pack.zip".to_string(),
+                    fingerprint: Some(1234567890),
+                    kind: ContentKind::DataPack,
+                    world: Some("New World".to_string()),
+                    ..ContentEntry::default()
+                },
+            ],
+            ..InstanceConfig::default()
+        };
+        let text = toml::to_string(&config).expect("serialize");
+        assert_eq!(
+            toml::from_str::<InstanceConfig>(&text).expect("parse"),
+            config
+        );
+        insta::assert_snapshot!("instance_toml_full", text);
     }
 
     #[test]

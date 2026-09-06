@@ -3,12 +3,15 @@
 //! [`command::build`] turns an [`InstallPlan`](crate::mojang::install::InstallPlan) plus an
 //! account, an instance, and JVM settings into a [`LaunchCommand`]. [`spawn::spawn`] starts it,
 //! streams both output pipes to the event sink and to a log file, and [`spawn::wait`] returns
-//! the exit code.
+//! the exit code. [`crash::crash_hint`] reads that log back into a one-line reason when the
+//! game exits non-zero.
 
 pub mod command;
+pub mod crash;
 pub mod spawn;
 
 pub use command::{JvmSettings, LaunchCommand, LaunchInputs, build};
+pub use crash::crash_hint;
 pub use spawn::{RunningGame, spawn, wait};
 
 /// Errors building or running a launch command.

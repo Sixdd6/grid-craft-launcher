@@ -43,7 +43,12 @@ minecraft = "1.20.1"
 loader = "fabric"               # none | fabric | quilt | forge | neoforge
 loader_version = "0.15.11"
 created = "2026-09-06T12:00:00Z"
-last_launched = ""
+last_launched = "2026-09-06T13:00:00Z"   # optional, absent until the first launch
+
+[pack]                          # optional, only when the instance came from a modpack
+source = "modrinth"             # modrinth | curseforge | file
+project_id = "AANobbMI"
+version_id = "abc123"
 
 [jvm]
 min_mib = 2048                  # optional, else global
@@ -59,8 +64,10 @@ source = "modrinth"             # modrinth | curseforge | file
 project_id = "AANobbMI"
 version_id = "abc123"
 file_name = "sodium-fabric-0.5.8.jar"
-sha1 = "..."
+sha1 = "..."                    # optional, when the source publishes one
+fingerprint = 1234567890        # optional, CurseForge murmur2
 kind = "mod"                    # mod | resourcepack | shader | datapack | world
+world = "New World"             # optional, the target world for a datapack
 enabled = true
 ```
 

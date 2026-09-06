@@ -43,13 +43,23 @@ pub fn run(launcher: &Launcher, format: Format, args: LaunchArgs) -> Result<Exit
             }
             Ok(ExitCode::SUCCESS)
         }
-        LaunchOutcome::Exited { code, log_path } => {
+        LaunchOutcome::Exited {
+            code,
+            log_path,
+            hint,
+        } => {
             match format {
                 Format::Json => print_json(&serde_json::json!({
                     "exit_code": code,
                     "log": log_path.display().to_string(),
+                    "hint": hint,
                 }))?,
-                Format::Text => println!("exited {code} (log: {})", log_path.display()),
+                Format::Text => {
+                    println!("exited {code} (log: {})", log_path.display());
+                    if let Some(hint) = &hint {
+                        println!("hint: {hint}");
+                    }
+                }
             }
             Ok(ExitCode::from(exit_code(code)))
         }

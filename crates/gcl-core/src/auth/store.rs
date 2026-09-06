@@ -96,6 +96,19 @@ impl Accounts {
         self.save(&file)
     }
 
+    /// Finds an account by id, or by exact (case-sensitive) name if no id matches.
+    ///
+    /// Reads only: a one-off `--account` launch must not change which account is active.
+    pub fn find(&self, id_or_name: &str) -> Result<Option<Account>, Error> {
+        let file = self.load()?;
+        Ok(file
+            .accounts
+            .iter()
+            .find(|a| a.id == id_or_name)
+            .or_else(|| file.accounts.iter().find(|a| a.name == id_or_name))
+            .cloned())
+    }
+
     /// Selects an account by id, or by exact (case-sensitive) name if no id matches, and
     /// makes it the active account.
     pub fn select(&self, id_or_name: &str) -> Result<Account, Error> {

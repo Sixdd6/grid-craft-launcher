@@ -5,6 +5,7 @@
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
@@ -17,10 +18,13 @@ use crate::http::HttpClient;
 use crate::instances::model::Loader;
 use crate::instances::{Instance, Instances, now_rfc3339};
 use crate::java::{
-    JavaInstall, RUNTIME_MANIFEST, component_for_major, detect_all, install_runtime, pick,
+    JavaInstall, JavaSource, RUNTIME_MANIFEST, component_for_major, detect_all, install_runtime,
+    pick,
 };
 use crate::launch::{JvmSettings, LaunchCommand, LaunchInputs};
-use crate::loaders::{JavaRunner, LoaderCtx, LoaderEndpoints, LoaderVersion, keep_both_libraries};
+use crate::loaders::{
+    LoaderCtx, LoaderEndpoints, LoaderVersion, ProcessRunner, keep_both_libraries,
+};
 use crate::mojang::assets::RESOURCES_BASE;
 use crate::mojang::rules::RuleContext;
 use crate::mojang::{InstallPlan, Mojang, PISTON_META, VersionManifest, install_version};
@@ -95,6 +99,8 @@ pub enum LaunchOutcome {
         code: i32,
         /// File both output streams were written to.
         log_path: PathBuf,
+        /// One-line reason for a non-zero exit, read out of the log. `None` on a clean exit.
+        hint: Option<String>,
     },
 }
 
@@ -107,6 +113,7 @@ pub struct Launcher {
     events: EventSink,
     cancel: CancellationToken,
     endpoints: Endpoints,
+    process_runner: Option<Arc<dyn ProcessRunner>>,
 }
 
 impl Launcher {
@@ -161,6 +168,7 @@ impl Launcher {
             events,
             cancel: CancellationToken::new(),
             endpoints,
+            process_runner: None,
         };
         Ok((launcher, receiver))
     }
@@ -175,6 +183,16 @@ impl Launcher {
         endpoints: Endpoints,
     ) -> Result<(Launcher, tokio::sync::mpsc::UnboundedReceiver<Event>), crate::Error> {
         Self::open(Root::from_path(root), true, endpoints)
+    }
+
+    /// Test seam: runs installer processors through `runner` instead of a real JVM.
+    ///
+    /// Chain it onto [`Launcher::open_with_endpoints`]. Without it, Forge and NeoForge
+    /// installs spawn `java` through [`crate::loaders::JavaRunner`].
+    #[must_use]
+    pub fn with_process_runner(mut self, runner: Arc<dyn ProcessRunner>) -> Self {
+        self.process_runner = Some(runner);
+        self
     }
 
     /// The resolved app root.
@@ -341,14 +359,13 @@ impl Launcher {
         // Forge and NeoForge run installer processors, which need a JVM. The vanilla files
         // themselves are fetched by the installer, so only the metadata is needed here.
         let java = match loader {
-            Loader::Forge | Loader::NeoForge => Some(self.java_for_version(&mc)?),
+            Loader::Forge | Loader::NeoForge => Some(self.installer_java(&instance, &mc)?),
             _ => None,
         };
         let endpoints = self.loader_endpoints();
         let mojang = self.mojang();
         let dl = self.download_ctx();
-        let runner = JavaRunner;
-        let ctx = self.loader_ctx(&dl, java.as_ref(), Some(&runner));
+        let ctx = self.loader_ctx(&dl, java.as_ref(), self.process_runner.as_deref());
         let ctx = LoaderCtx {
             mojang: Some(&mojang),
             ..ctx
@@ -392,8 +409,9 @@ impl Launcher {
     /// Installs the instance if needed and either prints or runs its command line.
     ///
     /// The account is chosen in this order: `offline_user` creates or reuses an offline
-    /// account, `account` selects a saved one by id or name, and otherwise the active account
-    /// is used. With none of the three this is [`crate::auth::Error::NoAccount`]. Blocks.
+    /// account, `account` picks a saved one by id or name without making it active, and
+    /// otherwise the active account is used. With none of the three this is
+    /// [`crate::auth::Error::NoAccount`]. Blocks.
     #[tracing::instrument(skip(self))]
     pub fn launch_instance(
         &self,
@@ -405,7 +423,10 @@ impl Launcher {
         let accounts = self.accounts();
         let account = match (offline_user, account) {
             (Some(name), _) => accounts.add(offline_account(name))?,
-            (None, Some(id_or_name)) => accounts.select(id_or_name)?,
+            // A `--account` launch reads the store only: it never moves `active`.
+            (None, Some(id_or_name)) => accounts
+                .find(id_or_name)?
+                .ok_or_else(|| crate::auth::Error::NotFound(id_or_name.to_string()))?,
             (None, None) => accounts.active()?.ok_or(crate::auth::Error::NoAccount)?,
         };
 
@@ -470,7 +491,37 @@ impl Launcher {
         instance.config.last_launched = Some(now_rfc3339());
         instance.save()?;
         let code = self.block_on(async move { crate::launch::wait(game).await })?;
-        Ok(LaunchOutcome::Exited { code, log_path })
+        let hint = (code != 0).then(|| crate::launch::crash_hint(&log_path));
+        Ok(LaunchOutcome::Exited {
+            code,
+            log_path,
+            hint,
+        })
+    }
+
+    /// The JVM the Forge or NeoForge installer runs its processors under.
+    ///
+    /// A `java_path` set on the instance or in `config.toml` is taken as given, the same way a
+    /// launch takes it, so an install never probes or downloads a runtime the user has already
+    /// pointed at. Only the path is read from here; the version fields are placeholders.
+    /// Without a configured path, a runtime for the Minecraft version is found or installed.
+    fn installer_java(&self, instance: &Instance, mc: &str) -> Result<JavaInstall, crate::Error> {
+        match instance
+            .config
+            .jvm
+            .java_path
+            .clone()
+            .or_else(|| self.config.jvm.java_path.clone())
+        {
+            Some(path) => Ok(JavaInstall {
+                path,
+                major: 0,
+                version: "configured".to_string(),
+                vendor: "configured".to_string(),
+                source: JavaSource::Manual,
+            }),
+            None => self.java_for_version(mc),
+        }
     }
 
     /// Turns an unset, `recommended`, or `latest` loader version into a concrete build.

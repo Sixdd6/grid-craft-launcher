@@ -78,16 +78,25 @@ pub struct LaunchCommand {
     pub env: Vec<(String, String)>,
 }
 
-/// Replaces the value after every `--accessToken` with [`REDACTED`].
+/// Replaces every access token with [`REDACTED`], in both the `--accessToken <value>` and the
+/// `--accessToken=<value>` form.
 ///
 /// The offline placeholder `"0"` is kept, because it is not a secret and hiding it would make
 /// an offline command line harder to read.
 fn redact_args(args: &[String]) -> Vec<String> {
+    let inline_prefix = format!("{ACCESS_TOKEN_FLAG}=");
     let mut out = args.to_vec();
-    for i in 0..out.len().saturating_sub(1) {
-        if out[i] == ACCESS_TOKEN_FLAG && out[i + 1] != "0" {
+    let mut i = 0;
+    while i < out.len() {
+        if let Some(value) = out[i].strip_prefix(&inline_prefix).map(str::to_string) {
+            if value != "0" {
+                out[i] = format!("{inline_prefix}{REDACTED}");
+            }
+        } else if out[i] == ACCESS_TOKEN_FLAG && out.get(i + 1).is_some_and(|v| v != "0") {
             out[i + 1] = REDACTED.to_string();
+            i += 1;
         }
+        i += 1;
     }
     out
 }
@@ -582,6 +591,19 @@ mod tests {
         assert_eq!(hidden.args[3], "<redacted>");
         assert_eq!(hidden.args[1], "alice");
         assert_eq!(cmd.args[3], "ey.super.secret", "the original is untouched");
+    }
+
+    #[test]
+    fn redacted_hides_an_equals_form_access_token() {
+        let args = vec![
+            "--accessToken=ey.super.secret".to_string(),
+            "--accessToken=0".to_string(),
+            "--username=alice".to_string(),
+        ];
+        let hidden = redact_args(&args);
+        assert_eq!(hidden[0], "--accessToken=<redacted>");
+        assert_eq!(hidden[1], "--accessToken=0", "the placeholder is kept");
+        assert_eq!(hidden[2], "--username=alice");
     }
 
     #[test]

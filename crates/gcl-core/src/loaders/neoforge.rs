@@ -70,8 +70,7 @@ pub fn mc_for_version(v: &str) -> Option<String> {
             _ => format!("1.{major}.{minor}"),
         });
     }
-    // VERIFY against live manifest: no year-based Minecraft release has shipped yet, so the
-    // shape of these builds is taken from NeoForge's announced scheme.
+    // Verified live 2026-09-06: `loader list 26.2 --loader neoforge` returns 26.2.0.x builds.
     let patch = number(parts.get(2)?)?;
     Some(match patch {
         0 => format!("{major}.{minor}"),

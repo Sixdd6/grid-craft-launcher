@@ -51,7 +51,7 @@ Same shape at `https://meta.quiltmc.org/v3/versions/loader/<mc>` and `.../<mc>/<
 
 ## NeoForge
 
-- Versions: `https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge` → `{ versions: [] }`. Up to major 25, version `A.B.x` targets Minecraft `1.A.B` (`21.1.65` → 1.21.1; `21.0.x` → 1.21). From major 26 the mapping switches to Minecraft's own year-based versioning (`neoforge::mc_for_version`, marked VERIFY: no year-based Minecraft release has shipped yet, so this branch is unconfirmed against a live manifest).
+- Versions: `https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge` → `{ versions: [] }`. Up to major 25, version `A.B.x` targets Minecraft `1.A.B` (`21.1.65` → 1.21.1; `21.0.x` → 1.21). From major 26 the mapping switches to Minecraft's own year-based versioning (`neoforge::mc_for_version`), verified live 2026-09-06: `loader list 26.2 --loader neoforge` returns 26.2.0.x builds.
 - NeoForge has no build for Minecraft 1.20.1: that release line shipped as `net.neoforged:forge` 47.1.x instead, under the old artifact name. `verify-source neoforge` and `scripts/e2e.sh` use 1.20.2, the first Minecraft version the `neoforge` artifact covers.
 - Installer: `https://maven.neoforged.net/releases/net/neoforged/neoforge/<v>/neoforge-<v>-installer.jar`.
 - Same installer layout and algorithm as Forge.

@@ -1,0 +1,38 @@
+---
+source: crates/gcl-core/src/instances/model.rs
+expression: text
+---
+name = "My Pack"
+minecraft = "1.20.1"
+loader = "fabric"
+loader_version = "0.15.11"
+created = "2026-09-06T12:00:00Z"
+
+[pack]
+source = "modrinth"
+project_id = "AANobbMI"
+version_id = "abc123"
+
+[jvm]
+extra_args = []
+
+[settings_overrides]
+
+[[content]]
+source = "modrinth"
+project_id = "AANobbMI"
+version_id = "abc123"
+file_name = "sodium.jar"
+sha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+kind = "mod"
+enabled = true
+
+[[content]]
+source = "curseforge"
+project_id = "238222"
+version_id = "4567"
+file_name = "pack.zip"
+fingerprint = 1234567890
+kind = "datapack"
+world = "New World"
+enabled = true

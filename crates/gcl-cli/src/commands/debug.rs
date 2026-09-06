@@ -138,10 +138,12 @@ fn verify_installer(launcher: &Launcher, loader: Loader, mc: &str, version: &str
         }
         _ => gcl_core::loaders::forge::installer_url(&endpoints.forge_maven, mc, version),
     };
-    let dest = launcher
-        .root()
-        .installers_dir()
-        .join(format!("verify-{loader}-{version}-installer.jar"));
+    // The version comes from the command line, so it goes through `safe_join`: a value with a
+    // path separator or a `..` in it is rejected rather than writing outside the cache.
+    let dest = gcl_core::paths::safe_join(
+        &launcher.root().installers_dir(),
+        &format!("verify-{loader}-{version}-installer.jar"),
+    )?;
     let dl = launcher.download_ctx();
     let spec = gcl_core::download::DownloadSpec {
         url,

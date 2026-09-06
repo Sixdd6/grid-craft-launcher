@@ -96,7 +96,7 @@ pub struct DownloadCtx<'a> {
 /// Fetches one file into `spec.dest`, reusing the object store when it can.
 #[tracing::instrument(skip(ctx, spec), fields(label = %spec.label))]
 pub async fn download_one(ctx: &DownloadCtx<'_>, spec: &DownloadSpec) -> Result<PathBuf, Error> {
-    if dest_is_current(spec).await? {
+    if dest_is_current(ctx, spec).await? {
         return Ok(spec.dest.clone());
     }
     if let Some(sha1) = spec.sha1.as_deref()
@@ -211,7 +211,11 @@ fn verify(spec: &DownloadSpec, result: &crate::http::StreamResult) -> Result<(),
 }
 
 /// True when `dest` already holds the file the spec asks for.
-async fn dest_is_current(spec: &DownloadSpec) -> Result<bool, Error> {
+///
+/// A known sha1 is answered without hashing whenever `dest` is the same file as the object in
+/// the store: on unix that is the same `(dev, ino)` pair, elsewhere the same length. Anything
+/// else falls back to hashing `dest`.
+async fn dest_is_current(ctx: &DownloadCtx<'_>, spec: &DownloadSpec) -> Result<bool, Error> {
     let Ok(meta) = tokio::fs::metadata(&spec.dest).await else {
         return Ok(false);
     };
@@ -219,20 +223,55 @@ async fn dest_is_current(spec: &DownloadSpec) -> Result<bool, Error> {
         return Ok(false);
     }
     if let Some(expected) = spec.sha1.clone() {
-        let path = spec.dest.clone();
-        let actual = tokio::task::spawn_blocking(move || hash::sha1_file(&path))
-            .await
-            .map_err(|source| Error::Io {
-                path: spec.dest.clone(),
-                source: std::io::Error::other(source),
-            })?
-            .map_err(|source| Error::Io {
-                path: spec.dest.clone(),
-                source,
-            })?;
+        if let Ok(object) = ctx.root.object_path(&expected)
+            && let Ok(object_meta) = tokio::fs::metadata(&object).await
+            && object_meta.is_file()
+            && same_file(&meta, &object_meta)
+        {
+            return Ok(true);
+        }
+        let actual = hash_dest(&spec.dest).await?;
         return Ok(expected.eq_ignore_ascii_case(&actual));
     }
     Ok(spec.size == Some(meta.len()))
+}
+
+/// Counts every [`hash_dest`] call, so a test can prove the cheap path skipped hashing.
+#[cfg(test)]
+pub(crate) static HASH_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Hashes an existing destination file on a blocking thread.
+async fn hash_dest(dest: &Path) -> Result<String, Error> {
+    #[cfg(test)]
+    HASH_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let path = dest.to_path_buf();
+    tokio::task::spawn_blocking(move || hash::sha1_file(&path))
+        .await
+        .map_err(|source| Error::Io {
+            path: dest.to_path_buf(),
+            source: std::io::Error::other(source),
+        })?
+        .map_err(|source| Error::Io {
+            path: dest.to_path_buf(),
+            source,
+        })
+}
+
+/// True when two metadata values describe the same file on disk.
+#[cfg(unix)]
+fn same_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+/// True when two metadata values describe files of the same length.
+///
+/// Windows has no cheap inode to compare, so a matching length plus a matching object in the
+/// store is as far as the cheap path goes.
+#[cfg(not(unix))]
+fn same_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    a.len() == b.len()
 }
 
 /// Moves a finished `.part` file to its object path, copying across filesystems.
@@ -409,6 +448,41 @@ mod tests {
                 parallel,
             }
         }
+    }
+
+    #[tokio::test]
+    async fn a_second_download_of_the_same_spec_neither_requests_nor_hashes() {
+        let payload = b"a jar of bytes".to_vec();
+        let sha1 = sha1_of(&payload);
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_matcher("/lib.jar"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(payload.clone()))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let f = fixture();
+        let ctx = f.ctx(2);
+        let spec = DownloadSpec {
+            url: format!("{}/lib.jar", server.uri()),
+            sha1: Some(sha1),
+            size: Some(payload.len() as u64),
+            dest: f.root.path().join("a").join("lib.jar"),
+            label: "lib.jar".into(),
+        };
+        download_one(&ctx, &spec).await.expect("first download");
+
+        HASH_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let again = download_one(&ctx, &spec).await.expect("second download");
+        assert_eq!(again, spec.dest);
+        assert_eq!(
+            HASH_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the hard link to the stored object must answer without hashing"
+        );
+        // The mock allows one request, so `verify` proves nothing was fetched again.
+        server.verify().await;
     }
 
     #[tokio::test]

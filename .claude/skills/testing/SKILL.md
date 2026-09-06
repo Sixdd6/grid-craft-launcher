@@ -42,7 +42,7 @@ let source = ModrinthSource::with_base_url(client.clone(), server.uri());
 instead of `piston-meta`. That env var is test-only: set it in CLI tests to point `gcl` at a
 wiremock server. Never set it in production or document it as a user setting.
 
-`Launcher::loader_endpoints()` reads four more test-only overrides the same way, one per loader
+`Launcher::loader_endpoints()` reads five more test-only overrides the same way, one per loader
 host: `GCL_FABRIC_BASE_URL`, `GCL_QUILT_BASE_URL`, `GCL_FORGE_META_BASE_URL` (the metadata host,
 not the maven host: see the `modloaders` skill), `GCL_FORGE_MAVEN_BASE_URL`, and
 `GCL_NEOFORGE_BASE_URL`. `Endpoints::from_env()` collects all five plus the Mojang one; set
@@ -85,6 +85,12 @@ so `outputs_current` sees a correct install afterward. See
 `crates/gcl-core/src/loaders/processors_tests.rs` for the full fixture, including how it drives a
 non-zero exit code and a missing output.
 
+A test that goes through `Launcher` instead of `loaders::install` injects the same fake with
+`Launcher::open_with_endpoints(root, endpoints).with_process_runner(Arc::new(FakeRunner::default()))`.
+`install_loader` hands that runner to `LoaderCtx`; with none set, Forge and NeoForge spawn a real
+`java` through `JavaRunner`. Set the instance's `jvm.java_path` as well: a configured path is used
+as given, so the install never probes or downloads a runtime.
+
 ### tests/common/mod.rs
 
 `crates/gcl-core/tests/common/mod.rs` and `crates/gcl-cli/tests/common/mod.rs` each hold the same
@@ -95,8 +101,12 @@ file in a binary uses every helper):
 - `zip_bytes(entries)` / `jar_with_main(main)`: build an in-memory zip, or a jar whose manifest
   declares `Main-Class: <main>`.
 - `mock_vanilla(server, id)`: serves a complete, library-free vanilla version (manifest, version
-  JSON, client jar, empty asset index) under one mock server, for tests that only need vanilla
-  install to succeed before checking something else.
+  JSON, client jar, empty asset index, and a `logging` block with its log4j2 file) under one mock
+  server, for tests that only need vanilla install to succeed before checking something else.
+- `mock_forge(server)` plus `forge_installer_jar`, `FakeRunner`, `fake_java`, and the
+  `FORGE_*`/`PATCHED_*`/`UNIVERSAL_*` constants (gcl-core only): a synthetic Forge 47.4.10
+  installer for 1.20.1, its libraries, and the runner that stands in for the processor JVM.
+  `forge_install.rs` and `launcher_flow.rs` share them.
 
 ### Fixture URL rewriting
 

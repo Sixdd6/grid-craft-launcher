@@ -1,158 +1,22 @@
 //! Headless Forge install against a mock maven, with a fake processor runner.
 
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-
 use gcl_core::download::DownloadCtx;
-use gcl_core::download::hash::sha1_hex;
 use gcl_core::events::null_sink;
 use gcl_core::http::HttpClient;
 use gcl_core::instances::model::Loader;
-use gcl_core::java::{JavaInstall, JavaSource};
-use gcl_core::loaders::{LoaderCtx, LoaderEndpoints, ProcessRunner};
+use gcl_core::loaders::{LoaderCtx, LoaderEndpoints};
 use gcl_core::mojang::{Mojang, VersionJson};
 use gcl_core::paths::Root;
 use tokio_util::sync::CancellationToken;
-use wiremock::matchers::{method, path as path_matcher};
+use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 mod common;
-use common::{jar_with_main, mock_vanilla, serve, zip_bytes};
-
-const MC: &str = "1.20.1";
-const FORGE: &str = "47.4.10";
-const ID: &str = "1.20.1-forge-47.4.10";
-const PROC_MAIN: &str = "com.example.Proc";
-const PROC_PATH: &str = "com/example/proc/1.0/proc-1.0.jar";
-const VLIB_PATH: &str = "com/example/vlib/2.0/vlib-2.0.jar";
-const UNIVERSAL_PATH: &str =
-    "net/minecraftforge/forge/1.20.1-47.4.10/forge-1.20.1-47.4.10-universal.jar";
-const PATCHED_PATH: &str =
-    "net/minecraftforge/forge/1.20.1-47.4.10/forge-1.20.1-47.4.10-client.jar";
-const PATCHED_BYTES: &[u8] = b"patched client jar";
-const UNIVERSAL_BYTES: &[u8] = b"universal jar";
-const VLIB_BYTES: &[u8] = b"vlib jar";
-
-/// A runner that records its calls and writes the file the processor promises.
-struct FakeRunner {
-    calls: Mutex<Vec<Vec<String>>>,
-}
-
-#[async_trait::async_trait]
-impl ProcessRunner for FakeRunner {
-    async fn run(
-        &self,
-        _java: &Path,
-        _classpath: &[PathBuf],
-        main: &str,
-        args: &[String],
-        log: &Path,
-    ) -> Result<i32, std::io::Error> {
-        assert_eq!(main, PROC_MAIN);
-        self.calls.lock().expect("lock").push(args.to_vec());
-        if let Some(parent) = log.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(log, format!("ran {main}\n"))?;
-        // The real processor writes the patched jar the profile names in `--output`.
-        let out = args
-            .iter()
-            .position(|a| a == "--output")
-            .and_then(|i| args.get(i + 1))
-            .expect("processor was given an output");
-        let out = PathBuf::from(out);
-        if let Some(parent) = out.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&out, PATCHED_BYTES)?;
-        Ok(0)
-    }
-}
-
-/// Builds an installer jar with one client processor, a `maven/` entry, and a `data/` file.
-fn installer_jar(base: &str) -> Vec<u8> {
-    let lib = |name: &str, path: &str, body: &[u8]| {
-        serde_json::json!({
-            "name": name,
-            "downloads": { "artifact": {
-                "path": path,
-                "url": format!("{base}/libs/{path}"),
-                "sha1": sha1_hex(body),
-                "size": body.len(),
-            }}
-        })
-    };
-    // The universal jar comes out of `maven/` inside the installer, so its artifact has no URL.
-    let universal = serde_json::json!({
-        "name": "net.minecraftforge:forge:1.20.1-47.4.10:universal",
-        "downloads": { "artifact": {
-            "path": UNIVERSAL_PATH,
-            "url": "",
-            "sha1": sha1_hex(UNIVERSAL_BYTES),
-            "size": UNIVERSAL_BYTES.len(),
-        }}
-    });
-    let profile = serde_json::json!({
-        "spec": 1,
-        "profile": "forge",
-        "version": ID,
-        "minecraft": MC,
-        "json": "/version.json",
-        "data": {
-            "BINPATCH": { "client": "/data/client.lzma", "server": "/data/server.lzma" },
-            "PATCHED": {
-                "client": "[net.minecraftforge:forge:1.20.1-47.4.10:client]",
-                "server": "[net.minecraftforge:forge:1.20.1-47.4.10:server]",
-            },
-            "PATCHED_SHA": {
-                "client": format!("'{}'", sha1_hex(PATCHED_BYTES)),
-                "server": "'0000000000000000000000000000000000000000'",
-            },
-        },
-        "processors": [
-            {
-                "jar": "com.example:proc:1.0",
-                "classpath": [],
-                "args": [
-                    "--input", "{MINECRAFT_JAR}",
-                    "--patch", "{BINPATCH}",
-                    "--output", "{PATCHED}",
-                ],
-                "outputs": { "{PATCHED}": "{PATCHED_SHA}" },
-            },
-            {
-                "sides": ["server"],
-                "jar": "com.example:proc:1.0",
-                "args": ["--server"],
-            },
-        ],
-        "libraries": [lib("com.example:proc:1.0", PROC_PATH, &jar_with_main(PROC_MAIN))],
-    });
-    let version = serde_json::json!({
-        "id": "placeholder",
-        "inheritsFrom": MC,
-        "type": "release",
-        "mainClass": "cpw.mods.bootstraplauncher.BootstrapLauncher",
-        "libraries": [lib("com.example:vlib:2.0", VLIB_PATH, VLIB_BYTES), universal],
-    });
-    zip_bytes(&[
-        ("install_profile.json", profile.to_string().into_bytes()),
-        ("version.json", version.to_string().into_bytes()),
-        ("data/client.lzma", b"binary patch".to_vec()),
-        (&format!("maven/{UNIVERSAL_PATH}"), UNIVERSAL_BYTES.to_vec()),
-    ])
-}
-
-/// The java the installer would run. Never executed: the fake runner stands in for it.
-fn java() -> JavaInstall {
-    JavaInstall {
-        path: PathBuf::from("/nonexistent/java"),
-        major: 17,
-        version: "17.0.0".to_string(),
-        vendor: "test".to_string(),
-        source: JavaSource::Manual,
-    }
-}
+use common::{
+    FORGE_ID as ID, FORGE_MC as MC, FORGE_VERSION as FORGE, FakeRunner, PATCHED_BYTES,
+    PATCHED_PATH, PROC_PATH, UNIVERSAL_BYTES, UNIVERSAL_PATH, VLIB_PATH, fake_java as java,
+    mock_forge, mock_vanilla,
+};
 
 #[tokio::test]
 async fn forge_install_runs_processors_and_caches_the_result() {
@@ -163,22 +27,7 @@ async fn forge_install_runs_processors_and_caches_the_result() {
     root.ensure_layout().expect("layout");
 
     mock_vanilla(&server, MC).await;
-    let jar = installer_jar(&base);
-    Mock::given(method("GET"))
-        .and(path_matcher(format!(
-            "/net/minecraftforge/forge/{MC}-{FORGE}/forge-{MC}-{FORGE}-installer.jar"
-        )))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(jar))
-        .expect(1)
-        .mount(&server)
-        .await;
-    serve(
-        &server,
-        &format!("/libs/{PROC_PATH}"),
-        jar_with_main(PROC_MAIN),
-    )
-    .await;
-    serve(&server, &format!("/libs/{VLIB_PATH}"), VLIB_BYTES.to_vec()).await;
+    mock_forge(&server).await;
 
     let http = HttpClient::new().expect("client");
     let sink = null_sink();
@@ -192,9 +41,7 @@ async fn forge_install_runs_processors_and_caches_the_result() {
     };
     let mojang = Mojang::with_base_url(http.clone(), root.clone(), base.clone());
     let java = java();
-    let runner = FakeRunner {
-        calls: Mutex::new(Vec::new()),
-    };
+    let runner = FakeRunner::default();
     let ctx = LoaderCtx {
         http: &http,
         root: &root,
@@ -289,9 +136,7 @@ async fn forge_install_of_a_build_the_maven_does_not_have_is_no_such_version() {
         parallel: 2,
     };
     let java = java();
-    let runner = FakeRunner {
-        calls: Mutex::new(Vec::new()),
-    };
+    let runner = FakeRunner::default();
     let ctx = LoaderCtx {
         http: &http,
         root: &root,
