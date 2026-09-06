@@ -3,6 +3,7 @@
 //! One instance is one directory under `<root>/instances/<slug>/`, holding `instance.toml`
 //! and a `.minecraft/` game directory. See the `instance-model` skill for the schema.
 
+pub mod content;
 pub mod model;
 
 use std::collections::BTreeMap;
@@ -48,6 +49,32 @@ pub enum Error {
     /// The `options.txt` preseed could not be written.
     #[error(transparent)]
     Settings(#[from] crate::settings::Error),
+    /// A data pack was installed without naming the world it belongs to.
+    #[error("this content kind needs a target world")]
+    WorldRequired,
+    /// No content entry in this instance has the given project id.
+    #[error("no installed content with project id {0}")]
+    ContentNotFound(String),
+    /// A content entry is recorded in `instance.toml` but its file is gone from disk.
+    #[error("content file missing at {0}")]
+    ContentFileMissing(PathBuf),
+    /// A world folder of that name already exists under `saves/`.
+    #[error("a world named {0} already exists")]
+    WorldExists(String),
+    /// A world zip is not one folder holding the world.
+    #[error("bad world zip: {0}")]
+    BadWorldZip(String),
+    /// A path under the app root could not be built or was unsafe.
+    #[error(transparent)]
+    Paths(#[from] crate::paths::Error),
+    /// A zip archive could not be read.
+    #[error("could not read zip at {path}: {source}")]
+    Zip {
+        /// The archive being read.
+        path: PathBuf,
+        /// The underlying zip error.
+        source: zip::result::ZipError,
+    },
 }
 
 /// One instance on disk: its slug, its directory, and its parsed config.
