@@ -39,4 +39,7 @@ pub enum Error {
     /// A launch command could not be built, or the game could not be started.
     #[error(transparent)]
     Launch(#[from] crate::launch::Error),
+    /// A content source search or resolve failed.
+    #[error(transparent)]
+    Sources(#[from] crate::sources::Error),
 }

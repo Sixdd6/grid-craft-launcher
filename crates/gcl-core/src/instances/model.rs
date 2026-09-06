@@ -157,6 +157,33 @@ pub enum ContentKind {
     World,
 }
 
+impl ContentKind {
+    /// Parses the lowercase form used in `instance.toml` and source APIs.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "mod" => Some(ContentKind::Mod),
+            "resourcepack" => Some(ContentKind::ResourcePack),
+            "shader" => Some(ContentKind::Shader),
+            "datapack" => Some(ContentKind::DataPack),
+            "world" => Some(ContentKind::World),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for ContentKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            ContentKind::Mod => "mod",
+            ContentKind::ResourcePack => "resourcepack",
+            ContentKind::Shader => "shader",
+            ContentKind::DataPack => "datapack",
+            ContentKind::World => "world",
+        };
+        f.write_str(s)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,6 +217,20 @@ mod tests {
         .expect("parse");
         assert!(entry.enabled);
         assert!(ContentEntry::default().enabled);
+    }
+
+    #[test]
+    fn content_kind_display_and_parse_round_trip() {
+        for kind in [
+            ContentKind::Mod,
+            ContentKind::ResourcePack,
+            ContentKind::Shader,
+            ContentKind::DataPack,
+            ContentKind::World,
+        ] {
+            assert_eq!(ContentKind::parse(&kind.to_string()), Some(kind));
+        }
+        assert_eq!(ContentKind::parse("bogus"), None);
     }
 
     #[test]
