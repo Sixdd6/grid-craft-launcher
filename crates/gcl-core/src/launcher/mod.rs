@@ -8,19 +8,58 @@ use std::path::{Path, PathBuf};
 
 use tokio_util::sync::CancellationToken;
 
+use crate::auth::offline::offline_account;
+use crate::auth::store::Accounts;
 use crate::config::Config;
 use crate::download::{DownloadCtx, cleanup_partials};
 use crate::events::{Event, EventSink};
 use crate::http::HttpClient;
-use crate::instances::Instances;
+use crate::instances::model::Loader;
+use crate::instances::{Instance, Instances, now_rfc3339};
 use crate::java::{
     JavaInstall, RUNTIME_MANIFEST, component_for_major, detect_all, install_runtime, pick,
 };
+use crate::launch::{JvmSettings, LaunchCommand, LaunchInputs};
+use crate::loaders::{JavaRunner, LoaderCtx, LoaderEndpoints, LoaderVersion, keep_both_libraries};
+use crate::mojang::assets::RESOURCES_BASE;
+use crate::mojang::rules::RuleContext;
 use crate::mojang::{InstallPlan, Mojang, PISTON_META, VersionManifest, install_version};
 use crate::paths::Root;
 
 /// Test-only override for the Mojang metadata base URL, read by [`Launcher::mojang`].
 pub const MOJANG_BASE_URL_ENV: &str = "GCL_MOJANG_BASE_URL";
+
+/// Test-only override for the Fabric meta base URL, read by [`Launcher::loader_endpoints`].
+pub const FABRIC_BASE_URL_ENV: &str = "GCL_FABRIC_BASE_URL";
+
+/// Test-only override for the Quilt meta base URL, read by [`Launcher::loader_endpoints`].
+pub const QUILT_BASE_URL_ENV: &str = "GCL_QUILT_BASE_URL";
+
+/// Test-only override for the Forge metadata host, read by [`Launcher::loader_endpoints`].
+pub const FORGE_META_BASE_URL_ENV: &str = "GCL_FORGE_META_BASE_URL";
+
+/// Test-only override for the Forge maven host, read by [`Launcher::loader_endpoints`].
+pub const FORGE_MAVEN_BASE_URL_ENV: &str = "GCL_FORGE_MAVEN_BASE_URL";
+
+/// Test-only override for the NeoForge maven host, read by [`Launcher::loader_endpoints`].
+pub const NEOFORGE_BASE_URL_ENV: &str = "GCL_NEOFORGE_BASE_URL";
+
+/// The `${launcher_name}` every launch command reports.
+pub const LAUNCHER_NAME: &str = "grid-craft-launcher";
+
+/// What [`Launcher::launch_instance`] produced.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LaunchOutcome {
+    /// The command line that would have been run. Nothing was started.
+    DryRun(LaunchCommand),
+    /// The game ran to completion.
+    Exited {
+        /// Exit code the game returned. A process killed by a signal reports `-1`.
+        code: i32,
+        /// File both output streams were written to.
+        log_path: PathBuf,
+    },
+}
 
 /// Owns the runtime and every shared handle the rest of the launcher needs.
 pub struct Launcher {
@@ -30,6 +69,8 @@ pub struct Launcher {
     http: HttpClient,
     events: EventSink,
     cancel: CancellationToken,
+    mojang_base: String,
+    loaders: LoaderEndpoints,
 }
 
 impl Launcher {
@@ -81,7 +122,34 @@ impl Launcher {
             http,
             events,
             cancel: CancellationToken::new(),
+            mojang_base: env_base(MOJANG_BASE_URL_ENV, PISTON_META),
+            loaders: LoaderEndpoints {
+                fabric: env_base(FABRIC_BASE_URL_ENV, crate::loaders::fabric::BASE),
+                quilt: env_base(QUILT_BASE_URL_ENV, crate::loaders::quilt::BASE),
+                forge_meta: env_base(FORGE_META_BASE_URL_ENV, crate::loaders::forge::META),
+                forge_maven: env_base(FORGE_MAVEN_BASE_URL_ENV, crate::loaders::forge::MAVEN),
+                neoforge: env_base(NEOFORGE_BASE_URL_ENV, crate::loaders::neoforge::MAVEN),
+            },
         };
+        Ok((launcher, receiver))
+    }
+
+    /// Test seam: a launcher over `root` with explicit metadata base URLs.
+    ///
+    /// `mojang_base` and `loaders` replace what [`Launcher::new`] reads from the environment,
+    /// so a test can point one launcher at a mock server without touching process env. The
+    /// root is treated as overridden, exactly as an explicit root passed to
+    /// [`Launcher::new`] is.
+    pub fn open_with_endpoints(
+        root: PathBuf,
+        mojang_base: Option<String>,
+        loaders: LoaderEndpoints,
+    ) -> Result<(Launcher, tokio::sync::mpsc::UnboundedReceiver<Event>), crate::Error> {
+        let (mut launcher, receiver) = Self::open(Root::from_path(root), true)?;
+        if let Some(base) = mojang_base {
+            launcher.mojang_base = base;
+        }
+        launcher.loaders = loaders;
         Ok((launcher, receiver))
     }
 
@@ -128,8 +196,21 @@ impl Launcher {
 
     /// A Mojang metadata client over this root, honouring the test-only base URL override.
     pub fn mojang(&self) -> Mojang {
-        let base = std::env::var(MOJANG_BASE_URL_ENV).unwrap_or_else(|_| PISTON_META.to_string());
-        Mojang::with_base_url(self.http.clone(), self.root.clone(), base)
+        Mojang::with_base_url(
+            self.http.clone(),
+            self.root.clone(),
+            self.mojang_base.clone(),
+        )
+    }
+
+    /// The loader metadata and maven hosts this launcher talks to.
+    pub fn loader_endpoints(&self) -> LoaderEndpoints {
+        self.loaders.clone()
+    }
+
+    /// The account store over this root.
+    pub fn accounts(&self) -> Accounts {
+        Accounts::new(&self.root)
     }
 
     /// The instance store over this root.
@@ -181,6 +262,222 @@ impl Launcher {
         self.ensure_java_component(plan.java_major, plan.java_component.as_deref())
     }
 
+    /// Rewrites this instance's `options.txt` keys. Returns how many lines changed.
+    pub fn apply_settings_overrides(&self, instance: &Instance) -> Result<usize, crate::Error> {
+        Ok(crate::settings::apply_overrides_to(
+            &instance.game_dir(),
+            &instance.config.settings_overrides,
+        )?)
+    }
+
+    /// Lists the loader builds available for one Minecraft version, newest first. Blocks.
+    pub fn list_loader_versions(
+        &self,
+        loader: Loader,
+        mc: &str,
+    ) -> Result<Vec<LoaderVersion>, crate::Error> {
+        let endpoints = self.loader_endpoints();
+        let dl = self.download_ctx();
+        let ctx = self.loader_ctx(&dl, None, None);
+        Ok(self.block_on(async move {
+            crate::loaders::list_versions(&ctx, &endpoints, loader, mc).await
+        })?)
+    }
+
+    /// Installs the instance's loader and returns the version id a launch resolves.
+    ///
+    /// A vanilla instance installs nothing and returns its Minecraft id. Otherwise an unset,
+    /// `recommended`, or `latest` `loader_version` is resolved to a concrete build and written
+    /// back to `instance.toml`, so a later launch is reproducible. Blocks.
+    #[tracing::instrument(skip(self))]
+    pub fn install_loader(&self, slug: &str) -> Result<String, crate::Error> {
+        let mut instance = self.instances().get(slug)?;
+        let loader = instance.config.loader;
+        let mc = instance.config.minecraft.clone();
+        if loader == Loader::None {
+            return Ok(mc);
+        }
+        let version =
+            self.resolve_loader_version(loader, &mc, instance.config.loader_version.as_deref())?;
+
+        // Forge and NeoForge run installer processors, which need the vanilla install and a JVM.
+        let java = match loader {
+            Loader::Forge | Loader::NeoForge => {
+                let plan = self.install_version(&mc)?;
+                Some(self.ensure_java_for(&plan)?)
+            }
+            _ => None,
+        };
+        let endpoints = self.loader_endpoints();
+        let mojang = self.mojang();
+        let dl = self.download_ctx();
+        let runner = JavaRunner;
+        let ctx = self.loader_ctx(&dl, java.as_ref(), Some(&runner));
+        let ctx = LoaderCtx {
+            mojang: Some(&mojang),
+            ..ctx
+        };
+        let requested = version.clone();
+        let id = self.block_on(async move {
+            crate::loaders::install(&ctx, &endpoints, loader, &mc, &requested).await
+        })?;
+
+        if instance.config.loader_version.as_deref() != Some(version.as_str()) {
+            instance.config.loader_version = Some(version);
+            instance.save()?;
+        }
+        Ok(id)
+    }
+
+    /// Installs everything the instance needs to start: loader, libraries, assets, natives.
+    ///
+    /// Blocks.
+    #[tracing::instrument(skip(self))]
+    pub fn install_instance(&self, slug: &str) -> Result<InstallPlan, crate::Error> {
+        let instance = self.instances().get(slug)?;
+        let loader = instance.config.loader;
+        let mc = instance.config.minecraft.clone();
+        let id = self.install_loader(slug)?;
+
+        let mojang = self.mojang();
+        let dl = self.download_ctx();
+        Ok(self.block_on(async move {
+            // A loader profile inherits from the vanilla version, so that JSON has to be in
+            // the cache before `resolve` can merge the chain.
+            if id != mc {
+                mojang.version(&mc).await?;
+            }
+            let profile = mojang.version(&id).await?;
+            let resolved = mojang.resolve(profile, keep_both_libraries(loader))?;
+            crate::mojang::install_resolved(&mojang, &dl, resolved, None, RESOURCES_BASE).await
+        })?)
+    }
+
+    /// Installs the instance if needed and either prints or runs its command line.
+    ///
+    /// The account is chosen in this order: `offline_user` creates or reuses an offline
+    /// account, `account` selects a saved one by id or name, and otherwise the active account
+    /// is used. With none of the three this is [`crate::auth::Error::NoAccount`]. Blocks.
+    #[tracing::instrument(skip(self))]
+    pub fn launch_instance(
+        &self,
+        slug: &str,
+        account: Option<&str>,
+        offline_user: Option<&str>,
+        dry_run: bool,
+    ) -> Result<LaunchOutcome, crate::Error> {
+        let accounts = self.accounts();
+        let account = match (offline_user, account) {
+            (Some(name), _) => accounts.add(offline_account(name))?,
+            (None, Some(id_or_name)) => accounts.select(id_or_name)?,
+            (None, None) => accounts.active()?.ok_or(crate::auth::Error::NoAccount)?,
+        };
+
+        let plan = self.install_instance(slug)?;
+        let mut instance = self.instances().get(slug)?;
+        let java = match instance
+            .config
+            .jvm
+            .java_path
+            .clone()
+            .or_else(|| self.config.jvm.java_path.clone())
+        {
+            Some(path) => path,
+            None => self.ensure_java_for(&plan)?.path,
+        };
+        let changed = self.apply_settings_overrides(&instance)?;
+        if changed > 0 {
+            tracing::info!(changed, "rewrote options.txt keys");
+        }
+
+        let identity = account.launch_identity();
+        let rules = RuleContext::current();
+        let jvm = JvmSettings {
+            min_mib: instance
+                .config
+                .jvm
+                .min_mib
+                .unwrap_or(self.config.jvm.min_mib),
+            max_mib: instance
+                .config
+                .jvm
+                .max_mib
+                .unwrap_or(self.config.jvm.max_mib),
+            extra_args: instance.config.jvm.extra_args.clone(),
+        };
+        let cmd = crate::launch::build(
+            &LaunchInputs {
+                plan: &plan,
+                instance: &instance,
+                identity: &identity,
+                java: &java,
+                root: &self.root,
+                jvm,
+                rules: &rules,
+                launcher_name: LAUNCHER_NAME,
+                launcher_version: crate::VERSION,
+                resolution: None,
+            },
+            Some(&self.events),
+        )?;
+        if dry_run {
+            return Ok(LaunchOutcome::DryRun(cmd));
+        }
+
+        let log_path = self
+            .root
+            .logs_dir()
+            .join(format!("{slug}-{}.log", now_rfc3339().replace(':', "-")));
+        let sink = self.events.clone();
+        let target = log_path.clone();
+        let game = self.block_on(async move { crate::launch::spawn(&cmd, target, sink).await })?;
+        instance.config.last_launched = Some(now_rfc3339());
+        instance.save()?;
+        let code = self.block_on(async move { crate::launch::wait(game).await })?;
+        Ok(LaunchOutcome::Exited { code, log_path })
+    }
+
+    /// Turns an unset, `recommended`, or `latest` loader version into a concrete build.
+    fn resolve_loader_version(
+        &self,
+        loader: Loader,
+        mc: &str,
+        requested: Option<&str>,
+    ) -> Result<String, crate::Error> {
+        match requested {
+            Some(v) if !v.is_empty() && v != "recommended" && v != "latest" => Ok(v.to_string()),
+            other => {
+                let versions = self.list_loader_versions(loader, mc)?;
+                let picked = match other {
+                    Some("latest") => versions.first(),
+                    _ => versions
+                        .iter()
+                        .find(|v| v.recommended)
+                        .or_else(|| versions.first()),
+                }
+                .ok_or_else(|| crate::loaders::Error::Unsupported(mc.to_string(), loader))?;
+                Ok(picked.version.clone())
+            }
+        }
+    }
+
+    /// A loader context over this root, download context, and optional JVM.
+    fn loader_ctx<'a>(
+        &'a self,
+        dl: &'a DownloadCtx<'a>,
+        java: Option<&'a JavaInstall>,
+        runner: Option<&'a dyn crate::loaders::ProcessRunner>,
+    ) -> LoaderCtx<'a> {
+        LoaderCtx {
+            http: &self.http,
+            root: &self.root,
+            dl,
+            java,
+            runner,
+            mojang: None,
+        }
+    }
+
     /// Shared body of [`Launcher::ensure_java`] and [`Launcher::ensure_java_for`].
     fn ensure_java_component(
         &self,
@@ -211,6 +508,14 @@ impl std::fmt::Debug for Launcher {
             .field("config", &self.config)
             .finish_non_exhaustive()
     }
+}
+
+/// Reads a test-only base URL override, falling back to the production endpoint.
+fn env_base(var: &str, default: &str) -> String {
+    std::env::var(var)
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| default.to_string())
 }
 
 /// Applies the config's `root` override, unless the env var or a caller override already
@@ -403,6 +708,119 @@ mod tests {
         let (launcher, _rx) =
             Launcher::new(Some(dir.path().to_path_buf())).expect("build launcher");
         assert_eq!(launcher.block_on(async { 2 + 2 }), 4);
+    }
+
+    /// A launcher over a fresh root with explicit, non-production loader hosts.
+    fn seamed(dir: &tempfile::TempDir) -> Launcher {
+        let endpoints = LoaderEndpoints {
+            fabric: "http://fabric.invalid".to_string(),
+            quilt: "http://quilt.invalid".to_string(),
+            forge_meta: "http://forge-meta.invalid".to_string(),
+            forge_maven: "http://forge-maven.invalid".to_string(),
+            neoforge: "http://neoforge.invalid".to_string(),
+        };
+        let (launcher, _rx) = Launcher::open_with_endpoints(
+            dir.path().to_path_buf(),
+            Some("http://mojang.invalid".to_string()),
+            endpoints,
+        )
+        .expect("build launcher");
+        launcher
+    }
+
+    #[test]
+    fn env_base_falls_back_when_the_variable_is_unset_or_blank() {
+        assert_eq!(env_base("GCL_DEFINITELY_UNSET_BASE_URL", "prod"), "prod");
+    }
+
+    #[test]
+    fn open_with_endpoints_replaces_the_metadata_hosts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+        assert_eq!(launcher.loader_endpoints().fabric, "http://fabric.invalid");
+        assert_eq!(
+            launcher.loader_endpoints().neoforge,
+            "http://neoforge.invalid"
+        );
+        assert_eq!(launcher.root().path(), dir.path());
+    }
+
+    #[test]
+    fn accounts_live_under_the_launcher_root() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+        let added = launcher
+            .accounts()
+            .add(crate::auth::offline::offline_account("tester"))
+            .expect("add account");
+        assert_eq!(
+            launcher.accounts().active().expect("active"),
+            Some(added.clone())
+        );
+        assert_eq!(added.name, "tester");
+    }
+
+    #[test]
+    fn install_loader_of_a_vanilla_instance_installs_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+        let instance = launcher
+            .instances()
+            .create(
+                "Pack",
+                "1.20.1",
+                crate::instances::model::Loader::None,
+                None,
+                &std::collections::BTreeMap::new(),
+            )
+            .expect("create");
+        // The hosts above are unreachable, so this can only pass without a request.
+        assert_eq!(
+            launcher.install_loader(&instance.slug).expect("install"),
+            "1.20.1"
+        );
+    }
+
+    #[test]
+    fn a_pinned_loader_version_is_used_as_it_stands() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+        let picked = launcher
+            .resolve_loader_version(Loader::Fabric, "1.20.1", Some("0.16.0"))
+            .expect("pinned version needs no request");
+        assert_eq!(picked, "0.16.0");
+    }
+
+    #[test]
+    fn apply_settings_overrides_rewrites_options_txt() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+        let mut instance = launcher
+            .instances()
+            .create(
+                "Pack",
+                "1.20.1",
+                crate::instances::model::Loader::None,
+                None,
+                &std::collections::BTreeMap::new(),
+            )
+            .expect("create");
+        instance
+            .config
+            .settings_overrides
+            .insert("renderDistance".to_string(), "12".to_string());
+        assert_eq!(
+            launcher.apply_settings_overrides(&instance).expect("apply"),
+            1
+        );
+        let options =
+            std::fs::read_to_string(instance.game_dir().join("options.txt")).expect("options.txt");
+        assert!(options.contains("renderDistance:12"), "{options}");
+        // A second pass changes nothing.
+        assert_eq!(
+            launcher.apply_settings_overrides(&instance).expect("apply"),
+            0
+        );
     }
 
     #[test]

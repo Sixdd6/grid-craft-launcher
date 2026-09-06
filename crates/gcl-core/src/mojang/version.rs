@@ -43,9 +43,9 @@ pub struct VersionJson {
     /// Java runtime this version needs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub java_version: Option<JavaVersion>,
-    /// log4j configuration block, passed through untouched.
+    /// log4j configuration this version publishes, when it publishes one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub logging: Option<serde_json::Value>,
+    pub logging: Option<LoggingConfig>,
     /// Release channel: `release`, `snapshot`, `old_beta`, `old_alpha`.
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
@@ -202,6 +202,41 @@ pub struct JavaVersion {
     pub major_version: u32,
 }
 
+/// The `logging` block of a version JSON. Every side is optional: old versions publish
+/// none, and a loader profile can publish an empty object.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
+pub struct LoggingConfig {
+    /// Client-side log4j configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client: Option<LoggingClient>,
+}
+
+/// The client half of a [`LoggingConfig`]: the JVM argument and the file it points at.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct LoggingClient {
+    /// JVM argument template holding `${path}`, for example
+    /// `-Dlog4j.configurationFile=${path}`.
+    pub argument: String,
+    /// The configuration file the argument points at.
+    pub file: LoggingFile,
+    /// Configuration format, for example `log4j2-xml`.
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+}
+
+/// One downloadable log4j configuration file.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct LoggingFile {
+    /// File name the config is cached under, for example `client-1.12.xml`.
+    pub id: String,
+    /// Lowercase hex sha1 of the file.
+    pub sha1: String,
+    /// Size in bytes.
+    pub size: u64,
+    /// Where to download the file from.
+    pub url: String,
+}
+
 /// A maven coordinate parsed from a library `name`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MavenCoord {
@@ -302,6 +337,35 @@ mod tests {
             "jvm_args": v.arguments.as_ref().map(|a| a.jvm.len()),
             "minecraft_arguments": v.minecraft_arguments,
         }));
+    }
+
+    #[test]
+    fn parses_the_logging_block_into_typed_fields() {
+        let v = parse_fixture("1.20.1");
+        let client = v
+            .logging
+            .as_ref()
+            .and_then(|l| l.client.as_ref())
+            .expect("1.20.1 publishes a client logging block");
+        assert_eq!(client.argument, "-Dlog4j.configurationFile=${path}");
+        assert_eq!(client.file.id, "client-1.12.xml");
+        assert_eq!(client.file.sha1, "bd65e7d2e3c237be76cfbef4c2405033d7f91521");
+        assert_eq!(client.file.size, 888);
+        assert!(client.file.url.ends_with("client-1.12.xml"));
+        assert_eq!(client.kind.as_deref(), Some("log4j2-xml"));
+    }
+
+    #[test]
+    fn a_version_without_logging_parses() {
+        let v: VersionJson = serde_json::from_str(r#"{"id":"x"}"#).expect("no logging parses");
+        assert_eq!(v.logging, None);
+    }
+
+    #[test]
+    fn an_empty_logging_object_parses_with_no_client() {
+        let v: VersionJson =
+            serde_json::from_str(r#"{"id":"x","logging":{}}"#).expect("empty logging parses");
+        assert_eq!(v.logging, Some(LoggingConfig::default()));
     }
 
     #[test]

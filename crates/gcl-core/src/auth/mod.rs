@@ -31,6 +31,9 @@ pub enum Error {
     /// No account matches the given id or name.
     #[error("no account matching {0}")]
     NotFound(String),
+    /// A launch was asked for with no account named, no offline user, and none active.
+    #[error("no account selected: add one, or launch with an offline user name")]
+    NoAccount,
 }
 
 /// How an account authenticates: a local offline player, or a Microsoft account.

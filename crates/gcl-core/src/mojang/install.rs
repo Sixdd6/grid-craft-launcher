@@ -39,6 +39,9 @@ pub struct InstallPlan {
     /// Asset directory name the game is launched with: `assets`, falling back to the asset
     /// index id.
     pub assets_id: Option<String>,
+    /// Cached log4j configuration file, set by [`install_resolved`] once it is downloaded.
+    /// [`plan_install`] leaves it `None` because it does no I/O.
+    pub log_config: Option<PathBuf>,
 }
 
 /// Builds the download plan for one resolved version. Does no I/O.
@@ -124,6 +127,7 @@ pub fn plan_install(
         main_class: v.main_class.clone(),
         java_component: v.java_version.as_ref().map(|j| j.component.clone()),
         assets_id: v.assets.clone().or(Some(asset_index_id)),
+        log_config: None,
         resolved: v.clone(),
     })
 }
@@ -238,16 +242,62 @@ pub async fn install_version_with(
     override_all_library_urls: Option<&str>,
     resources_base: &str,
 ) -> Result<InstallPlan, Error> {
-    let version = m.resolve_auto(m.version(id).await?)?;
+    let resolved = m.resolve_auto(m.version(id).await?)?;
+    install_resolved(m, dl, resolved, override_all_library_urls, resources_base).await
+}
+
+/// Installs an already-resolved version: libraries, log config, assets, and natives.
+///
+/// Callers that resolved the version themselves — a loader install knows whether to keep both
+/// copies of a library — use this instead of [`install_version_with`], which resolves first.
+/// `_m` is taken for symmetry with [`install_version_with`] and for the metadata fetches this
+/// step will grow; nothing here needs it yet.
+#[tracing::instrument(skip(_m, dl, resolved), fields(id = %resolved.id))]
+pub async fn install_resolved(
+    _m: &Mojang,
+    dl: &DownloadCtx<'_>,
+    resolved: VersionJson,
+    override_all_library_urls: Option<&str>,
+    resources_base: &str,
+) -> Result<InstallPlan, Error> {
     let rules = RuleContext::current();
-    let plan = plan_install(&version, dl.root, &rules, override_all_library_urls)?;
+    let mut plan = plan_install(&resolved, dl.root, &rules, override_all_library_urls)?;
     download_all(dl, plan.specs.clone()).await?;
 
-    let index = fetch_asset_index(dl, &version, &plan.asset_index_id).await?;
+    if let Some((spec, dest)) = log_config_spec(&resolved, dl.root) {
+        download_all(dl, vec![spec]).await?;
+        plan.log_config = Some(dest);
+    }
+
+    let index = fetch_asset_index(dl, &resolved, &plan.asset_index_id).await?;
     download_all(dl, asset_specs(&index, dl.root, resources_base)).await?;
 
     extract_natives(plan.natives.clone(), plan.natives_dir.clone()).await?;
     Ok(plan)
+}
+
+/// Builds the download spec and cache path for a version's log4j configuration file.
+///
+/// Returns `None` when the version publishes no client logging block, or when its file id is
+/// not a plain file name, which would otherwise steer the write out of the cache.
+pub(crate) fn log_config_spec(
+    v: &VersionJson,
+    root: &crate::paths::Root,
+) -> Option<(DownloadSpec, PathBuf)> {
+    let client = v.logging.as_ref()?.client.as_ref()?;
+    let dest = crate::paths::safe_join(&root.assets_dir().join("log_configs"), &client.file.id)
+        .ok()
+        .filter(|p| p.parent() == Some(root.assets_dir().join("log_configs").as_path()))?;
+    Some((
+        DownloadSpec {
+            url: client.file.url.clone(),
+            sha1: Some(client.file.sha1.clone()),
+            size: Some(client.file.size),
+            dest: dest.clone(),
+            label: format!("log config {}", client.file.id),
+        },
+        dest,
+    ))
 }
 
 /// Fetches and caches the asset index, verifying the sha1 the version JSON publishes.
@@ -394,6 +444,56 @@ mod tests {
         assert_eq!(plan.asset_index_id, "5");
         assert_eq!(plan.natives_dir, root.natives_dir("1.20.1"));
         assert_eq!(plan.specs.len(), plan.classpath.len() + 1);
+    }
+
+    #[test]
+    fn a_version_with_logging_gets_a_log_config_spec() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        let v = parse(V1_20_1);
+        let (spec, dest) = log_config_spec(&v, &root).expect("1.20.1 publishes a logging block");
+        assert_eq!(
+            dest,
+            root.assets_dir()
+                .join("log_configs")
+                .join("client-1.12.xml")
+        );
+        assert_eq!(spec.dest, dest);
+        assert_eq!(
+            spec.sha1.as_deref(),
+            Some("bd65e7d2e3c237be76cfbef4c2405033d7f91521")
+        );
+        assert_eq!(spec.size, Some(888));
+        assert!(spec.url.ends_with("client-1.12.xml"));
+    }
+
+    #[test]
+    fn a_version_without_logging_gets_no_log_config_spec() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        let mut v = parse(V1_20_1);
+        v.logging = None;
+        assert!(log_config_spec(&v, &root).is_none());
+    }
+
+    #[test]
+    fn a_log_config_id_that_escapes_the_cache_is_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        let mut v = parse(V1_20_1);
+        if let Some(client) = v.logging.as_mut().and_then(|l| l.client.as_mut()) {
+            client.file.id = "../../escaped.xml".to_string();
+        }
+        assert!(log_config_spec(&v, &root).is_none());
+    }
+
+    #[test]
+    fn a_plan_starts_with_no_log_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        let v = parse(V1_20_1);
+        let plan = plan_install(&v, &root, &linux_ctx(), None).expect("plans");
+        assert_eq!(plan.log_config, None);
     }
 
     #[test]

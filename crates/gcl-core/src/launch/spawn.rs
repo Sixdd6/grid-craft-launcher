@@ -18,6 +18,8 @@ pub struct RunningGame {
     pub child: tokio::process::Child,
     /// The file both output streams are appended to.
     pub log_path: PathBuf,
+    /// The program that was started, named in a [`Error::Spawn`] if waiting fails.
+    pub program: PathBuf,
     /// Two readers and one writer task, awaited by [`wait`] after the child exits.
     tasks: Vec<JoinHandle<()>>,
     /// Sink [`wait`] emits its summary line on.
@@ -96,6 +98,7 @@ pub async fn spawn(
     Ok(RunningGame {
         child,
         log_path,
+        program: cmd.program.clone(),
         tasks,
         sink,
     })
@@ -107,19 +110,20 @@ pub async fn spawn(
 pub async fn wait(game: RunningGame) -> Result<i32, Error> {
     let RunningGame {
         mut child,
-        log_path,
+        log_path: _,
+        program,
         tasks,
         sink,
     } = game;
-    let status = child.wait().await.map_err(|source| Error::Io {
-        path: log_path,
-        source,
-    })?;
+    let waited = child.wait().await;
+    // The reader tasks are joined either way: a failed wait still leaves two tasks holding
+    // the output pipes, and dropping them would lose the last lines of the log.
     for task in tasks {
         if let Err(err) = task.await {
             tracing::warn!(%err, "game log task did not finish cleanly");
         }
     }
+    let status = waited.map_err(|source| Error::Spawn { program, source })?;
     let code = status.code().unwrap_or(-1);
     let level = if code == 0 {
         LogLevel::Info
@@ -182,6 +186,7 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let game = spawn(&cmd, log_path.clone(), tx).await.expect("spawn");
         assert_eq!(game.log_path, log_path);
+        assert_eq!(game.program, cmd.program);
         let code = wait(game).await.expect("wait");
         assert_eq!(code, 3);
 

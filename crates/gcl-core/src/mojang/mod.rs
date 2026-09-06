@@ -21,12 +21,14 @@ pub use args::{ArgContext, default_legacy_jvm_args, expand_arguments, expand_leg
 pub use assets::{
     AssetIndex, AssetObject, LegacyError, RESOURCES_BASE, asset_specs, materialize_legacy,
 };
-pub use install::{InstallPlan, install_version, install_version_with, plan_install};
+pub use install::{
+    InstallPlan, install_resolved, install_version, install_version_with, plan_install,
+};
 pub use manifest::{Latest, ManifestEntry, VersionManifest, VersionType};
 pub use rules::{Action, OsRule, Rule, RuleContext, rules_allow};
 pub use version::{
     ArgValue, Argument, Arguments, Artifact, AssetIndexRef, Downloads, Extract, JavaVersion,
-    Library, LibraryDownloads, MavenCoord, VersionJson,
+    Library, LibraryDownloads, LoggingClient, LoggingConfig, LoggingFile, MavenCoord, VersionJson,
 };
 
 /// Production base URL for Mojang metadata.

@@ -52,8 +52,17 @@ pub struct LaunchInputs<'a> {
     pub resolution: Option<(u32, u32)>,
 }
 
+/// The launch argument whose value is a secret, hidden by [`LaunchCommand::redacted`].
+const ACCESS_TOKEN_FLAG: &str = "--accessToken";
+
+/// Stand-in printed in place of a real access token.
+const REDACTED: &str = "<redacted>";
+
 /// A fully expanded command line, ready to spawn.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+///
+/// Its [`Debug`] prints the [`LaunchCommand::redacted`] form, so a traced or logged command
+/// never carries a Microsoft access token.
+#[derive(Clone, Serialize, PartialEq)]
 pub struct LaunchCommand {
     /// The java binary to run.
     pub program: PathBuf,
@@ -63,6 +72,39 @@ pub struct LaunchCommand {
     pub cwd: PathBuf,
     /// Extra environment variables. Empty today; the UI fills it in later.
     pub env: Vec<(String, String)>,
+}
+
+impl LaunchCommand {
+    /// A copy of this command with the value after `--accessToken` replaced.
+    ///
+    /// The offline placeholder `"0"` is kept, because it is not a secret and hiding it would
+    /// make an offline command line harder to read.
+    pub fn redacted(&self) -> LaunchCommand {
+        let mut args = self.args.clone();
+        for i in 0..args.len().saturating_sub(1) {
+            if args[i] == ACCESS_TOKEN_FLAG && args[i + 1] != "0" {
+                args[i + 1] = REDACTED.to_string();
+            }
+        }
+        LaunchCommand {
+            program: self.program.clone(),
+            args,
+            cwd: self.cwd.clone(),
+            env: self.env.clone(),
+        }
+    }
+}
+
+impl std::fmt::Debug for LaunchCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let hidden = self.redacted();
+        f.debug_struct("LaunchCommand")
+            .field("program", &hidden.program)
+            .field("args", &hidden.args)
+            .field("cwd", &hidden.cwd)
+            .field("env", &hidden.env)
+            .finish()
+    }
 }
 
 /// The separator java expects between classpath entries on this platform.
@@ -142,6 +184,15 @@ pub fn build(inputs: &LaunchInputs<'_>, sink: Option<&EventSink>) -> Result<Laun
                 .collect();
             args.extend(expand_arguments(&legacy, &rules, &ctx, sink));
         }
+    }
+    if let Some(config) = &plan.log_config
+        && let Some(client) = plan
+            .resolved
+            .logging
+            .as_ref()
+            .and_then(|l| l.client.as_ref())
+    {
+        args.push(client.argument.replace("${path}", &path_string(config)));
     }
     args.push(main_class);
     match (&plan.resolved.arguments, &plan.resolved.minecraft_arguments) {
@@ -271,7 +322,10 @@ mod tests {
         root.ensure_layout().expect("layout");
         let resolved: VersionJson = serde_json::from_str(version_json).expect("fixture parses");
         let rules = linux_rules();
-        let plan = plan_install(&resolved, &root, &rules, None).expect("plan");
+        let mut plan = plan_install(&resolved, &root, &rules, None).expect("plan");
+        // A real install downloads the log4j config and records it; do the same here so the
+        // command line under test is the one a launch after an install would produce.
+        plan.log_config = crate::mojang::install::log_config_spec(&resolved, &root).map(|(_, p)| p);
         let instance = Instances::new(root.clone())
             .create(
                 "Test Pack",
@@ -404,7 +458,8 @@ mod tests {
         assert!(cmd.args.contains(&natives), "{:?}", cmd.args);
         let cp = index_of(&cmd.args, "-cp");
         let main = index_of(&cmd.args, "net.minecraft.client.main.Main");
-        assert_eq!(main, cp + 2, "main class follows -cp <classpath>");
+        // -cp, the classpath, the logging argument, then the main class.
+        assert_eq!(main, cp + 3, "main class follows -cp <classpath>");
         let asset_index = index_of(&cmd.args, "--assetIndex");
         assert_eq!(cmd.args[asset_index + 1], "1.8");
         assert!(!cmd.args.iter().any(|a| a == "--tweakClass"));
@@ -453,6 +508,73 @@ mod tests {
             virtual_dir.to_string_lossy().into_owned()
         );
         assert!(virtual_dir.join("lang/en_GB.lang").is_file());
+    }
+
+    #[test]
+    fn the_logging_argument_sits_between_the_jvm_args_and_the_main_class() {
+        let f = fixture(V1_20_1);
+        let java = PathBuf::from("/usr/bin/java");
+        let cmd = build(&inputs(&f, &java, None), None).expect("build");
+        let config = f
+            .plan
+            .log_config
+            .as_ref()
+            .expect("fixture has a log config");
+        let expected = format!("-Dlog4j.configurationFile={}", config.display());
+        let arg = index_of(&cmd.args, &expected);
+        let main = index_of(&cmd.args, "net.minecraft.client.main.Main");
+        let cp = index_of(&cmd.args, "-cp");
+        assert!(arg > cp, "logging arg must follow the expanded jvm args");
+        assert!(arg < main, "logging arg must precede the main class");
+    }
+
+    #[test]
+    fn no_log_config_means_no_logging_argument() {
+        let mut f = fixture(V1_20_1);
+        f.plan.log_config = None;
+        let java = PathBuf::from("/usr/bin/java");
+        let cmd = build(&inputs(&f, &java, None), None).expect("build");
+        assert!(
+            !cmd.args.iter().any(|a| a.starts_with("-Dlog4j")),
+            "{:?}",
+            cmd.args
+        );
+    }
+
+    fn command_with_token(token: &str) -> LaunchCommand {
+        LaunchCommand {
+            program: PathBuf::from("/usr/bin/java"),
+            args: vec![
+                "--username".to_string(),
+                "alice".to_string(),
+                "--accessToken".to_string(),
+                token.to_string(),
+            ],
+            cwd: PathBuf::from("/tmp"),
+            env: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn redacted_hides_a_real_access_token() {
+        let cmd = command_with_token("ey.super.secret");
+        let hidden = cmd.redacted();
+        assert_eq!(hidden.args[3], "<redacted>");
+        assert_eq!(hidden.args[1], "alice");
+        assert_eq!(cmd.args[3], "ey.super.secret", "the original is untouched");
+    }
+
+    #[test]
+    fn redacted_keeps_the_offline_placeholder_token() {
+        let hidden = command_with_token("0").redacted();
+        assert_eq!(hidden.args[3], "0");
+    }
+
+    #[test]
+    fn debug_never_prints_the_access_token() {
+        let printed = format!("{:?}", command_with_token("ey.super.secret"));
+        assert!(!printed.contains("ey.super.secret"), "{printed}");
+        assert!(printed.contains("<redacted>"), "{printed}");
     }
 
     #[test]
