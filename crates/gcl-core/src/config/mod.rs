@@ -128,17 +128,17 @@ impl Config {
     }
 
     /// Saves config to `path`, creating parent directories as needed.
+    ///
+    /// The write goes through a temp file and a rename, so a reader never sees a half-written
+    /// `config.toml`.
     pub fn save(&self, path: &Path) -> Result<(), Error> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|source| Error::Io {
-                path: parent.to_path_buf(),
-                source,
-            })?;
-        }
         let contents = toml::to_string_pretty(self)?;
-        std::fs::write(path, contents).map_err(|source| Error::Io {
-            path: path.to_path_buf(),
-            source,
+        crate::paths::write_atomic(path, contents.as_bytes()).map_err(|err| match err {
+            crate::paths::Error::Io { path, source } => Error::Io { path, source },
+            other => Error::Io {
+                path: path.to_path_buf(),
+                source: std::io::Error::other(other.to_string()),
+            },
         })
     }
 
@@ -173,6 +173,27 @@ mod tests {
         config.save(&path).unwrap();
         let loaded = Config::load(&path).unwrap();
         assert_eq!(config, loaded);
+    }
+
+    #[test]
+    fn save_leaves_no_temp_file_beside_the_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("config.toml");
+        Config::default().save(&path).unwrap();
+        let second = Config {
+            parallel_downloads: 3,
+            ..Config::default()
+        };
+        second.save(&path).unwrap();
+
+        let leftovers: Vec<String> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+        assert_eq!(Config::load(&path).unwrap().parallel_downloads, 3);
     }
 
     #[test]

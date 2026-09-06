@@ -10,7 +10,7 @@ Full detail with JSON shapes: `docs/research/2026-09-06-mojang-and-modloader-api
 - Manifest: `https://piston-meta.mojang.com/mc/game/version_manifest_v2.json`. Cache with ETag. Entries have `id`, `type`, `url`, `sha1`, `releaseTime`.
 - Version JSON: the entry's `url`. Cache forever under `cache/versions/<id>.json`; the URL contains its sha1.
 - Assets: `assetIndex.url` → `{ objects: { path: { hash, size } } }`. Object URL `https://resources.download.minecraft.net/<hash[0..2]>/<hash>`. Store under `cache/assets/objects/<hash[0..2]>/<hash>`. Index under `cache/assets/indexes/<id>.json`.
-- Java runtimes: `https://launchermeta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json`, keyed by platform (`linux`, `windows-x64`, `mac-os`, `mac-os-arm64`) then component (`java-runtime-gamma`, `java-runtime-delta`). Each `manifest.url` lists files with `downloads.raw { sha1, size, url }` and `executable`.
+- Java runtimes: `https://launchermeta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json`, keyed by platform (`linux`, `windows-x64`, `mac-os`, `mac-os-arm64`) then component (`java-runtime-gamma`, `java-runtime-delta`). Each `manifest.url` lists files with `downloads.raw { sha1, size, url }` and `executable`. Take the component from the version JSON's `javaVersion.component` (`InstallPlan::java_component`, used by `Launcher::ensure_java_for`); `component_for_major` is only the fallback for a version JSON that names none.
 
 ## Version JSON fields you must handle
 
@@ -30,8 +30,13 @@ Full detail with JSON shapes: `docs/research/2026-09-06-mojang-and-modloader-api
 Loader profiles set `inheritsFrom`. Resolve parent first. Child `mainClass` wins. Child
 `arguments` append to parent. Libraries are merged by `group:artifact:classifier`
 (`MavenCoord::merge_key`), so a natives classifier jar and its plain jar merge independently,
-with the child's version winning per key. The one exception: when the child profile is Forge
-or NeoForge, which expects both versions on the classpath, keep both there. See
+with the child's version winning per key. The one exception: Forge and NeoForge expect both
+versions on the classpath, so they keep both there.
+
+The caller passes that choice, it is not sniffed from the profile: `merge(parent, child,
+keep_both_libraries)` and `Mojang::resolve(v, keep_both_libraries)` take the flag, and the
+Forge and NeoForge loader callers pass `true`. `Mojang::resolve_auto(v)` guesses the flag from
+the child id containing `forge` and is what the vanilla install path uses. See
 `docs/research/2026-09-06-mojang-and-modloader-apis.md` section 6.
 
 ## Natives

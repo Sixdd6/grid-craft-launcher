@@ -75,8 +75,13 @@ pub struct InstanceJvm {
     pub extra_args: Vec<String>,
 }
 
+/// The default for [`ContentEntry::enabled`]: an entry with no `enabled` key is enabled.
+fn default_true() -> bool {
+    true
+}
+
 /// One installed file: a mod, pack, shader, or world.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(default)]
 pub struct ContentEntry {
     /// Where the file came from: `modrinth`, `curseforge`, or `file`.
@@ -92,7 +97,23 @@ pub struct ContentEntry {
     /// What kind of content this is.
     pub kind: ContentKind,
     /// Whether the file is enabled. Disabled files are renamed with a `.disabled` suffix.
+    /// Absent in `instance.toml` means enabled.
+    #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+impl Default for ContentEntry {
+    fn default() -> Self {
+        ContentEntry {
+            source: String::new(),
+            project_id: String::new(),
+            version_id: String::new(),
+            file_name: String::new(),
+            sha1: String::new(),
+            kind: ContentKind::default(),
+            enabled: true,
+        }
+    }
 }
 
 /// Kind of installed content, which decides the target folder.
@@ -134,6 +155,24 @@ mod tests {
         };
         let toml = toml::to_string(&entry).expect("serialize");
         assert!(toml.contains("kind = \"resourcepack\""), "{toml}");
+    }
+
+    #[test]
+    fn an_entry_without_an_enabled_key_is_enabled() {
+        let entry: ContentEntry = toml::from_str(
+            "source = \"modrinth\"\nproject_id = \"p\"\nversion_id = \"v\"\n\
+             file_name = \"sodium.jar\"\nsha1 = \"abc\"\nkind = \"mod\"\n",
+        )
+        .expect("parse");
+        assert!(entry.enabled);
+        assert!(ContentEntry::default().enabled);
+    }
+
+    #[test]
+    fn an_explicit_enabled_false_is_kept() {
+        let entry: ContentEntry =
+            toml::from_str("file_name = \"x.jar\"\nenabled = false\n").expect("parse");
+        assert!(!entry.enabled);
     }
 
     #[test]

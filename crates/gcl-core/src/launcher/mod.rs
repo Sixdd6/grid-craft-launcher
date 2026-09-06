@@ -170,17 +170,36 @@ impl Launcher {
     /// Returns a Java runtime of the given major version, installing Mojang's if none is
     /// present. Blocks.
     pub fn ensure_java(&self, major: u32) -> Result<JavaInstall, crate::Error> {
+        self.ensure_java_component(major, None)
+    }
+
+    /// Returns a Java runtime for an install plan, installing Mojang's if none is present.
+    ///
+    /// It asks for the runtime component the version JSON names, and only guesses from the
+    /// major version when the version JSON names none. Blocks.
+    pub fn ensure_java_for(&self, plan: &InstallPlan) -> Result<JavaInstall, crate::Error> {
+        self.ensure_java_component(plan.java_major, plan.java_component.as_deref())
+    }
+
+    /// Shared body of [`Launcher::ensure_java`] and [`Launcher::ensure_java_for`].
+    fn ensure_java_component(
+        &self,
+        major: u32,
+        component: Option<&str>,
+    ) -> Result<JavaInstall, crate::Error> {
         let root = self.root.clone();
         let http = self.http.clone();
         let ctx = self.download_ctx();
+        let component = component
+            .map(str::to_string)
+            .unwrap_or_else(|| component_for_major(major).to_string());
         Ok(self.block_on(async move {
             let found = detect_all(&root).await;
             if let Some(install) = pick(&found, major) {
                 return Ok(install.clone());
             }
-            let component = component_for_major(major);
             tracing::info!(major, component, "no local java found, installing one");
-            install_runtime(&http, &ctx, RUNTIME_MANIFEST, component).await
+            install_runtime(&http, &ctx, RUNTIME_MANIFEST, &component).await
         })?)
     }
 }

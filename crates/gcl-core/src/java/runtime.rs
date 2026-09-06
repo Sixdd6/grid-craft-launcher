@@ -169,22 +169,12 @@ fn major_for_component(component: &str) -> u32 {
 }
 
 /// Joins a manifest path onto the runtime directory, refusing anything that escapes it.
+///
+/// Thin wrapper over [`crate::paths::safe_join`] that reports the failure as a java error.
 fn safe_join(base: &Path, rel: &str) -> Result<PathBuf, Error> {
-    let escape = || Error::UnsafePath {
+    crate::paths::safe_join(base, rel).map_err(|_| Error::UnsafePath {
         path: rel.to_string(),
-    };
-    let mut out = base.to_path_buf();
-    for component in Path::new(rel).components() {
-        match component {
-            Component::Normal(part) => out.push(part),
-            Component::CurDir => {}
-            _ => return Err(escape()),
-        }
-    }
-    if !out.starts_with(base) {
-        return Err(escape());
-    }
-    Ok(out)
+    })
 }
 
 /// Checks that a link target, resolved against the link's own directory, stays inside `base`.

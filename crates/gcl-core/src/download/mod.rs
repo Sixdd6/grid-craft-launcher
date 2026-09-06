@@ -58,6 +58,9 @@ pub enum Error {
         /// The underlying I/O error.
         source: std::io::Error,
     },
+    /// A path in the app root layout could not be built.
+    #[error(transparent)]
+    Paths(#[from] crate::paths::Error),
 }
 
 /// One file to fetch: where from, how to verify it, and where it belongs.
@@ -96,15 +99,15 @@ pub async fn download_one(ctx: &DownloadCtx<'_>, spec: &DownloadSpec) -> Result<
     if dest_is_current(spec).await? {
         return Ok(spec.dest.clone());
     }
-    if let Some(sha1) = spec.sha1.as_deref() {
-        let object = ctx.root.object_path(sha1);
-        if object.is_file() {
-            link_or_copy(&object, &spec.dest).map_err(|source| Error::Io {
-                path: spec.dest.clone(),
-                source,
-            })?;
-            return Ok(spec.dest.clone());
-        }
+    if let Some(sha1) = spec.sha1.as_deref()
+        && let Ok(object) = ctx.root.object_path(sha1)
+        && object.is_file()
+    {
+        link_or_copy(&object, &spec.dest).map_err(|source| Error::Io {
+            path: spec.dest.clone(),
+            source,
+        })?;
+        return Ok(spec.dest.clone());
     }
 
     let task = TaskHandle::start(ctx.sink, spec.label.clone(), spec.size);
@@ -146,7 +149,7 @@ async fn fetch_into_cache(
 
         match verify(spec, &result) {
             Ok(()) => {
-                let object = ctx.root.object_path(&result.sha1);
+                let object = ctx.root.object_path(&result.sha1)?;
                 store_object(&part, &object).await?;
                 link_or_copy(&object, &spec.dest).map_err(|source| Error::Io {
                     path: spec.dest.clone(),
@@ -175,9 +178,9 @@ async fn fetch_into_cache(
 /// Both live inside `cache/`, so [`cleanup_partials`] sweeps whatever is abandoned.
 fn staging_path(root: &Root, spec: &DownloadSpec) -> PathBuf {
     let id = uuid::Uuid::new_v4();
-    match spec.sha1.as_deref() {
-        Some(sha1) => {
-            let mut name = root.object_path(sha1).into_os_string();
+    match spec.sha1.as_deref().and_then(|s| root.object_path(s).ok()) {
+        Some(object) => {
+            let mut name = object.into_os_string();
             name.push(format!(".{id}.part"));
             PathBuf::from(name)
         }
@@ -439,7 +442,7 @@ mod tests {
 
         assert_eq!(got, first);
         assert_eq!(std::fs::read(&first).expect("dest"), payload);
-        let object = f.root.object_path(&sha1);
+        let object = f.root.object_path(&sha1).expect("object path");
         assert!(object.is_file(), "{object:?} missing");
         assert_eq!(std::fs::read(&object).expect("object"), payload);
 
@@ -571,7 +574,12 @@ mod tests {
         .expect("size-only download");
 
         assert_eq!(std::fs::read(&dest).expect("dest"), payload);
-        assert!(f.root.object_path(&sha1_of(&payload)).is_file());
+        assert!(
+            f.root
+                .object_path(&sha1_of(&payload))
+                .expect("object path")
+                .is_file()
+        );
         assert_eq!(count_parts(&f.root), 0);
     }
 
@@ -799,7 +807,7 @@ mod tests {
             payload
         );
         assert_eq!(
-            std::fs::read(f.root.object_path(&sha1)).expect("object"),
+            std::fs::read(f.root.object_path(&sha1).expect("object path")).expect("object"),
             payload
         );
         assert_eq!(count_parts(&f.root), 0);
@@ -850,11 +858,19 @@ mod tests {
         );
         assert_ne!(sized, staging_path(&root, &spec));
 
-        spec.sha1 = Some("abcdef0123".into());
+        spec.sha1 = Some("abcdef0123456789abcdef0123456789abcdef01".into());
         let hashed = staging_path(&root, &spec);
         assert!(hashed.starts_with(root.objects_dir()));
         assert_ne!(hashed, staging_path(&root, &spec));
         assert!(hashed.extension().is_some_and(|e| e == "part"));
+
+        // A sha1 that is not a hash cannot steer the staging path out of the cache.
+        spec.sha1 = Some("../../escape".into());
+        let bogus = staging_path(&root, &spec);
+        assert!(
+            bogus.starts_with(root.objects_dir().join("tmp")),
+            "{bogus:?} escaped the object store"
+        );
     }
 
     #[test]
@@ -865,7 +881,7 @@ mod tests {
         let keep = root.libraries_dir().join("keep.jar");
         std::fs::write(&keep, b"keep").expect("write");
         std::fs::write(root.libraries_dir().join("a.jar.part"), b"x").expect("write");
-        let nested = root.object_path("ab12");
+        let nested = root.object_path(&"ab12".repeat(10)).expect("object path");
         std::fs::create_dir_all(nested.parent().expect("parent")).expect("mkdir");
         std::fs::write(nested.with_extension("part"), b"y").expect("write");
 

@@ -2,7 +2,7 @@
 //!
 //! See `ARCHITECTURE.md` "App root layout" and the `instance-model` skill for the schema.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Errors resolving or creating the app root layout.
 #[derive(Debug, thiserror::Error)]
@@ -18,6 +18,12 @@ pub enum Error {
         /// The underlying I/O error.
         source: std::io::Error,
     },
+    /// A remote source named a relative path that would escape its base directory.
+    #[error("unsafe path: {0}")]
+    UnsafePath(String),
+    /// A string used as a content hash is not 40 lowercase hex characters.
+    #[error("not a sha1 hash: {0}")]
+    BadHash(String),
 }
 
 /// The launcher's app root: base directory for config, instances, cache, and logs.
@@ -118,9 +124,14 @@ impl Root {
     }
 
     /// Path to a content-addressed object, sharded by the first two hex chars of its sha1.
-    pub fn object_path(&self, sha1: &str) -> PathBuf {
-        let shard = if sha1.len() >= 2 { &sha1[..2] } else { sha1 };
-        self.objects_dir().join(shard).join(sha1)
+    ///
+    /// Rejects anything that is not 40 lowercase hex characters, so a hash taken from remote
+    /// JSON can never steer the write out of `cache/objects/`.
+    pub fn object_path(&self, sha1: &str) -> Result<PathBuf, Error> {
+        if !is_sha1_hex(sha1) {
+            return Err(Error::BadHash(sha1.to_string()));
+        }
+        Ok(self.objects_dir().join(&sha1[..2]).join(sha1))
     }
 
     /// Directory holding launcher and game log files.
@@ -128,8 +139,11 @@ impl Root {
         self.0.join("logs")
     }
 
-    /// Creates every directory in the layout (except per-instance directories, which are
-    /// created on instance creation).
+    /// Creates every directory in the layout.
+    ///
+    /// It excludes the per-instance directories under `instances/`, created by
+    /// `instances::create`, and the per-version natives directories under `cache/natives/`,
+    /// created when an install extracts natives.
     pub fn ensure_layout(&self) -> Result<(), Error> {
         for dir in [
             self.0.clone(),
@@ -174,6 +188,37 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     let tmp = path.with_file_name(format!("{name}.{}.{seq}.tmp", std::process::id()));
     std::fs::write(&tmp, bytes).map_err(io(&tmp))?;
     std::fs::rename(&tmp, path).map_err(io(path))
+}
+
+/// True when `s` is exactly 40 lowercase hex characters, the shape of a sha1 we store by.
+pub fn is_sha1_hex(s: &str) -> bool {
+    s.len() == 40
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// Joins a source-supplied relative path onto `base`, refusing anything that escapes it.
+///
+/// Rejects absolute paths, roots and prefixes, `..`, and an empty result. `.` components are
+/// dropped. Every path a remote JSON file names goes through here.
+pub fn safe_join(base: &Path, rel: &str) -> Result<PathBuf, Error> {
+    let escape = || Error::UnsafePath(rel.to_string());
+    let mut out = base.to_path_buf();
+    let mut pushed = 0usize;
+    for component in Path::new(rel).components() {
+        match component {
+            Component::Normal(part) => {
+                out.push(part);
+                pushed += 1;
+            }
+            Component::CurDir => {}
+            _ => return Err(escape()),
+        }
+    }
+    if pushed == 0 || !out.starts_with(base) {
+        return Err(escape());
+    }
+    Ok(out)
 }
 
 /// Turns an arbitrary name into a filesystem- and URL-safe slug.
@@ -245,8 +290,64 @@ mod tests {
     #[test]
     fn object_path_shards_by_first_two_chars() {
         let root = Root::from_path("/root");
-        let p = root.object_path("abcdef0123");
-        assert!(p.ends_with("objects/ab/abcdef0123"));
+        let sha1 = "abcdef0123456789abcdef0123456789abcdef01";
+        let p = root.object_path(sha1).expect("valid sha1");
+        assert!(p.ends_with(format!("objects/ab/{sha1}")));
+    }
+
+    #[test]
+    fn object_path_rejects_anything_that_is_not_a_sha1() {
+        let root = Root::from_path("/root");
+        for bad in [
+            "../x",
+            "",
+            "ab12",
+            "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+            "../../etc/passwd/aaaaaaaaaaaaaaaaaaaaaaaa",
+        ] {
+            assert!(
+                matches!(root.object_path(bad), Err(Error::BadHash(_))),
+                "{bad} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn safe_join_keeps_relative_paths_inside_the_base() {
+        let base = Path::new("/base");
+        assert_eq!(
+            safe_join(base, "com/example/a.jar").expect("plain path"),
+            Path::new("/base/com/example/a.jar")
+        );
+        assert_eq!(
+            safe_join(base, "./a.jar").expect("cur dir"),
+            Path::new("/base/a.jar")
+        );
+    }
+
+    #[test]
+    fn safe_join_refuses_paths_that_escape() {
+        let base = Path::new("/base");
+        for bad in [
+            "../escape.jar",
+            "a/../../escape.jar",
+            "/etc/passwd",
+            "",
+            ".",
+        ] {
+            assert!(
+                matches!(safe_join(base, bad), Err(Error::UnsafePath(_))),
+                "{bad:?} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn is_sha1_hex_wants_forty_lowercase_hex_chars() {
+        assert!(is_sha1_hex(&"a0f".repeat(14)[..40]));
+        assert!(!is_sha1_hex(&"A".repeat(40)));
+        assert!(!is_sha1_hex(&"a".repeat(39)));
+        assert!(!is_sha1_hex(&"g".repeat(40)));
     }
 
     #[test]

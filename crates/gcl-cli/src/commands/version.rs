@@ -42,6 +42,10 @@ struct InstallRow {
     libraries: usize,
     asset_index: String,
     java_major: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    java_component: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    main_class: Option<String>,
     files: usize,
 }
 
@@ -88,12 +92,17 @@ fn install(launcher: &Launcher, format: Format, id: &str) -> Result<()> {
         libraries: plan.classpath.len(),
         asset_index: plan.asset_index_id,
         java_major: plan.java_major,
+        java_component: plan.java_component,
+        main_class: plan.main_class,
         files: plan.specs.len(),
     };
     match format {
         Format::Json => print_json(&row),
         Format::Text => {
             println!("installed {id}");
+            if let Some(main_class) = &row.main_class {
+                println!("main class {main_class}");
+            }
             Ok(())
         }
     }

@@ -46,6 +46,17 @@ pub fn object_path(root: &Root, hash: &str) -> std::path::PathBuf {
         .join(hash)
 }
 
+/// Errors laying out a legacy asset tree.
+#[derive(Debug, thiserror::Error)]
+pub enum LegacyError {
+    /// An asset key in the index would escape the target directory.
+    #[error(transparent)]
+    Path(#[from] crate::paths::Error),
+    /// Linking or copying an object into place failed.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
 /// Builds one [`DownloadSpec`] per asset object, fetching from `resources_base`.
 pub fn asset_specs(index: &AssetIndex, root: &Root, resources_base: &str) -> Vec<DownloadSpec> {
     let base = resources_base.trim_end_matches('/');
@@ -69,7 +80,7 @@ pub fn materialize_legacy(
     root: &Root,
     index_id: &str,
     game_dir: &Path,
-) -> std::io::Result<()> {
+) -> Result<(), LegacyError> {
     if !index.virtual_ && !index.map_to_resources {
         return Ok(());
     }
@@ -79,11 +90,14 @@ pub fn materialize_legacy(
         root.assets_dir().join("virtual").join(index_id)
     };
     for (path, object) in &index.objects {
+        // The key comes from Mojang's index; route it through `safe_join` so a `../` key
+        // cannot write outside the virtual tree or the game directory.
+        let dest = crate::paths::safe_join(&target, path)?;
         let src = object_path(root, &object.hash);
         if !src.is_file() {
             continue;
         }
-        link_or_copy(&src, &target.join(path))?;
+        link_or_copy(&src, &dest)?;
     }
     Ok(())
 }
@@ -192,6 +206,30 @@ mod tests {
 
         materialize_legacy(&index, &root, "pre-1.6", &game).expect("materializes");
         assert!(game.join("resources/sound/step.ogg").is_file());
+    }
+
+    #[test]
+    fn an_asset_key_that_escapes_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        let hash = "0123456789abcdef0123456789abcdef01234567";
+        let mut index = AssetIndex {
+            objects: BTreeMap::new(),
+            virtual_: true,
+            map_to_resources: false,
+        };
+        index.objects.insert(
+            "../../escape.txt".to_string(),
+            AssetObject {
+                hash: hash.to_string(),
+                size: 1,
+            },
+        );
+        assert!(matches!(
+            materialize_legacy(&index, &root, "legacy", dir.path()),
+            Err(LegacyError::Path(crate::paths::Error::UnsafePath(_)))
+        ));
+        assert!(!dir.path().join("escape.txt").exists());
     }
 
     #[test]

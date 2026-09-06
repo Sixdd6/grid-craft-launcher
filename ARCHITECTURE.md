@@ -20,11 +20,11 @@ Add a row here when you add a module.
 | `http` | shared reqwest client, User-Agent, retry, rate-limit backoff | none |
 | `download` | content-addressed cache, parallel queue, hash checks, progress events | `http`, `paths`, `events` |
 | `mojang` | version manifest, version JSON, rules, argument templating, assets, `inheritsFrom` merge | `download`, `http`, `paths`, `events` |
-| `java` | detect runtimes, fetch Mojang runtimes, pick by major version | `download`, `http`, `paths` |
+| `java` | detect runtimes, fetch Mojang runtimes, pick by major version. The runtime component comes from the version JSON (`javaVersion.component`); `component_for_major` only guesses when the version JSON names none | `download`, `http`, `paths` |
 | `loaders` (planned, plan 2+) | `fabric`, `quilt`, `forge`, `neoforge` producing version JSONs | `download`, `mojang`, `java` |
 | `sources` (planned, plan 2+) | `Source` trait; `modrinth`, `curseforge` clients | `http`, `download` |
 | `modpacks` (planned, plan 2+) | import mrpack and CurseForge zip into a new instance | `sources`, `instances`, `loaders` |
-| `instances` | instance layout, `instance.toml`, content list, install into folders, `list` skips unparsable instances with a warning | `paths` |
+| `instances` | instance layout, `instance.toml`, content list (install into folders: plan 2), `list` skips unparsable instances with a warning | `paths` |
 | `settings` (planned, plan 2+) | `options.txt` preseed and keyed overrides | `instances` |
 | `auth` (planned, plan 2+) | Microsoft device-code chain, refresh, keyring, offline accounts | `http`, `config` |
 | `launch` (planned, plan 2+) | classpath, arguments, spawn, log streaming | `instances`, `mojang`, `loaders`, `java`, `auth`, `settings` |

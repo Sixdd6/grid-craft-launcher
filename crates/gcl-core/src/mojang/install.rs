@@ -13,7 +13,7 @@ use crate::mojang::version::{Artifact, Library, MavenCoord};
 pub const LIBRARIES_BASE: &str = "https://libraries.minecraft.net/";
 
 /// Everything an install needs, and everything a launch needs afterwards.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InstallPlan {
     /// Path of the client jar in the cache.
     pub client_jar: PathBuf,
@@ -29,6 +29,16 @@ pub struct InstallPlan {
     pub java_major: u32,
     /// Directory old-style natives are extracted into.
     pub natives_dir: PathBuf,
+    /// The merged version JSON the plan was built from. A launch reads arguments and
+    /// logging config straight off it.
+    pub resolved: VersionJson,
+    /// JVM entry point from the version JSON, when it names one.
+    pub main_class: Option<String>,
+    /// Mojang runtime component the version JSON asks for, when it names one.
+    pub java_component: Option<String>,
+    /// Asset directory name the game is launched with: `assets`, falling back to the asset
+    /// index id.
+    pub assets_id: Option<String>,
 }
 
 /// Builds the download plan for one resolved version. Does no I/O.
@@ -108,9 +118,13 @@ pub fn plan_install(
         classpath,
         natives,
         specs,
-        asset_index_id,
+        asset_index_id: asset_index_id.clone(),
         java_major: v.java_version.as_ref().map_or(8, |j| j.major_version),
         natives_dir: root.natives_dir(&v.id),
+        main_class: v.main_class.clone(),
+        java_component: v.java_version.as_ref().map(|j| j.component.clone()),
+        assets_id: v.assets.clone().or(Some(asset_index_id)),
+        resolved: v.clone(),
     })
 }
 
@@ -125,7 +139,7 @@ fn library_spec(
     let path = artifact
         .and_then(|a| a.path.clone())
         .unwrap_or_else(|| coord.path());
-    let dest = root.libraries_dir().join(&path);
+    let dest = crate::paths::safe_join(&root.libraries_dir(), &path)?;
     let url = match (artifact, base_override) {
         (Some(a), None) => a.url.clone(),
         (_, base) => join_url(base.or(lib.url.as_deref()).unwrap_or(LIBRARIES_BASE), &path),
@@ -170,7 +184,7 @@ fn natives_spec(
     let mut coord = MavenCoord::parse(&lib.name)?;
     coord.classifier = Some(classifier.clone());
     let path = artifact.path.clone().unwrap_or_else(|| coord.path());
-    let dest = root.libraries_dir().join(&path);
+    let dest = crate::paths::safe_join(&root.libraries_dir(), &path)?;
     let url = match base_override {
         None => artifact.url.clone(),
         Some(base) => join_url(base, &path),
@@ -223,7 +237,7 @@ pub async fn install_version_with(
     override_all_library_urls: Option<&str>,
     resources_base: &str,
 ) -> Result<InstallPlan, Error> {
-    let version = m.resolve(m.version(id).await?)?;
+    let version = m.resolve_auto(m.version(id).await?)?;
     let rules = RuleContext::current();
     let plan = plan_install(&version, dl.root, &rules, override_all_library_urls)?;
     download_all(dl, plan.specs.clone()).await?;
@@ -495,6 +509,110 @@ mod tests {
             spec.url,
             "http://mock/m2/com/example/thing/1.0/thing-1.0.jar"
         );
+    }
+
+    #[test]
+    fn a_plan_carries_what_a_launch_needs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        let v = parse(V1_20_1);
+        let plan = plan_install(&v, &root, &linux_ctx(), None).expect("plans");
+        assert_eq!(
+            plan.main_class.as_deref(),
+            Some("net.minecraft.client.main.Main")
+        );
+        assert_eq!(plan.java_component.as_deref(), Some("java-runtime-gamma"));
+        assert_eq!(plan.assets_id.as_deref(), Some("5"));
+        assert_eq!(plan.resolved, v);
+    }
+
+    #[test]
+    fn assets_id_falls_back_to_the_asset_index_id() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        let v = VersionJson {
+            assets: None,
+            ..synthetic("x")
+        };
+        let plan = plan_install(&v, &root, &linux_ctx(), None).expect("plans");
+        assert_eq!(plan.assets_id.as_deref(), Some("test"));
+        assert!(
+            plan.java_component.is_none(),
+            "synthetic has no javaVersion"
+        );
+    }
+
+    #[test]
+    fn a_library_path_that_escapes_the_cache_is_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        let v: VersionJson = serde_json::from_str(
+            r#"{
+                "id": "escape",
+                "downloads": {
+                    "client": {
+                        "sha1": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                        "size": 3,
+                        "url": "http://mock/client.jar"
+                    }
+                },
+                "assets": "test",
+                "libraries": [{
+                    "name": "com.example:thing:1.0",
+                    "downloads": {
+                        "artifact": {
+                            "path": "../escape.jar",
+                            "sha1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                            "size": 1,
+                            "url": "http://mock/escape.jar"
+                        }
+                    }
+                }]
+            }"#,
+        )
+        .expect("parses");
+        assert!(matches!(
+            plan_install(&v, &root, &linux_ctx(), None),
+            Err(Error::Paths(crate::paths::Error::UnsafePath(_)))
+        ));
+    }
+
+    #[test]
+    fn a_natives_classifier_path_that_escapes_is_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        let v: VersionJson = serde_json::from_str(
+            r#"{
+                "id": "escape-natives",
+                "downloads": {
+                    "client": {
+                        "sha1": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                        "size": 3,
+                        "url": "http://mock/client.jar"
+                    }
+                },
+                "assets": "test",
+                "libraries": [{
+                    "name": "com.example:thing:1.0",
+                    "natives": { "linux": "natives-linux" },
+                    "downloads": {
+                        "classifiers": {
+                            "natives-linux": {
+                                "path": "../../escape-natives.jar",
+                                "sha1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                                "size": 1,
+                                "url": "http://mock/n.jar"
+                            }
+                        }
+                    }
+                }]
+            }"#,
+        )
+        .expect("parses");
+        assert!(matches!(
+            plan_install(&v, &root, &linux_ctx(), None),
+            Err(Error::Paths(crate::paths::Error::UnsafePath(_)))
+        ));
     }
 
     #[test]

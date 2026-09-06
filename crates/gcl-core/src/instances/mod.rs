@@ -14,6 +14,9 @@ use model::{InstanceConfig, Loader};
 /// File name of the per-instance config inside an instance directory.
 const CONFIG_FILE: &str = "instance.toml";
 
+/// Directories created inside `.minecraft/` for every new instance. See SPEC R2.3.
+const GAME_SUBDIRS: [&str; 5] = ["mods", "resourcepacks", "shaderpacks", "saves", "logs"];
+
 /// Errors reading, writing, or resolving instances.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -126,6 +129,9 @@ impl Instances {
             config,
         };
         create_dir(&instance.game_dir())?;
+        for sub in GAME_SUBDIRS {
+            create_dir(&instance.game_dir().join(sub))?;
+        }
         instance.save()?;
         if !game_defaults.is_empty() {
             let mut text = String::new();
@@ -182,6 +188,7 @@ impl Instances {
 
     /// Loads one instance by slug.
     pub fn get(&self, slug: &str) -> Result<Instance, Error> {
+        validate_slug(slug)?;
         let dir = self.root.instance_dir(slug);
         if !dir.join(CONFIG_FILE).is_file() {
             return Err(Error::NotFound(slug.to_string()));
@@ -191,6 +198,7 @@ impl Instances {
 
     /// Changes an instance's display name. The slug and directory stay as they are.
     pub fn rename(&self, slug: &str, new_name: &str) -> Result<Instance, Error> {
+        validate_slug(slug)?;
         let mut instance = self.get(slug)?;
         instance.config.name = new_name.to_string();
         instance.save()?;
@@ -199,6 +207,7 @@ impl Instances {
 
     /// Deletes an instance directory and everything in it.
     pub fn delete(&self, slug: &str) -> Result<(), Error> {
+        validate_slug(slug)?;
         let dir = self.root.instance_dir(slug);
         if !dir.is_dir() {
             return Err(Error::NotFound(slug.to_string()));
@@ -223,6 +232,24 @@ impl Instances {
             dir,
             config,
         })
+    }
+}
+
+/// Rejects a slug that is not a plain directory name this module could have created.
+///
+/// `get`, `rename`, and `delete` take the slug from the user, so a value like `../../x` would
+/// otherwise name a directory outside the app root. A valid slug is non-empty, is already its
+/// own [`slugify`] output, and holds no path separator or `..`.
+fn validate_slug(slug: &str) -> Result<(), Error> {
+    let ok = !slug.is_empty()
+        && slug == slugify(slug)
+        && !slug.contains('/')
+        && !slug.contains('\\')
+        && !slug.contains("..");
+    if ok {
+        Ok(())
+    } else {
+        Err(Error::NotFound(slug.to_string()))
     }
 }
 
@@ -280,6 +307,10 @@ mod tests {
             .create("My Pack", "1.20.1", Loader::Fabric, None, &BTreeMap::new())
             .expect("create");
         assert_eq!(created.slug, "my-pack");
+        for sub in GAME_SUBDIRS {
+            let path = created.game_dir().join(sub);
+            assert!(path.is_dir(), "{path:?} was not created");
+        }
         let text = std::fs::read_to_string(created.config_path()).expect("read");
         let parsed: model::InstanceConfig = toml::from_str(&text).expect("parse");
         assert_eq!(parsed, created.config);
@@ -426,6 +457,42 @@ mod tests {
     fn delete_of_a_missing_slug_is_not_found() {
         let (_dir, instances) = fixture();
         assert!(matches!(instances.delete("nope"), Err(Error::NotFound(_))));
+    }
+
+    #[test]
+    fn delete_refuses_a_slug_that_escapes_the_instances_directory() {
+        let (dir, instances) = fixture();
+        let sibling = dir.path().join("keep-me");
+        std::fs::create_dir_all(&sibling).expect("sibling");
+        std::fs::write(sibling.join("data.txt"), b"precious").expect("write");
+
+        // `instances/../keep-me` is the sibling directory, one level above the instances root.
+        assert!(matches!(
+            instances.delete("../keep-me"),
+            Err(Error::NotFound(slug)) if slug == "../keep-me"
+        ));
+        assert!(sibling.join("data.txt").is_file(), "the sibling survived");
+        assert!(matches!(instances.delete("../x"), Err(Error::NotFound(_))));
+    }
+
+    #[test]
+    fn get_refuses_a_slug_with_a_path_separator() {
+        let (_dir, instances) = fixture();
+        for bad in ["a/b", "a\\b", "..", "", "../x", "Upper"] {
+            assert!(
+                matches!(instances.get(bad), Err(Error::NotFound(_))),
+                "{bad:?} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn rename_refuses_a_slug_that_escapes() {
+        let (_dir, instances) = fixture();
+        assert!(matches!(
+            instances.rename("../x", "New"),
+            Err(Error::NotFound(_))
+        ));
     }
 
     #[test]

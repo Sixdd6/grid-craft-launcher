@@ -41,13 +41,14 @@ checked 2026-09-06:
 | Need | Crate |
 |---|---|
 | async | tokio 1.53, tokio-util 0.7 (`CancellationToken`) |
-| HTTP | reqwest 0.13 with `rustls-tls`, `stream`, `json`, `gzip`; `default-features = false` |
+| HTTP | reqwest 0.13 with `rustls`, `stream`, `json`, `gzip`; `default-features = false` (0.13 renamed `rustls-tls` to `rustls`) |
 | hashing | sha1 0.11, sha2 0.11, md-5 0.11, murmur2 0.1 |
 | zip | zip 8 (latest stable, not the 9.0 pre-release) |
 | config | serde 1, serde_json 1, toml 1.1 |
 | paths | directories 6 |
 | secrets | keyring 4 (check feature flags in docs.rs before adding; Linux needs a Secret Service backend) |
 | ids | uuid 1.26 with `v3`, `v4`, `serde` |
+| RFC 3339 timestamps | time 0.3 with `formatting`, `macros`; add `parsing` to read timestamps back |
 | errors | thiserror 2, anyhow 1 |
 | logs | tracing 0.1, tracing-subscriber 0.3 (`env-filter`), tracing-appender 0.2 |
 | CLI | clap 4.6 derive |

@@ -18,7 +18,9 @@ use crate::http::HttpClient;
 use crate::paths::Root;
 
 pub use args::{ArgContext, default_legacy_jvm_args, expand_arguments, expand_legacy};
-pub use assets::{AssetIndex, AssetObject, RESOURCES_BASE, asset_specs, materialize_legacy};
+pub use assets::{
+    AssetIndex, AssetObject, LegacyError, RESOURCES_BASE, asset_specs, materialize_legacy,
+};
 pub use install::{InstallPlan, install_version, install_version_with, plan_install};
 pub use manifest::{Latest, ManifestEntry, VersionManifest, VersionType};
 pub use rules::{Action, OsRule, Rule, RuleContext, rules_allow};
@@ -83,6 +85,9 @@ pub enum Error {
         /// The underlying zip error.
         source: zip::result::ZipError,
     },
+    /// A path in the app root layout could not be built from remote metadata.
+    #[error(transparent)]
+    Paths(#[from] crate::paths::Error),
     /// A downloaded version JSON did not match the sha1 the manifest published.
     #[error("version {id}: sha1 mismatch, expected {expected}, got {actual}")]
     Sha1Mismatch {
@@ -255,7 +260,10 @@ impl Mojang {
     }
 
     /// Follows `inheritsFrom` through the cache and merges the chain into one version.
-    pub fn resolve(&self, v: VersionJson) -> Result<VersionJson, Error> {
+    ///
+    /// `keep_both_libraries` is passed to every [`merge`] in the chain. Forge and NeoForge
+    /// callers pass `true`; see [`Mojang::resolve_auto`] for the id-sniffing shortcut.
+    pub fn resolve(&self, v: VersionJson, keep_both_libraries: bool) -> Result<VersionJson, Error> {
         let mut seen = HashSet::from([v.id.clone()]);
         let mut ancestors: Vec<VersionJson> = Vec::new();
         let mut next = v.inherits_from.clone();
@@ -274,29 +282,38 @@ impl Mojang {
         for ancestor in ancestors.into_iter().rev() {
             acc = Some(match acc {
                 None => ancestor,
-                Some(parent) => merge(parent, ancestor),
+                Some(parent) => merge(parent, ancestor, keep_both_libraries),
             });
         }
         Ok(match acc {
             None => v,
-            Some(parent) => merge(parent, v),
+            Some(parent) => merge(parent, v, keep_both_libraries),
         })
+    }
+
+    /// [`Mojang::resolve`] with the flag guessed from the child id, as vanilla installs do.
+    ///
+    /// A loader module that knows what it is resolving should call [`Mojang::resolve`] with an
+    /// explicit flag instead.
+    pub fn resolve_auto(&self, v: VersionJson) -> Result<VersionJson, Error> {
+        let keep_both = v.id.to_lowercase().contains("forge");
+        self.resolve(v, keep_both)
     }
 }
 
 /// Merges a child profile over its parent version. See the `mojang-meta` skill for the rules.
-pub fn merge(parent: VersionJson, child: VersionJson) -> VersionJson {
-    let keep_both = {
-        let id = child.id.to_lowercase();
-        id.contains("forge")
-    };
+///
+/// `keep_both_libraries` keeps the parent's and the child's version of a library on the
+/// classpath instead of letting the child's win per `group:artifact:classifier`. Forge and
+/// NeoForge profiles need it; every other caller passes `false`.
+pub fn merge(parent: VersionJson, child: VersionJson, keep_both_libraries: bool) -> VersionJson {
     VersionJson {
         id: child.id,
         inherits_from: None,
         main_class: child.main_class.or(parent.main_class),
         arguments: merge_arguments(parent.arguments, child.arguments),
         minecraft_arguments: child.minecraft_arguments.or(parent.minecraft_arguments),
-        libraries: merge_libraries(parent.libraries, child.libraries, keep_both),
+        libraries: merge_libraries(parent.libraries, child.libraries, keep_both_libraries),
         downloads: child.downloads.or(parent.downloads),
         asset_index: child.asset_index.or(parent.asset_index),
         assets: child.assets.or(parent.assets),
@@ -752,7 +769,7 @@ mod merge_tests {
             .as_ref()
             .map(|a| a.game.len())
             .expect("parent has arguments");
-        let merged = merge(p, child("fabric-loader-0.15.11-1.20.1"));
+        let merged = merge(p, child("fabric-loader-0.15.11-1.20.1"), false);
         assert_eq!(versions_of(&merged, "com.google.code.gson:gson"), ["2.11"]);
         assert_eq!(
             merged.main_class.as_deref(),
@@ -769,7 +786,7 @@ mod merge_tests {
     fn child_inherits_parent_downloads_and_assets() {
         let p = parent();
         let assets = p.assets.clone();
-        let merged = merge(p, child("fabric-loader-0.15.11-1.20.1"));
+        let merged = merge(p, child("fabric-loader-0.15.11-1.20.1"), false);
         assert_eq!(merged.assets, assets);
         assert!(merged.downloads.is_some());
         assert!(merged.asset_index.is_some());
@@ -805,7 +822,7 @@ mod merge_tests {
             extract: None,
         })
         .collect();
-        let merged = merge(parent(), c);
+        let merged = merge(parent(), c, false);
         let entries = entries_of(&merged, "org.lwjgl:lwjgl-glfw");
 
         let plain: Vec<_> = entries.iter().filter(|(cl, _)| cl.is_empty()).collect();
@@ -834,10 +851,49 @@ mod merge_tests {
 
     #[test]
     fn a_forge_child_keeps_both_library_versions() {
-        let merged = merge(parent(), child("1.20.1-forge-47.2.0"));
+        let merged = merge(parent(), child("1.20.1-forge-47.2.0"), true);
         assert_eq!(
             versions_of(&merged, "com.google.code.gson:gson"),
             ["2.10", "2.11"]
+        );
+    }
+
+    #[test]
+    fn the_flag_decides_the_library_merge_not_the_child_id() {
+        let merged = merge(parent(), child("1.20.1-forge-47.2.0"), false);
+        assert_eq!(
+            versions_of(&merged, "com.google.code.gson:gson"),
+            ["2.11"],
+            "a forge id with the flag off still merges per key"
+        );
+        let merged = merge(parent(), child("fabric-loader-0.15.11-1.20.1"), true);
+        assert_eq!(
+            versions_of(&merged, "com.google.code.gson:gson"),
+            ["2.10", "2.11"],
+            "a non-forge id with the flag on keeps both"
+        );
+    }
+
+    #[test]
+    fn resolve_auto_keeps_both_libraries_only_for_a_forge_child() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mojang = mojang_with(dir.path());
+        write_atomic(&mojang.version_file("1.20.1"), V1_20_1.as_bytes()).expect("seed parent");
+
+        let mut forge = child("1.20.1-forge-47.2.0");
+        forge.inherits_from = Some("1.20.1".to_string());
+        let resolved = mojang.resolve_auto(forge).expect("resolves");
+        assert!(
+            versions_of(&resolved, "com.google.code.gson:gson").len() > 1,
+            "a forge id keeps both"
+        );
+
+        let resolved = mojang
+            .resolve_auto(child("fabric-loader-0.15.11-1.20.1"))
+            .expect("resolves");
+        assert_eq!(
+            versions_of(&resolved, "com.google.code.gson:gson"),
+            ["2.11"]
         );
     }
 
@@ -847,12 +903,15 @@ mod merge_tests {
         c.minecraft_arguments = Some("--child".to_string());
         let mut p = parent();
         p.minecraft_arguments = Some("--parent".to_string());
-        assert_eq!(merge(p, c).minecraft_arguments.as_deref(), Some("--child"));
+        assert_eq!(
+            merge(p, c, false).minecraft_arguments.as_deref(),
+            Some("--child")
+        );
 
         let mut p = parent();
         p.minecraft_arguments = Some("--parent".to_string());
         assert_eq!(
-            merge(p, child("legacy-child"))
+            merge(p, child("legacy-child"), false)
                 .minecraft_arguments
                 .as_deref(),
             Some("--parent")
@@ -872,7 +931,7 @@ mod merge_tests {
         let mojang = mojang_with(dir.path());
         write_atomic(&mojang.version_file("1.20.1"), V1_20_1.as_bytes()).expect("seed parent");
         let resolved = mojang
-            .resolve(child("fabric-loader-0.15.11-1.20.1"))
+            .resolve(child("fabric-loader-0.15.11-1.20.1"), false)
             .expect("resolves");
         assert_eq!(resolved.id, "fabric-loader-0.15.11-1.20.1");
         assert_eq!(
@@ -887,7 +946,7 @@ mod merge_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let v = parent();
         let resolved = mojang_with(dir.path())
-            .resolve(v.clone())
+            .resolve(v.clone(), false)
             .expect("resolves");
         assert_eq!(resolved, v);
     }
@@ -900,14 +959,17 @@ mod merge_tests {
         v.inherits_from = Some(v.id.clone());
         let body = serde_json::to_string(&v).expect("serializes");
         write_atomic(&mojang.version_file(&v.id), body.as_bytes()).expect("seed");
-        assert!(matches!(mojang.resolve(v), Err(Error::InheritanceLoop(_))));
+        assert!(matches!(
+            mojang.resolve(v, false),
+            Err(Error::InheritanceLoop(_))
+        ));
     }
 
     #[test]
     fn resolve_reports_a_parent_that_is_not_cached() {
         let dir = tempfile::tempdir().expect("tempdir");
         assert!(matches!(
-            mojang_with(dir.path()).resolve(child("fabric-loader-0.15.11-1.20.1")),
+            mojang_with(dir.path()).resolve(child("fabric-loader-0.15.11-1.20.1"), false),
             Err(Error::UnknownVersion(_))
         ));
     }

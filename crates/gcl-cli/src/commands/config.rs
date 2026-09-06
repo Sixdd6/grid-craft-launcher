@@ -102,9 +102,24 @@ pub fn run(launcher: &mut Launcher, format: Format, command: ConfigCommand) -> R
             }
         }
         ConfigCommand::SetRoot { path } => {
-            launcher.config_mut().root = Some(path.clone());
+            let old_root = launcher.root().path().display().to_string();
+            let new_root = path.display().to_string();
+            launcher.config_mut().root = Some(path);
             launcher.save_config()?;
-            report(format, "root", &path.display().to_string())
+            match format {
+                Format::Json => print_json(&serde_json::json!({
+                    "root": new_root,
+                    "previous_root": old_root,
+                })),
+                Format::Text => {
+                    println!("root = {new_root}");
+                    println!(
+                        "existing data stays at {old_root}; move it by hand if you want it in \
+                         the new root"
+                    );
+                    Ok(())
+                }
+            }
         }
         ConfigCommand::SetJvm { min, max } => {
             if min.is_none() && max.is_none() {
@@ -131,17 +146,6 @@ pub fn run(launcher: &mut Launcher, format: Format, command: ConfigCommand) -> R
                     Ok(())
                 }
             }
-        }
-    }
-}
-
-/// Prints one changed setting.
-fn report(format: Format, key: &str, value: &str) -> Result<()> {
-    match format {
-        Format::Json => print_json(&serde_json::json!({ key: value })),
-        Format::Text => {
-            println!("{key} = {value}");
-            Ok(())
         }
     }
 }
