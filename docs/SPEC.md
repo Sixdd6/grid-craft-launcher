@@ -53,10 +53,10 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 ## R7 Content sources
 
 - R7.1 Search Modrinth and CurseForge by text, content type, Minecraft version, and loader.
-- R7.2 Content types: mods, modpacks, resource packs, shaders, data packs, worlds. Each source exposes the types it supports.
+- R7.2 Content types: mods, modpacks, resource packs, shaders, data packs, worlds. Each source exposes the types it supports. Verified: Modrinth supports mod, resourcepack, shader, and datapack; it has no `world` project type, so worlds are Modrinth-unsupported. CurseForge supports mods, modpacks, resource packs, and worlds; it also supports shaders and data packs when its `/v1/categories` response has those classes, which is unverified on this codebase's development machine, which has no CurseForge API key.
 - R7.3 Install a chosen version into the right instance folder: mods, resourcepacks, shaderpacks, saves/<world>/datapacks, saves.
 - R7.4 Required dependencies are installed with the item.
-- R7.5 CurseForge files with no download URL show the file's web page and accept a manually dropped file, verified by fingerprint.
+- R7.5 CurseForge files with no download URL show the file's web page and accept a manually dropped file, verified by fingerprint. CLI convention: a command that leaves one or more manual downloads pending (`content add`, `content update --apply`, `modpack install`, `modpack install-file`) exits with code 3, not 0, even though it installed everything it could. Text and JSON output both still list what was installed and what needs a hand download.
 - R7.6 Without `CURSEFORGE_API_KEY`, CurseForge is hidden and Modrinth works.
 - R7.7 Update check: for each installed item, find the newest compatible version.
 

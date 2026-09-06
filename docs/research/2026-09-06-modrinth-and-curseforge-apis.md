@@ -4,6 +4,12 @@ Researched 2026-09-06. Source of truth for the `mod-sources` and `modpack-format
 Items marked **VERIFY** were not confirmed against the live API during research. The
 `api-verifier` agent must confirm them before a parser depends on them.
 
+**Update, implementation (Task 10):** both VERIFY items below on Modrinth are now resolved
+against the live API — see the Modrinth section. The CurseForge shader and data pack class ids
+remain unverified: this codebase's development machine has no `CURSEFORGE_API_KEY`, so
+`tests/fixtures/curseforge/*.json` are synthetic (see `tests/fixtures/curseforge/README.md`)
+and `just verify-api curseforge` reports `SKIP` rather than `PASS`.
+
 ## 1. Modrinth API v2
 
 - Base: `https://api.modrinth.com/v2`
@@ -27,10 +33,17 @@ Items marked **VERIFY** were not confirmed against the live API during research.
   `index` is `relevance|downloads|follows|newest|updated`.
   Facets: JSON array of arrays. Inner array is OR, outer is AND.
   Example: `[["project_type:mod"],["categories:fabric"],["versions:1.20.1"]]`.
-  Project types: `mod`, `modpack`, `resourcepack`, `shader`, `datapack`. **VERIFY** whether
-  `world` exists as a project type at time of implementation; if not, worlds are Modrinth-unsupported.
+  Project types: `mod`, `modpack`, `resourcepack`, `shader`, `datapack`. **Resolved:** `world`
+  is not a Modrinth project type. A live `project_type:world` facet search returns zero hits
+  (`tests/fixtures/modrinth/search_types.json`); Modrinth has no world catalog. Worlds are
+  Modrinth-unsupported, and `ContentKind::World` is left out of `modrinth::KINDS`.
   Hits carry `project_id`, `slug`, `title`, `description`, `author`, `icon_url`, `downloads`,
-  `versions[]`, `categories[]`, `client_side`, `server_side`, `project_type`.
+  `versions[]`, `categories[]`, `client_side`, `server_side`, `project_type`. **Resolved:** a
+  `project_type:datapack` facet search still reports `project_type: "mod"` on every hit — the
+  facet filters, but the hit's own field does not reflect it. The rule this launcher applies: an
+  explicit content kind in the search query always wins over the hit's `project_type`; a
+  kindless search falls back to parsing `project_type`, and a hit whose type does not map to a
+  `ContentKind` (a modpack) drops out of the page.
 - `GET /project/{id|slug}` → full project.
 - `GET /project/{id|slug}/version?loaders=["fabric"]&game_versions=["1.20.1"]&include_changelog=false`
   → `[{ id, project_id, name, version_number, version_type, game_versions[], loaders[],
@@ -109,6 +122,15 @@ Zip with `modrinth.index.json` at the root and optional `overrides/`, `client-ov
 Verify shader and data pack IDs with `GET /v1/categories?gameId=432&classesOnly=true`, which
 lists every class with `id` and `slug`. The launcher should load class IDs from that call at
 runtime and cache them rather than hardcode them.
+
+**Implementation status:** `CurseForge::class_ids` does exactly this — one live call per
+client, cached in a `OnceCell`, with `mods`/`modpacks`/`resource_packs`/`worlds` required and
+`shaders`/`data_packs` left `Option<u32>` when the response has no such class. The four
+required ids are exercised by `just verify-api curseforge` when a key is present. The shader
+and data pack ids stay **unverified** on this codebase's development machine: there is no
+`CURSEFORGE_API_KEY` to make the call with, so `categories_classes.json` under
+`tests/fixtures/curseforge/` is a synthetic fixture, not a recording (see that directory's
+`README.md`).
 
 ### Endpoints
 

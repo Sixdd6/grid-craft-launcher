@@ -31,9 +31,16 @@ just run-cli instance list
 just run-cli java list
 just run-cli account add-offline you
 just run-cli instance create fab --minecraft 1.20.1 --loader fabric
+just run-cli content search sodium
+just run-cli content add fab --source modrinth --project sodium
 just run-cli launch fab --dry-run
+just run-cli modpack install --source modrinth --project fabulously-optimized --name fo
 just e2e
+just e2e-modpack
 ```
+
+CurseForge: without a `CURSEFORGE_API_KEY` in `.env`, `--source curseforge` is disabled and
+everything above still works against Modrinth. Put a key in `.env` to enable it.
 
 ## Secrets
 

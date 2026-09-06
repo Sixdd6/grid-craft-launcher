@@ -3,66 +3,141 @@ name: mod-sources
 description: Modrinth and CurseForge API usage — endpoints, headers, rate limits, content types, install targets, null download URLs, fingerprints, and the Source trait. Read before touching gcl-core sources/.
 ---
 
-Full detail: `docs/research/2026-09-06-modrinth-and-curseforge-apis.md`. Items marked VERIFY there
-need api-verifier confirmation before code depends on them.
+Full research: `docs/research/2026-09-06-modrinth-and-curseforge-apis.md`. Both VERIFY items
+about live behavior are resolved below. The CurseForge shader and data pack class ids stay
+unverified: this machine has no `CURSEFORGE_API_KEY`.
 
 ## Source trait
 
 ```rust
 #[async_trait]
 pub trait Source: Send + Sync {
-    fn id(&self) -> SourceId;                       // Modrinth | CurseForge
-    fn supported_types(&self) -> &[ContentType];    // Mod, Modpack, ResourcePack, Shader, DataPack, World
+    fn id(&self) -> SourceId;                                   // Modrinth | CurseForge
+    fn supported_kinds(&self) -> &[ContentKind];                // Mod, ResourcePack, Shader, DataPack, World
     async fn search(&self, q: &SearchQuery) -> Result<SearchPage, Error>;
-    async fn project(&self, id: &str) -> Result<Project, Error>;
-    async fn versions(&self, id: &str, filter: &VersionFilter) -> Result<Vec<Version>, Error>;
-    async fn resolve_by_hash(&self, hashes: &[FileHash]) -> Result<Vec<Version>, Error>;
+    async fn project(&self, id_or_slug: &str) -> Result<Project, Error>;
+    async fn versions(&self, project_id: &str, f: &VersionFilter) -> Result<Vec<Version>, Error>;
+    async fn version(&self, version_id: &str) -> Result<Version, Error>;
+    async fn resolve_by_hash(&self, sha1: &[String]) -> Result<Vec<Version>, Error>;
+    async fn resolve_by_fingerprint(&self, fps: &[u32]) -> Result<Vec<Version>, Error>;
+    fn as_modrinth(&self) -> Option<&modrinth::Modrinth> { None }
+    fn as_curseforge(&self) -> Option<&curseforge::CurseForge> { None }
 }
+pub type BoxSource = std::sync::Arc<dyn Source>;
 ```
 
-`Version` carries `files[] { url: Option<Url>, filename, size, sha1: Option<String>, sha512: Option<String>, fingerprint: Option<u32>, primary }`
-and `dependencies[] { project_id, version_id, kind: Required | Optional | Incompatible | Embedded }`.
+Modrinth answers `resolve_by_fingerprint` with `Ok(vec![])` (no fingerprint endpoint);
+CurseForge answers `resolve_by_hash` the same way (no hash endpoint). `as_modrinth` and
+`as_curseforge` exist because a modpack is not a `ContentKind`: `modpacks` needs each
+client's pack-only endpoints, which are not on the trait.
 
-Constructors: `ModrinthSource::with_base_url(client: HttpClient, base: String)`,
-`CurseForgeSource::with_base_url(client: HttpClient, base: String, api_key: String)`. Production
-code passes the real base URLs.
+`Version` carries `files: Vec<VersionFile> { url: Option<String>, file_name, size: Option<u64>,
+sha1: Option<String>, sha512: Option<String>, fingerprint: Option<u32>, primary }` and
+`dependencies: Vec<Dependency> { project_id: Option<String>, version_id: Option<String>, kind:
+Required | Optional | Incompatible | Embedded }`.
+
+Constructors: `Modrinth::new(http)` / `Modrinth::with_base_url(http, base)`,
+`CurseForge::new(http, api_key)` / `CurseForge::with_base_url(http, api_key, base)`.
+`Launcher::sources()` uses `new`/`with_base_url` against `Endpoints`, always with Modrinth and
+with CurseForge only when a key was found; the list is cached on the `Launcher`, so a later
+`config_mut()` change to the key does nothing until a new `Launcher` is opened.
 
 ## Modrinth
 
-- Base `https://api.modrinth.com/v2`. User-Agent is `gcl_core::USER_AGENT`. 300 requests per minute; honor `X-Ratelimit-Remaining` and `X-Ratelimit-Reset`.
-- Search: `GET /search?query=&facets=<json>&index=&offset=&limit=`. Facets: outer array AND, inner OR. `project_type:mod|modpack|resourcepack|shader|datapack`. `world` is VERIFY.
+- Base `https://api.modrinth.com/v2` (`modrinth::BASE`). User-Agent is the shared `HttpClient`'s.
+  300 requests per minute; honor `X-Ratelimit-Remaining` and `X-Ratelimit-Reset`.
+- Search: `GET /search?query=&facets=<json>&index=relevance&offset=&limit=`. Facets: outer array
+  AND, inner array OR.
 - Versions: `GET /project/{id}/version?loaders=["fabric"]&game_versions=["1.20.1"]&include_changelog=false`.
 - Hash lookup: `POST /version_files { hashes, algorithm: "sha1" }`.
-- Files have both `sha1` and `sha512`. Check sha1 after download.
+- Files have both `sha1` and `sha512`; the object store only checks sha1.
+- **`world` is not a Modrinth project type.** `KINDS` in `modrinth.rs` lists `Mod`,
+  `ResourcePack`, `Shader`, `DataPack` only; `ContentKind::World` is left out and `search`
+  rejects it with `Error::UnsupportedKind`. Confirmed live: a `project_type:world` facet
+  returns zero hits (`tests/fixtures/modrinth/search_types.json`).
+- **A `project_type:datapack` search hit still reports `project_type: "mod"`.** The rule this
+  launcher applies: an explicit `kind` in the `SearchQuery` always wins over the hit's own
+  `project_type`; only a kindless search falls back to parsing `project_type`, and a type that
+  does not map to a `ContentKind` (a modpack) drops that hit from the page.
+- `Modrinth::pack_versions(project_id, minecraft)` lists a modpack's versions — same request as
+  `versions`, without a loader filter, since a pack states its loader in the pack index, not in
+  `loaders`.
 
 ## CurseForge
 
-- Base `https://api.curseforge.com`. Header `x-api-key`. Game id `432`. Page size max 50, `index + pageSize <= 10000`.
-- Class ids: load at startup from `GET /v1/categories?gameId=432&classesOnly=true` and cache; expected mods 6, modpacks 4471, resource packs 12, worlds 17, shaders 6552 (VERIFY), data packs 6945 (VERIFY).
-- Loader ids: Forge 1, Fabric 4, Quilt 5, NeoForge 6.
-- Files: `GET /v1/mods/{id}/files?gameVersion=&modLoaderType=`. `downloadUrl` may be null.
-- Batch: `POST /v1/mods/files { fileIds }` in chunks of 50.
-- Fingerprint: MurmurHash2 32-bit, seed 1, over bytes with 9, 10, 13, 32 removed. `POST /v1/fingerprints { fingerprints }`.
+- Base `https://api.curseforge.com` (`curseforge::BASE`). Header `x-api-key`. Game id `432`
+  (`curseforge::GAME_ID`). Page size max 50 (`PAGE_SIZE`), same size for the `POST /v1/mods` and
+  `POST /v1/mods/files` batch endpoints.
+- **Class ids are fetched at runtime, once per client, and cached in a `tokio::sync::OnceCell`**
+  (`CurseForge::class_ids`, `GET /v1/categories?gameId=432&classesOnly=true`). There is no disk
+  cache: a new `CurseForge` client fetches again. `mods`, `modpacks`, `resource_packs`, and
+  `worlds` are required — a response missing one of the four is `Error::BadResponse`. `shaders`
+  and `data_packs` are `Option<u32>`: a response without that class leaves the field `None`, and
+  searching for that kind then fails with `Error::UnsupportedKind`, whatever `supported_kinds`
+  lists. **This machine has no `CURSEFORGE_API_KEY`, so the shader and data pack class ids are
+  unverified.** `tests/fixtures/curseforge/README.md` says why the fixtures are synthetic.
+- Loader ids (`modLoaderType`): Forge 1, Fabric 4, Quilt 5, NeoForge 6.
+- Files: `GET /v1/mods/{id}/files?gameVersion=&modLoaderType=&pageSize=50&index=0`.
+  `downloadUrl` may be null. `CurseForge::mod_files` and `CurseForge::pack_files` both call
+  this; `pack_files` skips the loader filter, since a pack states its loader in
+  `manifest.json`, not in a file's `gameVersions`.
+- Batch: `POST /v1/mods/files { fileIds }` (`CurseForge::files_batch`) and
+  `POST /v1/mods { modIds }` (`CurseForge::mods_batch`), both chunked by `PAGE_SIZE`. An id the
+  server does not know is dropped, not an error.
+- Fingerprint: `POST /v1/fingerprints { fingerprints }` (`CurseForge::resolve_by_fingerprint`),
+  chunked the same way. Only `exactMatches` count; a partial or unmatched fingerprint is
+  dropped.
+- `CurseForge::resolve_pack_id(id_or_slug)` resolves a modpack's id or slug to its numeric mod
+  id, for `modpacks::fetch_pack` — `Source::project` refuses a modpack outright, since a modpack
+  is not a `ContentKind`.
+
+## Fingerprint (`sources::fingerprint`)
+
+MurmurHash2, 32-bit, the original `MurmurHash2` (not `MurmurHash2A`), seed `1`, over the file
+bytes after every byte equal to 9 (tab), 10 (LF), 13 (CR), or 32 (space) is removed.
+`curseforge_fingerprint(bytes)` and `fingerprint_file(path)` (blocking; async callers use
+`spawn_blocking`) implement it over the `murmur2` crate. Verified against an independent
+implementation — see `crates/gcl-core/src/sources/fingerprint.rs`'s pinned-vector test.
 
 ## Null download URL
 
-A null `downloadUrl` means the author opted out of third-party distribution. Return
-`Error::ManualDownload { page_url, expected_fingerprint, file_name }`. The UI and CLI show the
-page and accept a dropped file, then verify the fingerprint.
+A null `downloadUrl` (CurseForge) or a missing `url` (never happens on Modrinth, which always
+publishes one) means the author opted out of third-party distribution. This surfaces as
+`content::ManualDownload { source, project_id, version_id, file_name, page_url, fingerprint,
+sha1 }`, never as a failed `add` or import. `curseforge::file_page_url(project_page_url,
+file_id)` builds the per-file page; Modrinth manual downloads point at the project page, since
+there is no per-file page there. The CLI and UI show the page and accept a dropped file, then
+`content::import_manual` verifies it by fingerprint (CurseForge) or sha1 (Modrinth) before
+storing it.
 
 ## Install targets
 
-| ContentType | Directory under `.minecraft/` |
+| ContentKind | Directory under `.minecraft/` |
 |---|---|
 | Mod | `mods/` |
 | ResourcePack | `resourcepacks/` |
 | Shader | `shaderpacks/` |
 | DataPack | `saves/<world>/datapacks/` (caller supplies the world) |
 | World | `saves/` (zip extracted, one folder) |
-| Modpack | new instance via `modpacks` |
+
+A modpack is not a `ContentKind`; it becomes a new instance through `modpacks`, not through
+this table.
+
+## Testing against a fake source
+
+Unit tests for `content` and `modpacks` do not need wiremock: a `FakeSource` implementing
+`Source` in the test module is enough. See the `testing` skill for the pattern.
+
+## Re-recording CurseForge fixtures
+
+`tests/fixtures/curseforge/*.json` are synthetic, written by hand from the API docs, because
+this machine has no `CURSEFORGE_API_KEY`. To replace one with a real response, put a key in
+`.env` and run `just record-fixture curseforge <name> '<url>'`. Never commit a `.env` or a
+fixture that still carries a live key in its URL or headers.
 
 ## Do not
 
 - Do not build a second `reqwest::Client`. Use `HttpClient`.
 - Do not send the CurseForge key anywhere but `api.curseforge.com`.
 - Do not hardcode class ids as the only source; the runtime fetch wins.
+- Do not construct a CDN URL to work around a null `downloadUrl`; send the user to the page.

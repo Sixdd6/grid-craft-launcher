@@ -103,11 +103,46 @@ directory and a `BTreeMap<String, String>`, never an `Instance`, so `instances::
 `kind` is `"offline"` or `"msa"`. See the `msa-auth` skill for the full `Account` shape and the
 offline UUID algorithm.
 
-## Content install
+## Content install (`instances::content`)
 
-`instances::install(instance, kind, cached_object, file_name)` hard-links from
-`cache/objects/` into the target folder, falling back to copy across filesystems. Disable
-renames to `<file>.disabled`.
+`target_dir(game_dir, kind, world)` maps a `ContentKind` to its folder: `Mod` → `mods/`,
+`ResourcePack` → `resourcepacks/`, `Shader` → `shaderpacks/`, `World` → `saves/`, `DataPack` →
+`saves/<world>/datapacks/` (`world` is required; `Error::WorldRequired` without one, and it goes
+through `safe_join` so a world name cannot escape `saves/`).
+
+- `place_file(instance, object, entry)` hard-links `object` (a path under `cache/objects/`, or
+  copies across filesystems) into its target folder, replaces an already-installed entry from
+  the same `(source, project_id)` in place — deleting its old file and any `.disabled` twin
+  first — and always leaves the new file enabled. It records the `ContentEntry` in
+  `instance.toml` and saves.
+- `place_world(instance, zip_path, entry)` extracts a world zip under `saves/`. The archive must
+  hold exactly one top-level folder — anything else is `Error::BadWorldZip` — and that folder
+  name becomes `entry.world`. An existing `saves/<folder>` is never overwritten:
+  `Error::WorldExists(folder)` instead. Every archive entry goes through `safe_join`.
+- `set_enabled(instance, project_id, enabled)` renames the file to (or from) `<file>.disabled`
+  and returns its new path; an entry already in the wanted state is a no-op that still returns
+  the current path. A missing file is `Error::ContentFileMissing`.
+- `remove(instance, project_id)` deletes both the enabled and disabled form of the file (a
+  missing file is not an error) and drops the entry from `instance.toml`.
+- `installed(instance, source, project_id)` finds the entry from `(source, project_id)`, if any.
+- `file_path(instance, entry)` returns where an entry's file (or world folder) lives right now,
+  including the `.disabled` suffix when it is disabled.
+
+`content::add` (see the `mod-sources` skill for the source side) is what calls `place_file` /
+`place_world` after resolving a project and downloading its file; nothing in `instances`
+depends on `sources` or `content` beyond the `SourceId` type.
+
+## `pack` and pending manual downloads
+
+`instance.config.pack: Option<PackSource>` is set only when the instance came from a modpack
+import (`{ source, project_id, version_id }`, `source` one of `modrinth`, `curseforge`, or
+`file` for a local archive with no known origin). A vanilla or hand-built instance has none.
+
+`instances/<slug>/pending-manual.json` (`Launcher::PENDING_MANUAL_FILE`) is not part of
+`instance.toml`: it is a flat JSON array of pending hand downloads (source, project id, version
+id, file name, page URL, expected fingerprint or sha1), appended to by `content::add` and
+modpack import whenever a file has no download URL, and pruned by `import_manual_file`. A
+missing file reads as an empty list — an instance that never hit a manual download has none.
 
 ## Writing files
 

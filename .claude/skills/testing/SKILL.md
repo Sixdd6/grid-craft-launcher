@@ -45,10 +45,54 @@ wiremock server. Never set it in production or document it as a user setting.
 `Launcher::loader_endpoints()` reads five more test-only overrides the same way, one per loader
 host: `GCL_FABRIC_BASE_URL`, `GCL_QUILT_BASE_URL`, `GCL_FORGE_META_BASE_URL` (the metadata host,
 not the maven host: see the `modloaders` skill), `GCL_FORGE_MAVEN_BASE_URL`, and
-`GCL_NEOFORGE_BASE_URL`. `Endpoints::from_env()` collects all five plus the Mojang one; set
-whichever ones a test's mock server needs to answer for. `Launcher::open_with_endpoints(root,
-endpoints)` is the lower-level seam: it takes a whole `Endpoints` value and reads no environment
-at all, for a test that wants to build several launchers with different hosts side by side.
+`GCL_NEOFORGE_BASE_URL`. Two more cover the content sources: `GCL_MODRINTH_BASE_URL` and
+`GCL_CURSEFORGE_BASE_URL` (`launcher::MODRINTH_BASE_URL_ENV` / `CURSEFORGE_BASE_URL_ENV`), read
+by `Endpoints::from_env()` and used to build `Modrinth::with_base_url` /
+`CurseForge::with_base_url` in `Launcher::sources()`. `Endpoints::from_env()` collects all eight
+plus the Mojang one; set whichever ones a test's mock server needs to answer for.
+`Launcher::open_with_endpoints(root, endpoints)` is the lower-level seam: it takes a whole
+`Endpoints` value and reads no environment at all, for a test that wants to build several
+launchers with different hosts side by side.
+
+### FakeSource
+
+`content` and `modpacks` unit tests do not need wiremock for a content source: a `FakeSource`
+implementing `crate::sources::Source` in the test module stands in for Modrinth or CurseForge.
+See `crates/gcl-core/src/content/tests.rs` for the pattern:
+
+```rust
+struct FakeSource {
+    id: SourceId,
+    projects: Vec<Project>,
+    versions: Vec<Version>,
+}
+
+impl FakeSource {
+    fn new(id: SourceId) -> Self { /* empty */ }
+    fn with(mut self, project: Project, versions: Vec<Version>) -> Self { /* push */ self }
+    fn boxed(self) -> BoxSource { Arc::new(self) }
+}
+
+#[async_trait]
+impl Source for FakeSource {
+    fn id(&self) -> SourceId { self.id }
+    fn supported_kinds(&self) -> &[ContentKind] { &[/* every kind */] }
+    async fn project(&self, id_or_slug: &str) -> Result<Project, crate::sources::Error> {
+        self.projects.iter().find(|p| p.id == id_or_slug || p.slug == id_or_slug)
+            .cloned().ok_or_else(|| crate::sources::Error::NotFound { source_id: self.id, id: id_or_slug.to_string() })
+    }
+    // versions/version/search/resolve_by_hash/resolve_by_fingerprint follow the same shape
+}
+```
+
+Build a `ContentCtx` with `sources: &[fake.boxed()]` and call `content::add` or
+`modpacks::import_plan` directly — no HTTP mocking, no wiremock server, and it runs the real
+`pick_version` and dependency-walk logic against data the test controls.
+
+A CurseForge-shaped test that needs `as_curseforge()` to return `Some` (a modpack import test,
+for instance) still needs a real `CurseForge` client, since `as_curseforge` returns `None` by
+default and `FakeSource` does not override it; point that client at a wiremock server with
+`CurseForge::with_base_url` instead.
 
 ### FakeRunner
 
@@ -145,16 +189,27 @@ key output lines. Use `--json` and parse with serde_json for structure.
 
 ## e2e
 
-`just e2e` runs `scripts/e2e.sh`: temp root, create instance, install the loader, dry-run launch,
-check every classpath jar exists. It uses the network. Only the e2e-runner agent and humans run
-it. The content step (add Sodium from Modrinth) is skipped until plan 3, since `gcl content`
-does not exist yet.
+`just e2e` runs `scripts/e2e.sh`: temp root, create instance, install the loader, add Sodium
+from Modrinth (`gcl content add`, a real network call), dry-run launch, check every classpath
+jar exists. It uses the network. Only the e2e-runner agent and humans run it.
 
 - `GCL_E2E_LOADER`: which loader to install (`fabric`, `quilt`, `forge`, `neoforge`). Defaults to
   `fabric`.
 - `GCL_E2E_MC_VERSION`: which Minecraft version to use. Defaults to `1.20.1`, except when
   `GCL_E2E_LOADER=neoforge`, where the default is `1.20.2` — NeoForge has no build for 1.20.1
   (see the `modloaders` skill). Set this to override either default.
+
+`just e2e-modpack` runs `scripts/e2e-modpack.sh`: temp root, `gcl modpack install --source
+modrinth --project <pack>` (`GCL_E2E_PACK`, default `fabulously-optimized`), list content,
+dry-run launch, check the classpath. Both e2e scripts source `scripts/lib/classpath-check.sh`'s
+`check_classpath <launch-output-file>`, which reads the `-cp` line out of a dry-run launch and
+fails if any jar on it does not exist on disk — `crates/gcl-cli/tests/cli.rs` uses the same
+function for its own dry-run assertions.
+
+`modpacks::ImportRequest::extra_hosts` is a test seam, not something either e2e script sets: it
+adds hosts to the `.mrpack` download allowlist (`mrpack::ALLOWED_HOSTS`) for one import, so a
+unit or CLI test can serve a fake `.mrpack` from its own wiremock server without that host being
+one a real pack could ever use. Leave it empty in anything that talks to a real source.
 
 ## What not to do
 
