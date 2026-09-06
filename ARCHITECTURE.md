@@ -16,20 +16,20 @@ Add a row here when you add a module.
 | Module | Owns | Depends on |
 |---|---|---|
 | `paths` | root resolution, subdirectory constants | none |
-| `config` | `config.toml` read and write, env overrides | `paths` |
+| `config` | `config.toml` read and write, env overrides | none |
 | `http` | shared reqwest client, User-Agent, retry, rate-limit backoff | none |
 | `download` | content-addressed cache, parallel queue, hash checks, progress events | `http`, `paths`, `events` |
-| `mojang` | version manifest, version JSON, rules, argument templating, assets, `inheritsFrom` merge | `download` |
-| `java` | detect runtimes, fetch Mojang runtimes, pick by major version | `download` |
-| `loaders` | `fabric`, `quilt`, `forge`, `neoforge` producing version JSONs | `download`, `mojang`, `java` |
-| `sources` | `Source` trait; `modrinth`, `curseforge` clients | `http`, `download` |
-| `modpacks` | import mrpack and CurseForge zip into a new instance | `sources`, `instances`, `loaders` |
-| `instances` | instance layout, `instance.toml`, content list, install into folders | `paths`, `download` |
-| `settings` | `options.txt` preseed and keyed overrides | `instances` |
-| `auth` | Microsoft device-code chain, refresh, keyring, offline accounts | `http`, `config` |
-| `launch` | classpath, arguments, spawn, log streaming | `instances`, `mojang`, `loaders`, `java`, `auth`, `settings` |
+| `mojang` | version manifest, version JSON, rules, argument templating, assets, `inheritsFrom` merge | `download`, `http`, `paths`, `events` |
+| `java` | detect runtimes, fetch Mojang runtimes, pick by major version | `download`, `http`, `paths` |
+| `loaders` (planned, plan 2+) | `fabric`, `quilt`, `forge`, `neoforge` producing version JSONs | `download`, `mojang`, `java` |
+| `sources` (planned, plan 2+) | `Source` trait; `modrinth`, `curseforge` clients | `http`, `download` |
+| `modpacks` (planned, plan 2+) | import mrpack and CurseForge zip into a new instance | `sources`, `instances`, `loaders` |
+| `instances` | instance layout, `instance.toml`, content list, install into folders, `list` skips unparsable instances with a warning | `paths` |
+| `settings` (planned, plan 2+) | `options.txt` preseed and keyed overrides | `instances` |
+| `auth` (planned, plan 2+) | Microsoft device-code chain, refresh, keyring, offline accounts | `http`, `config` |
+| `launch` (planned, plan 2+) | classpath, arguments, spawn, log streaming | `instances`, `mojang`, `loaders`, `java`, `auth`, `settings` |
 | `events` | `Progress` and `LogLine` event types and the channel | none |
-| `launcher` | `Launcher` handle: owns the tokio runtime, config, HttpClient, and event channel; every binary entry point goes through it | `config`, `http`, `events` |
+| `launcher` | `Launcher` handle: owns the tokio runtime, root, config, HttpClient, event channel, and cancellation token; every binary entry point goes through it. `Launcher::mojang()` reads `GCL_MOJANG_BASE_URL` (test-only) to point at a mock server instead of `piston-meta` | `config`, `http`, `events`, `paths`, `download`, `mojang`, `java`, `instances` |
 
 Rules:
 

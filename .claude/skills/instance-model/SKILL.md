@@ -77,6 +77,18 @@ enabled = true
 `cache/objects/` into the target folder, falling back to copy across filesystems. Disable
 renames to `<file>.disabled`.
 
+## Writing files
+
+`paths::write_atomic(path, bytes)` is the way to write any file under the root: it writes to a
+temp file and renames over the destination, so a crash mid-write never leaves a truncated
+`config.toml` or `instance.toml`. Use it instead of `std::fs::write` for anything under `<root>/`.
+
+## Listing instances
+
+`Instances::list` skips a directory that fails to parse as an instance (missing or malformed
+`instance.toml`, non-UTF-8 slug) and logs a `tracing::warn!` instead of failing the whole list.
+One broken instance does not hide the rest.
+
 ## Do not
 
 - Do not write `options.txt` with `=`.

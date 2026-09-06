@@ -28,15 +28,19 @@ Full detail with JSON shapes: `docs/research/2026-09-06-mojang-and-modloader-api
 ## inheritsFrom
 
 Loader profiles set `inheritsFrom`. Resolve parent first. Child `mainClass` wins. Child
-`arguments` append to parent. Libraries are merged by `group:artifact` (ignore classifier
-for the key), with the child's version winning. The one exception: when the child profile
-is Forge or NeoForge, which expects both versions on the classpath, keep both there. See
+`arguments` append to parent. Libraries are merged by `group:artifact:classifier`
+(`MavenCoord::merge_key`), so a natives classifier jar and its plain jar merge independently,
+with the child's version winning per key. The one exception: when the child profile is Forge
+or NeoForge, which expects both versions on the classpath, keep both there. See
 `docs/research/2026-09-06-mojang-and-modloader-apis.md` section 6.
 
 ## Natives
 
 - Modern versions: natives are ordinary libraries picked by rules. Nothing to extract.
 - Old versions (`natives` map present): pick `downloads.classifiers[natives[os]]`, extract into `cache/natives/<version>/` minus `extract.exclude`, pass `-Djava.library.path`.
+- A library with a `natives` entry for this OS and no `downloads.artifact` is natives-only:
+  download only the classifier jar, do not put a base jar on the classpath (1.8.9
+  `jinput-platform`, `twitch-platform`).
 
 ## Placeholders
 

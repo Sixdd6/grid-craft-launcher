@@ -16,7 +16,11 @@ The client holds no base URL; callers pass full URLs. Source clients own their b
 - `DownloadSpec { url, sha1: Option<String>, size: Option<u64>, dest: PathBuf, label }`.
 - Before downloading: if `sha1` is known and `objects/<sha1>` exists, link and return.
 - After downloading: compute sha1 while streaming. Mismatch → delete, retry. Third mismatch → `Error::HashMismatch { url, expected, actual }`. No sha1 → check size when known.
-- Write to `<dest>.part` and rename on success. On startup, delete stale `.part` files.
+- Write to `<object>.<uuid>.part` and rename on success. The uuid is unique per attempt, so
+  concurrent or retried downloads of the same object never collide on one staging file. A
+  download with no known sha1 (size-only verification) stages under `cache/objects/tmp/<uuid>.part`
+  instead of beside a named object. `cleanup_partials` sweeps every `*.part` file under all of
+  `cache/`, not just `cache/objects/`.
 
 ## Queue
 

@@ -38,9 +38,34 @@ let source = ModrinthSource::with_base_url(client.clone(), server.uri());
 `HttpClient` is host-agnostic. Every source client (`ModrinthSource`, `CurseForgeSource`) and the
 `mojang` module take a base URL so tests can point them at wiremock.
 
-`Launcher::mojang()` reads `GCL_MOJANG_BASE_URL` and uses it instead of `piston-meta`. That env
-var is test-only: set it in CLI tests to point `gcl` at a wiremock server. Never set it in
-production or document it as a user setting.
+`Launcher::mojang()` reads `GCL_MOJANG_BASE_URL` (`launcher::MOJANG_BASE_URL_ENV`) and uses it
+instead of `piston-meta`. That env var is test-only: set it in CLI tests to point `gcl` at a
+wiremock server. Never set it in production or document it as a user setting.
+
+### Fixture URL rewriting
+
+A fixture JSON still has real Mojang hosts baked into its URLs (`piston-meta.mojang.com`,
+`libraries.minecraft.net`, `resources.download.minecraft.net`, `launchermeta.mojang.com`).
+Before serving a fixture from wiremock, string-replace the host with the mock server's URI so
+the code under test fetches from wiremock for every follow-up request, not just the first:
+
+```rust
+let server = MockServer::start().await;
+let body = MANIFEST.replace("https://piston-meta.mojang.com", &server.uri());
+Mock::given(method("GET")).and(path("/mc/game/version_manifest_v2.json"))
+    .respond_with(ResponseTemplate::new(200).set_body_string(body))
+    .mount(&server).await;
+```
+
+See `crates/gcl-cli/tests/cli.rs::mock_mojang` and `crates/gcl-core/src/java/runtime.rs` tests
+for worked examples. Rewrite every host the fixture references, not only the one the current
+test happens to hit.
+
+### Flaky timing test
+
+`download_all_keeps_only_two_files_in_flight` (in `crates/gcl-core/src/download/mod.rs`)
+asserts on wall-clock timing of concurrent transfers. On a loaded machine it can fail spuriously.
+Rerun it once before treating a failure as a real regression.
 
 ## Filesystem
 

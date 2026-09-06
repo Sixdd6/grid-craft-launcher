@@ -22,6 +22,15 @@ just run-cli debug verify-source modrinth
 just run-ui
 ```
 
+## Try it
+
+```bash
+just run-cli version list
+just run-cli instance create demo --minecraft 1.20.1
+just run-cli instance list
+just run-cli java list
+```
+
 ## Secrets
 
 Copy `.env.example` to `.env` and fill in:
