@@ -594,4 +594,38 @@ mod tests {
         );
         assert!(!dest.exists());
     }
+
+    #[tokio::test]
+    async fn stream_to_file_removes_partial_when_the_body_ends_early() {
+        // A raw listener that promises 4096 bytes, sends 512, then closes.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let _ = socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4096\r\n\r\n")
+                    .await;
+                let _ = socket.write_all(&[1u8; 512]).await;
+                let _ = socket.flush().await;
+            }
+        });
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("cut.bin");
+        let mut seen = Vec::new();
+        let err = test_client()
+            .stream_to_file(
+                &format!("http://{addr}/cut.bin"),
+                &dest,
+                Some(4096),
+                &mut |done| seen.push(done),
+            )
+            .await
+            .expect_err("body ends early");
+        assert!(matches!(err, Error::Request { .. }), "got {err:?}");
+        assert!(!seen.is_empty(), "the failure was not mid-stream");
+        assert!(!dest.exists(), "partial file was left behind");
+    }
 }

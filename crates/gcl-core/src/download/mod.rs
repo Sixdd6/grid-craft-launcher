@@ -5,6 +5,7 @@
 
 pub mod hash;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -125,16 +126,12 @@ async fn fetch_into_cache(
     spec: &DownloadSpec,
     task: &TaskHandle,
 ) -> Result<PathBuf, Error> {
-    let staging = match spec.sha1.as_deref() {
-        Some(sha1) => ctx.root.object_path(sha1),
-        None => spec.dest.clone(),
-    };
-    let part = part_path(&staging);
-
-    for attempt in 1..=ATTEMPTS {
+    let mut attempt = 1u32;
+    loop {
         if ctx.cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
+        let part = staging_path(ctx.root, spec);
         let result = ctx
             .http
             .stream_to_file(&spec.url, &part, spec.size, &mut |done| task.progress(done))
@@ -159,17 +156,33 @@ async fn fetch_into_cache(
             }
             Err(err) => {
                 remove_quietly(&part).await;
-                if attempt == ATTEMPTS {
+                if attempt >= ATTEMPTS {
                     return Err(err);
                 }
                 let _ = ctx.sink.send(Event::Warning(format!(
                     "{}: {err}; retrying ({attempt}/{ATTEMPTS})",
                     spec.label
                 )));
+                attempt += 1;
             }
         }
     }
-    Err(Error::Cancelled)
+}
+
+/// Builds a staging path for one attempt, unique so concurrent attempts cannot collide.
+///
+/// A known sha1 stages beside its object; an unknown one stages under `objects/tmp`.
+/// Both live inside `cache/`, so [`cleanup_partials`] sweeps whatever is abandoned.
+fn staging_path(root: &Root, spec: &DownloadSpec) -> PathBuf {
+    let id = uuid::Uuid::new_v4();
+    match spec.sha1.as_deref() {
+        Some(sha1) => {
+            let mut name = root.object_path(sha1).into_os_string();
+            name.push(format!(".{id}.part"));
+            PathBuf::from(name)
+        }
+        None => root.objects_dir().join("tmp").join(format!("{id}.part")),
+    }
 }
 
 /// Compares a finished transfer against the spec's sha1, or its size when no sha1 is known.
@@ -248,13 +261,13 @@ async fn store_object(part: &Path, object: &Path) -> Result<(), Error> {
 /// [`cleanup_partials`] on the next start.
 #[tracing::instrument(skip(ctx, specs), fields(files = specs.len()))]
 pub async fn download_all(ctx: &DownloadCtx<'_>, specs: Vec<DownloadSpec>) -> Result<(), Error> {
+    let specs = dedupe(specs);
     if specs.is_empty() {
         return Ok(());
     }
     let total: Option<u64> = specs
         .iter()
-        .map(|s| s.size)
-        .try_fold(0u64, |acc, size| size.map(|s| acc + s));
+        .try_fold(0u64, |acc, spec| spec.size.and_then(|s| acc.checked_add(s)));
     let batch = TaskHandle::start(ctx.sink, format!("{} files", specs.len()), total);
 
     let permits = Arc::new(Semaphore::new(ctx.parallel.max(1)));
@@ -285,6 +298,15 @@ pub async fn download_all(ctx: &DownloadCtx<'_>, specs: Vec<DownloadSpec>) -> Re
     }
     batch.finish();
     Ok(())
+}
+
+/// Drops later specs that repeat an earlier `(sha1, dest)` pair, keeping the first.
+fn dedupe(specs: Vec<DownloadSpec>) -> Vec<DownloadSpec> {
+    let mut seen = HashSet::new();
+    specs
+        .into_iter()
+        .filter(|spec| seen.insert((spec.sha1.clone(), spec.dest.clone())))
+        .collect()
 }
 
 /// Hard-links `src` to `dest`, falling back to a copy across filesystems.
@@ -325,13 +347,6 @@ pub fn cleanup_partials(root: &Root) -> std::io::Result<usize> {
     Ok(removed)
 }
 
-/// Returns `path` with `.part` appended, keeping any existing extension.
-fn part_path(path: &Path) -> PathBuf {
-    let mut name = path.as_os_str().to_os_string();
-    name.push(".part");
-    PathBuf::from(name)
-}
-
 /// Deletes a file, ignoring the error when it is already gone.
 async fn remove_quietly(path: &Path) {
     let _ = tokio::fs::remove_file(path).await;
@@ -344,6 +359,7 @@ mod tests {
     use crate::http::HttpClient;
     use crate::paths::Root;
     use sha1::Digest;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tokio_util::sync::CancellationToken;
     use wiremock::matchers::{method, path as path_matcher};
@@ -593,47 +609,95 @@ mod tests {
         );
     }
 
+    /// Records when each request arrived and holds the response open for `delay`.
+    struct ArrivalRecorder {
+        arrivals: Arc<Mutex<Vec<std::time::Instant>>>,
+        delay: Duration,
+    }
+
+    impl wiremock::Respond for ArrivalRecorder {
+        fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+            if let Ok(mut arrivals) = self.arrivals.lock() {
+                arrivals.push(std::time::Instant::now());
+            }
+            let index: u8 = request
+                .url
+                .path()
+                .trim_start_matches("/f")
+                .trim_end_matches(".bin")
+                .parse()
+                .unwrap_or(0);
+            ResponseTemplate::new(200)
+                .set_delay(self.delay)
+                .set_body_bytes(vec![index; 64])
+        }
+    }
+
     #[tokio::test]
-    async fn download_all_completes_five_specs_with_two_in_flight() {
+    async fn download_all_keeps_only_two_files_in_flight() {
+        let delay = Duration::from_millis(200);
+        let arrivals = Arc::new(Mutex::new(Vec::new()));
         let server = MockServer::start().await;
-        let mut specs = Vec::new();
+        Mock::given(method("GET"))
+            .respond_with(ArrivalRecorder {
+                arrivals: Arc::clone(&arrivals),
+                delay,
+            })
+            .expect(5)
+            .mount(&server)
+            .await;
+
         let f = fixture();
-        for i in 0..5u8 {
-            let payload = vec![i; 64];
-            Mock::given(method("GET"))
-                .and(path_matcher(format!("/f{i}.bin")))
-                .respond_with(ResponseTemplate::new(200).set_body_bytes(payload.clone()))
-                .expect(1)
-                .mount(&server)
-                .await;
-            specs.push(DownloadSpec {
+        let specs = (0..5u8)
+            .map(|i| DownloadSpec {
                 url: format!("{}/f{i}.bin", server.uri()),
-                sha1: Some(sha1_of(&payload)),
+                sha1: Some(sha1_of(&[i; 64])),
                 size: Some(64),
                 dest: f.root.path().join(format!("out/f{i}.bin")),
                 label: format!("f{i}.bin"),
-            });
-        }
+            })
+            .collect();
 
         download_all(&f.ctx(2), specs).await.expect("batch");
         for i in 0..5u8 {
             let p = f.root.path().join(format!("out/f{i}.bin"));
             assert_eq!(std::fs::read(&p).expect("dest"), vec![i; 64]);
         }
+
+        let arrivals = arrivals.lock().expect("arrivals").clone();
+        assert_eq!(arrivals.len(), 5);
+        assert!(
+            arrivals[1].duration_since(arrivals[0]) < delay / 2,
+            "the second file did not start alongside the first"
+        );
+        assert!(
+            arrivals[2].duration_since(arrivals[0]) >= delay * 3 / 4,
+            "a third file started before a permit was free"
+        );
     }
 
     #[tokio::test]
-    async fn download_all_returns_the_first_hard_error() {
+    async fn download_all_returns_the_first_hard_error_and_stops_the_rest() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path_matcher("/gone.bin"))
             .respond_with(ResponseTemplate::new(404))
+            .expect(1)
             .mount(&server)
             .await;
-        Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![1u8; 8]))
-            .mount(&server)
-            .await;
+        // Each survivor is slow, so the batch can only finish them by ignoring the 404.
+        for i in 0..4u8 {
+            Mock::given(method("GET"))
+                .and(path_matcher(format!("/ok{i}.bin")))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_delay(Duration::from_millis(300))
+                        .set_body_bytes(vec![1u8; 8]),
+                )
+                .expect(0..=1)
+                .mount(&server)
+                .await;
+        }
 
         let f = fixture();
         let mut specs = vec![DownloadSpec {
@@ -663,6 +727,82 @@ mod tests {
             ),
             "got {err:?}"
         );
+        let landed = (0..4u8)
+            .filter(|i| f.root.path().join(format!("ok{i}.bin")).exists())
+            .count();
+        assert_eq!(landed, 0, "downloads kept running after the batch failed");
+    }
+
+    #[tokio::test]
+    async fn download_all_drops_repeated_specs() {
+        let payload = b"shared jar".to_vec();
+        let sha1 = sha1_of(&payload);
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(payload.clone()))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let f = fixture();
+        let dest = f.root.path().join("only.jar");
+        let spec = DownloadSpec {
+            url: format!("{}/only.jar", server.uri()),
+            sha1: Some(sha1),
+            size: Some(payload.len() as u64),
+            dest: dest.clone(),
+            label: "only.jar".into(),
+        };
+        download_all(&f.ctx(4), vec![spec.clone(), spec.clone(), spec])
+            .await
+            .expect("batch");
+        assert_eq!(std::fs::read(&dest).expect("dest"), payload);
+    }
+
+    #[tokio::test]
+    async fn same_hash_to_two_destinations_never_corrupts_the_object() {
+        let payload = vec![42u8; 128 * 1024];
+        let sha1 = sha1_of(&payload);
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(payload.clone()))
+            .expect(1..=2)
+            .mount(&server)
+            .await;
+
+        let f = fixture();
+        let url = format!("{}/shared.jar", server.uri());
+        let specs = vec![
+            DownloadSpec {
+                url: url.clone(),
+                sha1: Some(sha1.clone()),
+                size: Some(payload.len() as u64),
+                dest: f.root.path().join("one/shared.jar"),
+                label: "shared.jar".into(),
+            },
+            DownloadSpec {
+                url,
+                sha1: Some(sha1.clone()),
+                size: Some(payload.len() as u64),
+                dest: f.root.path().join("two/shared.jar"),
+                label: "shared.jar".into(),
+            },
+        ];
+
+        download_all(&f.ctx(2), specs).await.expect("batch");
+        assert_eq!(
+            std::fs::read(f.root.path().join("one/shared.jar")).expect("first dest"),
+            payload
+        );
+        assert_eq!(
+            std::fs::read(f.root.path().join("two/shared.jar")).expect("second dest"),
+            payload
+        );
+        assert_eq!(
+            std::fs::read(f.root.object_path(&sha1)).expect("object"),
+            payload
+        );
+        assert_eq!(count_parts(&f.root), 0);
     }
 
     #[tokio::test]
@@ -692,6 +832,32 @@ mod tests {
     }
 
     #[test]
+    fn staging_stays_inside_the_cache_and_is_unique_per_attempt() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        let mut spec = DownloadSpec {
+            url: "http://example.invalid/x.bin".into(),
+            sha1: None,
+            size: Some(4),
+            dest: dir.path().join("outside/x.bin"),
+            label: "x.bin".into(),
+        };
+
+        let sized = staging_path(&root, &spec);
+        assert!(
+            sized.starts_with(root.cache_dir()),
+            "{sized:?} escapes the cache, so cleanup_partials would miss it"
+        );
+        assert_ne!(sized, staging_path(&root, &spec));
+
+        spec.sha1 = Some("abcdef0123".into());
+        let hashed = staging_path(&root, &spec);
+        assert!(hashed.starts_with(root.objects_dir()));
+        assert_ne!(hashed, staging_path(&root, &spec));
+        assert!(hashed.extension().is_some_and(|e| e == "part"));
+    }
+
+    #[test]
     fn cleanup_partials_removes_planted_part_files() {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = Root::from_path(dir.path());
@@ -713,11 +879,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = dir.path().join("src.bin");
         std::fs::write(&src, b"payload").expect("write");
+        let other = dir.path().join("other.bin");
+        std::fs::write(&other, b"replacement").expect("write");
         let dest = dir.path().join("deep/nest/dest.bin");
         link_or_copy(&src, &dest).expect("first link");
         assert_eq!(std::fs::read(&dest).expect("dest"), b"payload");
-        link_or_copy(&src, &dest).expect("relink over existing dest");
-        assert_eq!(std::fs::read(&dest).expect("dest"), b"payload");
+        link_or_copy(&other, &dest).expect("relink over existing dest");
+        assert_eq!(std::fs::read(&dest).expect("dest"), b"replacement");
+        assert_eq!(std::fs::read(&src).expect("src"), b"payload");
     }
 
     #[tokio::test]
