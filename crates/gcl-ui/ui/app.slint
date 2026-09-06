@@ -1,0 +1,24 @@
+import { Theme } from "theme.slint";
+
+export component AppWindow inherits Window {
+    in property <string> version: "0.0.0";
+    title: "GRID Craft Launcher";
+    background: Theme.bg;
+    min-width: 960px;
+    min-height: 600px;
+
+    VerticalLayout {
+        padding: Theme.pad;
+        spacing: Theme.gap;
+        Text {
+            text: "GRID Craft Launcher";
+            color: Theme.text;
+            font-size: 24px;
+        }
+        Text {
+            text: "version " + root.version;
+            color: Theme.text-muted;
+            font-size: Theme.font-size;
+        }
+    }
+}
