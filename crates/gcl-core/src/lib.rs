@@ -13,6 +13,7 @@ pub mod launcher;
 pub mod loaders;
 pub mod mojang;
 pub mod paths;
+pub mod settings;
 
 pub use error::Error;
 pub use launcher::Launcher;

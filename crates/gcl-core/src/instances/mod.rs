@@ -45,6 +45,9 @@ pub enum Error {
     /// An `instance.toml` could not be serialized.
     #[error(transparent)]
     Serialize(#[from] toml::ser::Error),
+    /// The `options.txt` preseed could not be written.
+    #[error(transparent)]
+    Settings(#[from] crate::settings::Error),
 }
 
 /// One instance on disk: its slug, its directory, and its parsed config.
@@ -133,16 +136,7 @@ impl Instances {
             create_dir(&instance.game_dir().join(sub))?;
         }
         instance.save()?;
-        if !game_defaults.is_empty() {
-            let mut text = String::new();
-            for (key, value) in game_defaults {
-                text.push_str(key);
-                text.push(':');
-                text.push_str(value);
-                text.push('\n');
-            }
-            write_file(&instance.game_dir().join("options.txt"), text.as_bytes())?;
-        }
+        crate::settings::apply_preseed(&instance.game_dir(), game_defaults)?;
         tracing::info!(slug = %instance.slug, "created instance");
         Ok(instance)
     }

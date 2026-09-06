@@ -30,4 +30,7 @@ pub enum Error {
     /// A mod loader could not be listed or installed.
     #[error(transparent)]
     Loaders(#[from] crate::loaders::Error),
+    /// An `options.txt` read, write, preseed, or override failed.
+    #[error(transparent)]
+    Settings(#[from] crate::settings::Error),
 }
