@@ -29,6 +29,10 @@ just run-cli version list
 just run-cli instance create demo --minecraft 1.20.1
 just run-cli instance list
 just run-cli java list
+just run-cli account add-offline you
+just run-cli instance create fab --minecraft 1.20.1 --loader fabric
+just run-cli launch fab --dry-run
+just e2e
 ```
 
 ## Secrets

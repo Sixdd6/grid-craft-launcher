@@ -30,7 +30,7 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 
 ## R4 Mod loaders
 
-- R4.1 Support Fabric, Quilt, Forge (1.13+), and NeoForge.
+- R4.1 Support Fabric, Quilt, Forge (1.13+), and NeoForge. NeoForge has no build for Minecraft 1.20.1 upstream; that release line shipped as `net.neoforged:forge` 47.1.x instead.
 - R4.2 List available loader versions for a given Minecraft version.
 - R4.3 Install a loader version into the version cache once and share it across instances.
 - R4.4 Forge and NeoForge install headlessly by running the installer's processors with the launcher's Java; no GUI installer.

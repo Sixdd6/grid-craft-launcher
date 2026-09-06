@@ -66,10 +66,35 @@ enabled = true
 
 ## options.txt semantics
 
-- Format: one `key:value` per line. Note the separator is a colon, not `=`.
-- Preseed: on instance creation, write `[game_defaults]` as `key:value` lines when `options.txt` does not exist.
-- Override: on every launch, for each key in `settings_overrides`, replace the line starting with `key:` or append `key:value` if absent. Leave every other line untouched. Preserve order.
+The `settings` module (`gcl-core/src/settings/mod.rs`) owns `options.txt`. It takes a game
+directory and a `BTreeMap<String, String>`, never an `Instance`, so `instances::create` and
+`Launcher::apply_settings_overrides` both call it without `settings` depending on `instances`.
+
+- Format: one `key:value` per line. Note the separator is a colon, not `=`. A value may itself
+  hold a `:` (only the first one on the line separates the key); a key may not.
+- `apply_preseed(game_dir, defaults)`: writes `defaults` as `key:value` lines, but only when
+  `options.txt` does not already exist. An existing file, even an empty one, is left untouched.
+- `apply_overrides_to(game_dir, overrides)`: for each key, replaces the line starting with `key:`
+  or appends `key:value` if absent. Every other line is left untouched, in its original order.
+  Returns the number of keys that actually changed, so a caller can skip logging or rewriting
+  when nothing changed; a second call with the same overrides writes nothing (checked by mtime
+  in the test suite).
+- `validate_key(key)` / `validate_value(value)`: a key must be non-empty, hold no `:`, `\r`, or
+  `\n`, and have no leading or trailing whitespace; a value may hold `:` but not `\r` or `\n`.
+  `apply_overrides_to` validates every entry before writing anything, so one bad override key in
+  a hand-edited `instance.toml` fails the whole call rather than partially corrupting the file.
+- CRLF is preserved: if the file's lines end in `\r\n`, every line `settings` writes back keeps
+  `\r\n`, so a Windows-style `options.txt` round-trips byte for byte.
 - Values are stored as strings exactly as Minecraft writes them (`true`, `12`, `"en_us"` with quotes for strings).
+
+## accounts.json
+
+```json
+{ "accounts": [{ "id": "...", "name": "...", "kind": "offline" }], "active": "..." }
+```
+
+`kind` is `"offline"` or `"msa"`. See the `msa-auth` skill for the full `Account` shape and the
+offline UUID algorithm.
 
 ## Content install
 

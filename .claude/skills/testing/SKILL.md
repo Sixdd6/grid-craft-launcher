@@ -42,6 +42,62 @@ let source = ModrinthSource::with_base_url(client.clone(), server.uri());
 instead of `piston-meta`. That env var is test-only: set it in CLI tests to point `gcl` at a
 wiremock server. Never set it in production or document it as a user setting.
 
+`Launcher::loader_endpoints()` reads four more test-only overrides the same way, one per loader
+host: `GCL_FABRIC_BASE_URL`, `GCL_QUILT_BASE_URL`, `GCL_FORGE_META_BASE_URL` (the metadata host,
+not the maven host: see the `modloaders` skill), `GCL_FORGE_MAVEN_BASE_URL`, and
+`GCL_NEOFORGE_BASE_URL`. `Endpoints::from_env()` collects all five plus the Mojang one; set
+whichever ones a test's mock server needs to answer for. `Launcher::open_with_endpoints(root,
+endpoints)` is the lower-level seam: it takes a whole `Endpoints` value and reads no environment
+at all, for a test that wants to build several launchers with different hosts side by side.
+
+### FakeRunner
+
+Forge and NeoForge run installer processors as child JVMs through the `ProcessRunner` trait
+(`crate::loaders::ProcessRunner`, in `gcl-core/src/loaders/processors.rs`). Production code uses
+`JavaRunner`, which really spawns `java`. A test passes a fake instead, through
+`LoaderCtx::runner: Option<&dyn ProcessRunner>`:
+
+```rust
+struct FakeRunner {
+    calls: Mutex<Vec<Call>>,
+    writes: BTreeMap<String, Vec<(PathBuf, Vec<u8>)>>, // main class -> files it writes
+    code: i32,
+}
+
+#[async_trait::async_trait]
+impl ProcessRunner for FakeRunner {
+    async fn run(&self, _java: &Path, classpath: &[PathBuf], main: &str, args: &[String], log: &Path)
+        -> Result<i32, std::io::Error> {
+        self.calls.lock().unwrap().push(/* record the call */);
+        std::fs::write(log, format!("ran {main}\n"))?;
+        if self.code == 0 {
+            for (path, bytes) in self.writes.get(main).into_iter().flatten() {
+                std::fs::write(path, bytes)?;
+            }
+        }
+        Ok(self.code)
+    }
+}
+```
+
+It records every call for assertions and writes the files a real processor's `outputs` promise,
+so `outputs_current` sees a correct install afterward. See
+`crates/gcl-core/src/loaders/processors_tests.rs` for the full fixture, including how it drives a
+non-zero exit code and a missing output.
+
+### tests/common/mod.rs
+
+`crates/gcl-core/tests/common/mod.rs` and `crates/gcl-cli/tests/common/mod.rs` each hold the same
+small helper set, compiled once per test binary (`#![allow(dead_code)]`, since not every test
+file in a binary uses every helper):
+
+- `serve(server, path, body)`: mounts a GET mock returning `body` at `path`.
+- `zip_bytes(entries)` / `jar_with_main(main)`: build an in-memory zip, or a jar whose manifest
+  declares `Main-Class: <main>`.
+- `mock_vanilla(server, id)`: serves a complete, library-free vanilla version (manifest, version
+  JSON, client jar, empty asset index) under one mock server, for tests that only need vanilla
+  install to succeed before checking something else.
+
 ### Fixture URL rewriting
 
 A fixture JSON still has real Mojang hosts baked into its URLs (`piston-meta.mojang.com`,
@@ -79,9 +135,16 @@ key output lines. Use `--json` and parse with serde_json for structure.
 
 ## e2e
 
-`just e2e` runs `scripts/e2e.sh`: temp root, create instance, install Fabric, add Sodium from
-Modrinth, dry-run launch, check every classpath jar exists. It uses the network. Only the
-e2e-runner agent and humans run it. Set `GCL_E2E_MC_VERSION` to change the version.
+`just e2e` runs `scripts/e2e.sh`: temp root, create instance, install the loader, dry-run launch,
+check every classpath jar exists. It uses the network. Only the e2e-runner agent and humans run
+it. The content step (add Sodium from Modrinth) is skipped until plan 3, since `gcl content`
+does not exist yet.
+
+- `GCL_E2E_LOADER`: which loader to install (`fabric`, `quilt`, `forge`, `neoforge`). Defaults to
+  `fabric`.
+- `GCL_E2E_MC_VERSION`: which Minecraft version to use. Defaults to `1.20.1`, except when
+  `GCL_E2E_LOADER=neoforge`, where the default is `1.20.2` — NeoForge has no build for 1.20.1
+  (see the `modloaders` skill). Set this to override either default.
 
 ## What not to do
 

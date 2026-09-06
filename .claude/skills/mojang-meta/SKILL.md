@@ -19,6 +19,12 @@ Full detail with JSON shapes: `docs/research/2026-09-06-mojang-and-modloader-api
 - `arguments.game[]`, `arguments.jvm[]`: string or `{ rules, value }` with `value` string or array. Old versions: `minecraftArguments` single string, and no JVM args (use the standard `-Djava.library.path`, `-cp` set).
 - `mainClass`, `assetIndex`, `assets`, `javaVersion.majorVersion`, `inheritsFrom`, `logging.client`.
 
+`logging.client` names a log4j2 XML config: `{ argument, file: { id, sha1, size, url } }`.
+`InstallPlan.log_config` downloads it to `cache/assets/log_configs/<id>` and records that path;
+`launch::build` inserts `argument` (with `${path}` replaced by that path) between the expanded
+JVM args and the main class, only when `log_config` is `Some`. A version with no logging block
+gets no `-Dlog4j...` argument at all — older Minecraft did not ship one.
+
 ## Rules
 
 - No rules: include. With rules: start disallowed; walk rules in order; a matching `allow` sets allowed, a matching `disallow` sets disallowed.
@@ -38,6 +44,13 @@ keep_both_libraries)` and `Mojang::resolve(v, keep_both_libraries)` take the fla
 Forge and NeoForge loader callers pass `true`. `Mojang::resolve_auto(v)` guesses the flag from
 the child id containing `forge` and is what the vanilla install path uses. See
 `docs/research/2026-09-06-mojang-and-modloader-apis.md` section 6.
+
+`logging` merges by a separate rule from every other field: a Forge or NeoForge profile publishes
+an empty `"logging": {}` block, which parses to a config with no `client`. Taking the child
+whole there would drop vanilla's log4j config and leave the game with no
+`-Dlog4j.configurationFile`. So the child's `logging` wins only when it names a `client`;
+otherwise the parent's `logging` is kept, even though the child is otherwise present
+(`merge_logging` in `mojang/mod.rs`).
 
 ## Natives
 

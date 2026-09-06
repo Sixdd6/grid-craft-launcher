@@ -29,14 +29,33 @@ Full detail: `docs/research/2026-09-06-msa-auth-and-rust-crates.md` section A.
 
 ## Storage
 
-- `accounts.json` in the root: `[{ id (uuid), name, kind: msa|offline, mc_token, mc_token_expires, xuid }]`. Tokens here are short-lived.
-- Refresh token: keyring service `grid-craft-launcher`, user `<uuid>`. On keyring error, store in `accounts.json` with `refresh_token_in_file = true` and emit one warning event.
+Built so far (`gcl-core/src/auth/`): the store and offline accounts. The Microsoft device-code
+chain above (steps 1 to 6) is not implemented yet; it lands in plan 4.
+
+- `accounts.json` in the root (`auth::store::Accounts`, over `AccountsFile`):
+  `{ "accounts": [Account, ...], "active": Option<String> }`. `active` holds the id of the
+  selected account, or is absent when none is selected.
+- `Account { id, name, kind: AccountKind::Offline | Msa, mc_token, mc_token_expires, xuid }`. The
+  last three are `Option` and empty for an offline account. `Account`'s `Debug` impl redacts
+  `mc_token` to `<set>`/`<unset>`, so a traced or logged account never prints a token.
+- `Accounts::add` inserts or replaces by id, and makes the account active only when no account is
+  active yet (adding a second account does not steal the active slot). `select(id_or_name)`
+  matches by id first, then by exact case-sensitive name, and makes the match active.
+  `remove(id)` clears `active` if the removed account was the active one.
+- Refresh token (once MSA lands): keyring service `grid-craft-launcher`, user `<uuid>`. On
+  keyring error, store in `accounts.json` with `refresh_token_in_file = true` and emit one
+  warning event.
 - Refresh when `mc_token_expires` is within 5 minutes: `grant_type=refresh_token` then steps 3 to 6.
 
 ## Offline
 
-- UUID v3 from MD5 of `OfflinePlayer:<name>` bytes (`uuid::Uuid::new_v3` with the nil namespace is wrong; compute MD5 yourself and set version 3 and variant bits, matching Java `nameUUIDFromBytes`).
-- Placeholders: `auth_access_token = "0"`, `user_type = "legacy"`, `clientid = ""`, `auth_xuid = ""`.
+- `auth::offline::offline_uuid(name)`: UUID v3 from MD5 of `OfflinePlayer:<name>` bytes
+  (`uuid::Uuid::new_v3` with the nil namespace is wrong; compute MD5 yourself and set version 3
+  and variant bits, matching Java `nameUUIDFromBytes`).
+- `auth::offline::offline_account(name)` builds the `Account` from that UUID, with no token,
+  expiry, or xuid.
+- `Account::launch_identity()` builds the `LaunchIdentity` for both kinds. Offline placeholders:
+  `access_token = "0"`, `user_type = "legacy"`, `xuid = ""`, `client_id = ""`.
 
 ## Placeholders for MSA
 
