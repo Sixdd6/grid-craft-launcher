@@ -1816,6 +1816,12 @@ dependencies = [
  "clap",
  "gcl-core",
  "predicates",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "wiremock",
 ]
 
 [[package]]
