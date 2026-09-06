@@ -2,3 +2,5 @@
 .env
 *.pending-snap
 .claude/settings.local.json
+/tests/e2e-root/
+/.superpowers/
