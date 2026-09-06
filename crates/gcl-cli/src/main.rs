@@ -12,10 +12,12 @@ use gcl_core::Launcher;
 
 use commands::account::AccountCommand;
 use commands::config::ConfigCommand;
+use commands::content::ContentCommand;
 use commands::instance::InstanceCommand;
 use commands::java::JavaCommand;
 use commands::launch::LaunchArgs;
 use commands::loader::LoaderCommand;
+use commands::modpack::ModpackCommand;
 use commands::settings::SettingsCommand;
 use commands::version::VersionCommand;
 use output::Format;
@@ -66,6 +68,16 @@ enum Command {
     Java {
         #[command(subcommand)]
         command: JavaCommand,
+    },
+    /// Content: search a source, install into an instance, update what is installed.
+    Content {
+        #[command(subcommand)]
+        command: ContentCommand,
+    },
+    /// Modpacks: import one from a source or from an archive on disk.
+    Modpack {
+        #[command(subcommand)]
+        command: ModpackCommand,
     },
     /// Launcher config: show it, change the root or the JVM defaults.
     Config {
@@ -158,13 +170,18 @@ fn dispatch(launcher: &mut Launcher, format: Format, command: Command) -> Result
             commands::config::run(launcher, format, command)?;
             Ok(ExitCode::SUCCESS)
         }
+        Command::Content { command } => commands::content::run(launcher, format, command),
+        Command::Modpack { command } => commands::modpack::run(launcher, format, command),
         Command::Debug {
             command: DebugCommand::VerifySource { source },
         } => {
             // `main` has already turned away every source we cannot verify.
-            let passed = match commands::debug::loader_for(&source) {
-                Some(loader) => commands::debug::verify_loader(launcher, loader)?,
-                None => commands::debug::verify_mojang(launcher)?,
+            let passed = if let Some(loader) = commands::debug::loader_for(&source) {
+                commands::debug::verify_loader(launcher, loader)?
+            } else if let Some(id) = commands::debug::source_for(&source) {
+                commands::debug::verify_content_source(launcher, id)?
+            } else {
+                commands::debug::verify_mojang(launcher)?
             };
             if passed {
                 Ok(ExitCode::SUCCESS)

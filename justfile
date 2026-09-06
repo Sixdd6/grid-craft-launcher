@@ -35,6 +35,10 @@ verify-api source:
 e2e:
     scripts/e2e.sh
 
+# End-to-end modpack import in a throwaway root. Does not start the game.
+e2e-modpack:
+    scripts/e2e-modpack.sh
+
 # Save a live JSON response as a test fixture: `just record-fixture modrinth search-sodium 'https://...'`
 record-fixture source name url:
     scripts/record-fixture.sh {{source}} {{name}} '{{url}}'

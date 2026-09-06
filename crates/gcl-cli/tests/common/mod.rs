@@ -70,3 +70,55 @@ pub async fn mock_vanilla(server: &MockServer, id: &str) {
     serve(server, "/vanilla/client.jar", CLIENT_JAR.to_vec()).await;
     serve(server, "/vanilla/index.json", index_body).await;
 }
+
+/// Modrinth search fixture, answered at `/search`.
+pub const MODRINTH_SEARCH: &str =
+    include_str!("../../../../tests/fixtures/modrinth/search_sodium.json");
+
+/// Modrinth project fixture for Sodium, answered at `/project/sodium`.
+pub const MODRINTH_PROJECT: &str =
+    include_str!("../../../../tests/fixtures/modrinth/project_sodium.json");
+
+/// Modrinth versions fixture for Sodium on 1.20.1 Fabric.
+pub const MODRINTH_VERSIONS: &str =
+    include_str!("../../../../tests/fixtures/modrinth/versions_sodium_1.20.1_fabric.json");
+
+/// Project id the Sodium fixtures carry.
+pub const SODIUM_ID: &str = "AANobbMI";
+
+/// Bytes the mock Modrinth serves as the Sodium jar.
+pub const SODIUM_JAR: &[u8] = b"synthetic sodium jar";
+
+/// Serves search, the Sodium project, one version rewritten to this server, and the jar.
+///
+/// The fixture's file points at Modrinth's CDN and hashes the real jar, so the URL and the
+/// sha1 are both rewritten here: the launcher verifies every byte it downloads.
+pub async fn mock_modrinth(server: &MockServer) {
+    let base = server.uri();
+    let versions: Vec<serde_json::Value> =
+        serde_json::from_str(MODRINTH_VERSIONS).expect("versions fixture");
+    let mut version = versions.into_iter().next().expect("one version");
+    version["dependencies"] = serde_json::json!([]);
+    version["files"] = serde_json::json!([{
+        "url": format!("{base}/files/sodium.jar"),
+        "filename": "sodium.jar",
+        "size": SODIUM_JAR.len(),
+        "primary": true,
+        "hashes": { "sha1": sha1_hex(SODIUM_JAR) },
+    }]);
+
+    serve(server, "/search", MODRINTH_SEARCH.as_bytes().to_vec()).await;
+    serve(
+        server,
+        "/project/sodium",
+        MODRINTH_PROJECT.as_bytes().to_vec(),
+    )
+    .await;
+    serve(
+        server,
+        &format!("/project/{SODIUM_ID}/version"),
+        serde_json::json!([version]).to_string().into_bytes(),
+    )
+    .await;
+    serve(server, "/files/sodium.jar", SODIUM_JAR.to_vec()).await;
+}

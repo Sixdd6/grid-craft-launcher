@@ -5,12 +5,24 @@ use gcl_core::Launcher;
 use gcl_core::instances::model::Loader;
 use gcl_core::loaders::{InstallProfile, InstallerJar};
 use gcl_core::mojang::VersionJson;
+use gcl_core::sources::{ContentKind, SearchQuery, SourceId, VersionFilter};
 
 /// Sources this command knows how to verify.
-const IMPLEMENTED: &[&str] = &["mojang", "fabric", "quilt", "forge", "neoforge"];
+const IMPLEMENTED: &[&str] = &[
+    "mojang",
+    "fabric",
+    "quilt",
+    "forge",
+    "neoforge",
+    "modrinth",
+    "curseforge",
+];
 
 /// The Minecraft version most loader checks list builds for.
 const CHECK_MC: &str = "1.20.1";
+
+/// The project the content source checks search for and resolve.
+const CHECK_PROJECT: &str = "sodium";
 
 /// The Minecraft version the NeoForge check lists builds for.
 ///
@@ -40,6 +52,143 @@ pub fn loader_for(source: &str) -> Option<Loader> {
         "forge" => Some(Loader::Forge),
         "neoforge" => Some(Loader::NeoForge),
         _ => None,
+    }
+}
+
+/// The source a name stands for, if it names a content source.
+pub fn source_for(source: &str) -> Option<SourceId> {
+    match source {
+        "modrinth" => Some(SourceId::Modrinth),
+        "curseforge" => Some(SourceId::CurseForge),
+        _ => None,
+    }
+}
+
+/// Searches one content source, then reads a project, its versions, and one file back.
+///
+/// Modrinth is checked by search, project, versions for [`CHECK_MC`] on Fabric, and a hash
+/// lookup of the first file's sha1. CurseForge is checked by its class ids, a search, and
+/// the files of the first hit. A CurseForge without an API key is skipped, not failed:
+/// there is nothing to check and no key to blame. Returns `false` when a step failed.
+pub fn verify_content_source(launcher: &Launcher, id: SourceId) -> Result<bool> {
+    let source = match launcher.source(id) {
+        Ok(source) => source,
+        Err(gcl_core::Error::Sources(gcl_core::sources::Error::Disabled { reason, .. })) => {
+            println!("SKIP {id} ({reason})");
+            return Ok(true);
+        }
+        Err(err) => {
+            println!("FAIL {id}: {err}");
+            return Ok(false);
+        }
+    };
+
+    if let Some(cf) = source.as_curseforge() {
+        match launcher.block_on(cf.class_ids()) {
+            Ok(classes) => println!("PASS class ids (mods {})", classes.mods),
+            Err(err) => {
+                println!("FAIL class ids: {err}");
+                return Ok(false);
+            }
+        }
+    }
+
+    let query = SearchQuery {
+        text: CHECK_PROJECT.to_string(),
+        kind: Some(ContentKind::Mod),
+        minecraft: Some(CHECK_MC.to_string()),
+        loader: Some(Loader::Fabric),
+        offset: 0,
+        limit: 5,
+    };
+    let page = match launcher.block_on(async { source.search(&query).await }) {
+        Ok(page) => {
+            println!("PASS search {CHECK_PROJECT} ({} hits)", page.hits.len());
+            page
+        }
+        Err(err) => {
+            println!("FAIL search {CHECK_PROJECT}: {err}");
+            return Ok(false);
+        }
+    };
+    let Some(hit) = page.hits.first() else {
+        println!("FAIL search {CHECK_PROJECT}: no hits");
+        return Ok(false);
+    };
+
+    let project = match launcher.block_on(async { source.project(&hit.slug).await }) {
+        Ok(project) => {
+            println!("PASS project {} ({})", project.slug, project.id);
+            project
+        }
+        Err(err) => {
+            println!("FAIL project {}: {err}", hit.slug);
+            return Ok(false);
+        }
+    };
+
+    let filter = VersionFilter {
+        minecraft: Some(CHECK_MC.to_string()),
+        loaders: vec!["fabric".to_string()],
+    };
+    let versions = match launcher.block_on(async { source.versions(&project.id, &filter).await }) {
+        Ok(versions) => {
+            println!(
+                "PASS versions {} {CHECK_MC} fabric ({})",
+                project.slug,
+                versions.len()
+            );
+            versions
+        }
+        Err(err) => {
+            println!("FAIL versions {}: {err}", project.slug);
+            return Ok(false);
+        }
+    };
+    let Some(version) = versions.first() else {
+        println!("FAIL versions {}: none published", project.slug);
+        return Ok(false);
+    };
+    let Some(file) = version
+        .files
+        .iter()
+        .find(|f| f.primary)
+        .or(version.files.first())
+    else {
+        println!(
+            "FAIL versions {}: version {} has no file",
+            project.slug, version.id
+        );
+        return Ok(false);
+    };
+    println!(
+        "PASS file {} ({} bytes)",
+        file.file_name,
+        file.size.unwrap_or(0)
+    );
+
+    // Modrinth resolves a file back by sha1; CurseForge has no hash endpoint, so its check
+    // ends at the file list above.
+    if id == SourceId::CurseForge {
+        return Ok(true);
+    }
+    let Some(sha1) = file.sha1.clone() else {
+        println!("FAIL hash lookup: {} has no sha1", file.file_name);
+        return Ok(false);
+    };
+    match launcher.block_on(async { source.resolve_by_hash(std::slice::from_ref(&sha1)).await }) {
+        Ok(found) if !found.is_empty() => {
+            println!("PASS hash lookup {sha1} ({})", found[0].id);
+            Ok(true)
+        }
+        Ok(_) => {
+            println!("FAIL hash lookup {sha1}: no version came back");
+            Ok(false)
+        }
+        Err(err) => {
+            println!("FAIL hash lookup {sha1}: {err}");
+            Ok(false)
+        }
     }
 }
 
@@ -185,10 +334,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_loader_source_is_implemented() {
+    fn every_loader_and_content_source_is_implemented() {
         assert!(is_implemented("mojang"));
         assert!(is_implemented("neoforge"));
-        assert!(!is_implemented("modrinth"));
+        assert!(is_implemented("modrinth"));
+        assert!(is_implemented("curseforge"));
+        assert!(!is_implemented("nowhere"));
+    }
+
+    #[test]
+    fn a_content_source_maps_onto_its_id() {
+        assert_eq!(source_for("curseforge"), Some(SourceId::CurseForge));
+        assert_eq!(source_for("fabric"), None);
     }
 
     #[test]

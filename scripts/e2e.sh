@@ -5,6 +5,9 @@
 # Minecraft version. Nothing is installed outside the temporary root, which is removed on exit.
 set -euo pipefail
 
+# shellcheck source=scripts/lib/classpath-check.sh
+source "$(dirname "$0")/lib/classpath-check.sh"
+
 ROOT="$(mktemp -d -t gcl-e2e-XXXXXX)"
 trap 'rm -rf "$ROOT"' EXIT
 export GCL_ROOT="$ROOT"
@@ -33,41 +36,18 @@ $GCL loader install e2e
 pass "install loader"
 
 step "add a mod from modrinth"
-if $GCL content --help >/dev/null 2>&1; then
-  $GCL content add e2e --source modrinth --project sodium
-  pass "content add"
-else
-  echo "SKIP content add (plan 3)"
+$GCL content add e2e --source modrinth --project sodium
+$GCL content list e2e --json > "$ROOT/content.json"
+if ! grep -q sodium "$ROOT/content.json"; then
+  echo "FAIL: sodium is missing from the content list"
+  cat "$ROOT/content.json"
+  exit 1
 fi
+pass "content add"
 
 step "dry-run launch"
 $GCL launch e2e --offline-user e2e-tester --dry-run > "$ROOT/launch.txt"
 pass "dry-run launch"
 
 step "check classpath files exist"
-# The dry run prints one argument per line, indented, so the classpath is the line after `-cp`.
-classpath="$(awk '/^[[:space:]]*-cp$/ { getline; gsub(/^[[:space:]]+/, "", $0); print; exit }' "$ROOT/launch.txt")"
-if [ -z "$classpath" ]; then
-  echo "FAIL: no -cp argument in the launch output"
-  exit 1
-fi
-sep=':'
-case "$classpath" in
-  *\;*) sep=';' ;;
-esac
-missing=0
-count=0
-while IFS= read -r jar; do
-  [ -n "$jar" ] || continue
-  count=$((count + 1))
-  [ -f "$jar" ] || { echo "MISSING $jar"; missing=1; }
-done < <(printf '%s' "$classpath" | tr "$sep" '\n')
-if [ "$count" -eq 0 ]; then
-  echo "FAIL: no classpath entries in launch output"
-  exit 1
-fi
-if [ "$missing" -ne 0 ]; then
-  echo "FAIL: $count classpath entries, some missing"
-  exit 1
-fi
-pass "check classpath files exist ($count entries)"
+check_classpath "$ROOT/launch.txt"

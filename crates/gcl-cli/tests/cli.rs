@@ -38,10 +38,10 @@ fn version_flag_prints_version() {
 }
 
 #[test]
-fn debug_verify_source_is_not_implemented_yet() {
+fn debug_verify_source_rejects_a_source_it_cannot_check() {
     Command::cargo_bin("gcl")
         .unwrap()
-        .args(["debug", "verify-source", "modrinth"])
+        .args(["debug", "verify-source", "nowhere"])
         .assert()
         .code(2)
         .stderr(predicates::str::contains("not implemented"));
@@ -481,12 +481,14 @@ fn launch_of_an_unknown_instance_exits_one() {
 }
 
 #[test]
-fn debug_verify_source_still_rejects_an_unknown_source() {
-    Command::cargo_bin("gcl")
-        .unwrap()
+fn debug_verify_source_skips_curseforge_without_a_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    gcl(dir.path())
+        .env_remove("CURSEFORGE_API_KEY")
         .args(["debug", "verify-source", "curseforge"])
         .assert()
-        .code(2);
+        .success()
+        .stdout(predicates::str::contains("SKIP curseforge"));
 }
 
 #[test]
