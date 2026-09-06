@@ -29,14 +29,6 @@ impl SourceId {
     }
 }
 
-// `sources::Error` variants carry a field named `source: SourceId`. thiserror treats
-// any field literally named `source` as the error's cause and requires it to
-// implement `std::error::Error`, regardless of whether that makes semantic sense.
-// `SourceId` is not itself an error, but this empty impl (on top of the `Display`
-// below) satisfies that bound without renaming the field away from the brief's
-// interface.
-impl std::error::Error for SourceId {}
-
 impl std::fmt::Display for SourceId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
@@ -48,7 +40,7 @@ impl std::fmt::Display for SourceId {
 }
 
 /// Search parameters common to every source.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SearchQuery {
     /// Free-text search string.
     pub text: String,
@@ -60,8 +52,21 @@ pub struct SearchQuery {
     pub loader: Option<Loader>,
     /// Offset into the result set, for pagination.
     pub offset: u32,
-    /// Maximum number of hits to return. Callers default this to 20.
+    /// Maximum number of hits to return. Defaults to 20.
     pub limit: u32,
+}
+
+impl Default for SearchQuery {
+    fn default() -> Self {
+        SearchQuery {
+            text: String::new(),
+            kind: None,
+            minecraft: None,
+            loader: None,
+            offset: 0,
+            limit: 20,
+        }
+    }
 }
 
 /// One search result row.
@@ -250,6 +255,11 @@ pub fn pack_page_url(source: SourceId, slug: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_query_default_limit_is_twenty() {
+        assert_eq!(SearchQuery::default().limit, 20);
+    }
 
     #[test]
     fn source_id_parse_round_trips() {

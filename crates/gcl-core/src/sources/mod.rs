@@ -20,26 +20,26 @@ pub enum Error {
     #[error(transparent)]
     Http(#[from] crate::http::Error),
     /// The requested project does not exist at this source.
-    #[error("{source}: project {id} not found")]
+    #[error("{source_id}: project {id} not found")]
     NotFound {
         /// Source that was queried.
-        source: SourceId,
+        source_id: SourceId,
         /// Id or slug that was not found.
         id: String,
     },
     /// This source does not support the requested content kind.
-    #[error("{source} does not support {kind:?}")]
+    #[error("{source_id} does not support {kind:?}")]
     UnsupportedKind {
         /// Source that was queried.
-        source: SourceId,
+        source_id: SourceId,
         /// Content kind that is not supported.
         kind: ContentKind,
     },
     /// This source is disabled, typically for a missing API key.
-    #[error("{source} is disabled: {reason}")]
+    #[error("{source_id} is disabled: {reason}")]
     Disabled {
         /// Source that is disabled.
-        source: SourceId,
+        source_id: SourceId,
         /// Why it is disabled.
         reason: String,
     },
@@ -57,10 +57,10 @@ pub enum Error {
         sha1: Option<String>,
     },
     /// The source answered, but not in the shape this client expects.
-    #[error("{source}: unexpected response for {what}: {detail}")]
+    #[error("{source_id}: unexpected response for {what}: {detail}")]
     BadResponse {
         /// Source that answered.
-        source: SourceId,
+        source_id: SourceId,
         /// What was being parsed when the shape did not match.
         what: &'static str,
         /// Detail of the mismatch.
