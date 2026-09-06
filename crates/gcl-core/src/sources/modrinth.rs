@@ -126,6 +126,10 @@ impl Source for Modrinth {
         KINDS
     }
 
+    fn as_modrinth(&self) -> Option<&Modrinth> {
+        Some(self)
+    }
+
     #[tracing::instrument(skip(self))]
     async fn search(&self, q: &SearchQuery) -> Result<SearchPage, Error> {
         let mut facets: Vec<Vec<String>> = Vec::new();

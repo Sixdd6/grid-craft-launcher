@@ -188,6 +188,51 @@ impl CurseForge {
         self.fetch_files(mod_id, minecraft, None).await
     }
 
+    /// Resolves a modpack's id or slug to its numeric mod id.
+    ///
+    /// [`Source::project`] refuses a modpack, because a modpack is not a
+    /// [`ContentKind`]; this is the same lookup with that check left out, for
+    /// [`crate::modpacks::fetch_pack`].
+    #[tracing::instrument(skip(self))]
+    pub async fn resolve_pack_id(&self, id_or_slug: &str) -> Result<u32, Error> {
+        if let Ok(id) = id_or_slug.parse::<u32>() {
+            return Ok(id);
+        }
+        Ok(self.fetch_mod(id_or_slug).await?.id)
+    }
+
+    /// Fetches one mod by numeric id, or by slug through the search endpoint.
+    async fn fetch_mod(&self, id_or_slug: &str) -> Result<RawMod, Error> {
+        match id_or_slug.parse::<u32>() {
+            Ok(id) => {
+                let url = format!("{}/v1/mods/{id}", self.base);
+                let body: Envelope<RawMod> = self
+                    .get(&url)
+                    .await
+                    .map_err(|e| map_err(e, "project", Some(id_or_slug)))?;
+                Ok(body.data)
+            }
+            Err(_) => {
+                let url = format!(
+                    "{}/v1/mods/search?gameId={GAME_ID}&slug={}",
+                    self.base,
+                    encode(id_or_slug)
+                );
+                let body: Envelope<Vec<RawMod>> = self
+                    .get(&url)
+                    .await
+                    .map_err(|e| map_err(e, "project", Some(id_or_slug)))?;
+                body.data
+                    .into_iter()
+                    .find(|m| m.slug == id_or_slug)
+                    .ok_or_else(|| Error::NotFound {
+                        source_id: ID,
+                        id: id_or_slug.to_string(),
+                    })
+            }
+        }
+    }
+
     /// Resolves file ids to versions with `POST /v1/mods/files`, in chunks of
     /// [`PAGE_SIZE`]. File ids the server does not know are dropped.
     #[tracing::instrument(skip(self))]
@@ -333,6 +378,10 @@ impl Source for CurseForge {
         KINDS
     }
 
+    fn as_curseforge(&self) -> Option<&CurseForge> {
+        Some(self)
+    }
+
     #[tracing::instrument(skip(self))]
     async fn search(&self, q: &SearchQuery) -> Result<SearchPage, Error> {
         let classes = self.class_ids().await?;
@@ -400,34 +449,7 @@ impl Source for CurseForge {
     #[tracing::instrument(skip(self))]
     async fn project(&self, id_or_slug: &str) -> Result<Project, Error> {
         let classes = self.class_ids().await?;
-        let raw = match id_or_slug.parse::<u32>() {
-            Ok(id) => {
-                let url = format!("{}/v1/mods/{id}", self.base);
-                let body: Envelope<RawMod> = self
-                    .get(&url)
-                    .await
-                    .map_err(|e| map_err(e, "project", Some(id_or_slug)))?;
-                body.data
-            }
-            Err(_) => {
-                let url = format!(
-                    "{}/v1/mods/search?gameId={GAME_ID}&slug={}",
-                    self.base,
-                    encode(id_or_slug)
-                );
-                let body: Envelope<Vec<RawMod>> = self
-                    .get(&url)
-                    .await
-                    .map_err(|e| map_err(e, "project", Some(id_or_slug)))?;
-                body.data
-                    .into_iter()
-                    .find(|m| m.slug == id_or_slug)
-                    .ok_or_else(|| Error::NotFound {
-                        source_id: ID,
-                        id: id_or_slug.to_string(),
-                    })?
-            }
-        };
+        let raw = self.fetch_mod(id_or_slug).await?;
         let class_id = raw.class_id.ok_or_else(|| Error::BadResponse {
             source_id: ID,
             what: "classId",

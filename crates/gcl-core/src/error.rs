@@ -45,4 +45,7 @@ pub enum Error {
     /// Adding, updating, or importing content into an instance failed.
     #[error(transparent)]
     Content(#[from] crate::content::Error),
+    /// Detecting, parsing, or importing a modpack failed.
+    #[error(transparent)]
+    Modpacks(#[from] crate::modpacks::Error),
 }

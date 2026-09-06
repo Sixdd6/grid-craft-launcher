@@ -111,6 +111,23 @@ pub trait Source: Send + Sync {
     /// Resolves versions by CurseForge fingerprint. Modrinth has no fingerprint
     /// endpoint and always returns `Ok(vec![])`.
     async fn resolve_by_fingerprint(&self, fps: &[u32]) -> Result<Vec<Version>, Error>;
+
+    /// The concrete Modrinth client behind this source, when it is one.
+    ///
+    /// Modpack import needs endpoints that are not part of this trait, because a
+    /// modpack is not a [`ContentKind`]: only [`crate::modpacks`] uses them. The
+    /// default is `None`, so no other implementation has to care.
+    fn as_modrinth(&self) -> Option<&modrinth::Modrinth> {
+        None
+    }
+
+    /// The concrete CurseForge client behind this source, when it is one.
+    ///
+    /// See [`Source::as_modrinth`]. CurseForge additionally needs its batch endpoints
+    /// here, which resolve a pack's file ids to files and their classes.
+    fn as_curseforge(&self) -> Option<&curseforge::CurseForge> {
+        None
+    }
 }
 
 /// A shared, type-erased [`Source`].

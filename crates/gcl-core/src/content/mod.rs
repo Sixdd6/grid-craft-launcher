@@ -110,7 +110,7 @@ impl ContentCtx<'_> {
     }
 
     /// Emits an [`Event::Log`] line at info level.
-    fn log(&self, message: impl Into<String>) {
+    pub(crate) fn log(&self, message: impl Into<String>) {
         let _ = self.sink.send(Event::Log {
             level: LogLevel::Info,
             message: message.into(),
@@ -429,7 +429,7 @@ async fn queue_installed_dependencies(
 }
 
 /// The file to install from a version: the primary one, or the first when none is marked.
-fn primary_file(version: &Version) -> Option<&VersionFile> {
+pub(crate) fn primary_file(version: &Version) -> Option<&VersionFile> {
     version
         .files
         .iter()
@@ -491,7 +491,7 @@ async fn install_file(
 /// on arrival and fetched only once. With no published sha1 the staged bytes are hashed
 /// here instead. Objects are written once: the staged copy is dropped when the object is
 /// already in the store.
-async fn fetch_object(
+pub(crate) async fn fetch_object(
     ctx: &ContentCtx<'_>,
     file: &VersionFile,
     label: String,
@@ -539,7 +539,7 @@ async fn fetch_object(
 /// [`place_file`] and [`place_world`] both mutate an [`Instance`] and write
 /// `instance.toml`, and both block on file I/O. The instance moves into the blocking
 /// task and comes back out, so the caller's value carries the saved content list.
-async fn place(
+pub(crate) async fn place(
     instance: &mut Instance,
     object: PathBuf,
     entry: ContentEntry,
