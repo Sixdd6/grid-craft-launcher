@@ -36,4 +36,7 @@ pub enum Error {
     /// An account could not be loaded, saved, or resolved.
     #[error(transparent)]
     Auth(#[from] crate::auth::Error),
+    /// A launch command could not be built, or the game could not be started.
+    #[error(transparent)]
+    Launch(#[from] crate::launch::Error),
 }
