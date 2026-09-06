@@ -39,15 +39,31 @@ impl Launcher {
     pub fn new(
         root_override: Option<PathBuf>,
     ) -> Result<(Launcher, tokio::sync::mpsc::UnboundedReceiver<Event>), crate::Error> {
+        let overridden = root_override.is_some() || std::env::var_os("GCL_ROOT").is_some();
+        let resolved = Root::resolve(root_override.as_deref())?;
+        Self::open(resolved, overridden)
+    }
+
+    /// Builds a launcher over an already-resolved root.
+    ///
+    /// `overridden` says whether `GCL_ROOT` or a caller override decided the root, in which
+    /// case the config's own `root` is ignored.
+    fn open(
+        resolved: Root,
+        overridden: bool,
+    ) -> Result<(Launcher, tokio::sync::mpsc::UnboundedReceiver<Event>), crate::Error> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .thread_name("gcl")
             .enable_all()
             .build()?;
 
-        let overridden = root_override.is_some() || std::env::var_os("GCL_ROOT").is_some();
-        let root = Root::resolve(root_override.as_deref())?;
-        let config = Config::load(&root.config_file())?;
-        let root = redirect_root(root, config.root.as_deref(), overridden);
+        let mut config = Config::load(&resolved.config_file())?;
+        let root = redirect_root(resolved.clone(), config.root.as_deref(), overridden);
+        if root != resolved && root.config_file().is_file() {
+            // The redirected root has its own config.toml. It is the one the user edits and
+            // the one `save_config` writes, so it wins over the config that pointed here.
+            config = Config::load(&root.config_file())?;
+        }
 
         root.ensure_layout()?;
         match cleanup_partials(&root) {
@@ -270,6 +286,50 @@ mod tests {
         }
         let (launcher, _rx) = built.expect("build launcher");
         assert_eq!(launcher.root().path(), env_dir.path());
+    }
+
+    #[test]
+    fn a_redirected_root_keeps_the_settings_saved_there() {
+        let outer = tempfile::tempdir().expect("tempdir");
+        let target = tempfile::tempdir().expect("tempdir");
+        let pointer = crate::config::Config {
+            root: Some(target.path().to_path_buf()),
+            ..crate::config::Config::default()
+        };
+        pointer
+            .save(&outer.path().join("config.toml"))
+            .expect("save pointer config");
+
+        let (mut launcher, _rx) =
+            Launcher::open(Root::from_path(outer.path()), false).expect("first launcher");
+        assert_eq!(launcher.root().path(), target.path());
+        launcher.config_mut().jvm.max_mib = 8192;
+        launcher.save_config().expect("save config");
+
+        let (again, _rx) =
+            Launcher::open(Root::from_path(outer.path()), false).expect("second launcher");
+        assert_eq!(again.root().path(), target.path());
+        assert_eq!(again.config().jvm.max_mib, 8192);
+    }
+
+    #[test]
+    fn a_redirected_root_without_a_config_keeps_the_pointing_config() {
+        let outer = tempfile::tempdir().expect("tempdir");
+        let target = tempfile::tempdir().expect("tempdir");
+        let pointer = crate::config::Config {
+            root: Some(target.path().to_path_buf()),
+            parallel_downloads: 2,
+            ..crate::config::Config::default()
+        };
+        pointer
+            .save(&outer.path().join("config.toml"))
+            .expect("save pointer config");
+
+        let (launcher, _rx) =
+            Launcher::open(Root::from_path(outer.path()), false).expect("launcher");
+        assert_eq!(launcher.root().path(), target.path());
+        assert_eq!(launcher.config().parallel_downloads, 2);
+        assert_eq!(launcher.config().root.as_deref(), Some(target.path()));
     }
 
     #[test]

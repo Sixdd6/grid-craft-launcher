@@ -152,6 +152,30 @@ impl Root {
     }
 }
 
+/// Sequence number keeping two temp files in the same directory apart.
+static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Writes `bytes` to `path` through a temp file in the same directory, then renames.
+///
+/// A reader never sees a half-written file. Parent directories are created as needed.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    let io = |path: &Path| {
+        let path = path.to_path_buf();
+        move |source| Error::Io { path, source }
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(io(parent))?;
+    }
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file".to_string());
+    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_file_name(format!("{name}.{}.{seq}.tmp", std::process::id()));
+    std::fs::write(&tmp, bytes).map_err(io(&tmp))?;
+    std::fs::rename(&tmp, path).map_err(io(path))
+}
+
 /// Turns an arbitrary name into a filesystem- and URL-safe slug.
 ///
 /// Lowercases, keeps `[a-z0-9-]`, collapses runs of `-`, trims leading/trailing `-`, and
@@ -245,6 +269,22 @@ mod tests {
     fn resolve_falls_back_to_platform_data_dir() {
         let root = Root::resolve_with(None, None).unwrap();
         assert!(!root.path().as_os_str().is_empty());
+    }
+
+    #[test]
+    fn write_atomic_leaves_no_temp_file_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("file.toml");
+        write_atomic(&path, b"one").unwrap();
+        write_atomic(&path, b"two").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "two");
+        let leftovers: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
     }
 
     #[test]

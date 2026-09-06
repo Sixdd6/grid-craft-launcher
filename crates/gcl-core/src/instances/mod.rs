@@ -8,7 +8,7 @@ pub mod model;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use crate::paths::{Root, slugify, unique_slug};
+use crate::paths::{Root, slugify, unique_slug, write_atomic};
 use model::{InstanceConfig, Loader};
 
 /// File name of the per-instance config inside an instance directory.
@@ -169,7 +169,12 @@ impl Instances {
                 tracing::warn!(path = %path.display(), "skipping directory with a non-UTF-8 name");
                 continue;
             };
-            out.push(self.load(slug, path.clone())?);
+            match self.load(slug, path.clone()) {
+                Ok(instance) => out.push(instance),
+                Err(source) => {
+                    tracing::warn!(path = %path.display(), %source, "skipping unreadable instance");
+                }
+            }
         }
         out.sort_by(|a, b| a.config.name.cmp(&b.config.name).then(a.slug.cmp(&b.slug)));
         Ok(out)
@@ -235,13 +240,14 @@ fn create_dir(path: &std::path::Path) -> Result<(), Error> {
     })
 }
 
+/// Writes a file through a temp file in the same directory, then renames it into place.
 fn write_file(path: &std::path::Path, bytes: &[u8]) -> Result<(), Error> {
-    if let Some(parent) = path.parent() {
-        create_dir(parent)?;
-    }
-    std::fs::write(path, bytes).map_err(|source| Error::Io {
-        path: path.to_path_buf(),
-        source,
+    write_atomic(path, bytes).map_err(|err| match err {
+        crate::paths::Error::Io { path, source } => Error::Io { path, source },
+        other => Error::Io {
+            path: path.to_path_buf(),
+            source: std::io::Error::other(other.to_string()),
+        },
     })
 }
 
@@ -352,6 +358,41 @@ mod tests {
         let listed = instances.list().expect("list");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].slug, "real");
+    }
+
+    #[test]
+    fn list_skips_an_unparsable_instance_toml() {
+        let (_dir, instances) = fixture();
+        instances
+            .create("Good", "1.20.1", Loader::None, None, &BTreeMap::new())
+            .expect("good");
+        let junk = instances.root().instance_dir("broken");
+        std::fs::create_dir_all(&junk).expect("mkdir");
+        std::fs::write(junk.join("instance.toml"), "this is not = = toml").expect("write");
+        let listed = instances.list().expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].slug, "good");
+    }
+
+    #[test]
+    fn save_leaves_no_temp_file_in_the_instance_directory() {
+        let (_dir, instances) = fixture();
+        let mut created = instances
+            .create("Atomic", "1.20.1", Loader::None, None, &BTreeMap::new())
+            .expect("create");
+        created.config.name = "Atomic Two".to_string();
+        created.save().expect("save");
+        let leftovers: Vec<String> = std::fs::read_dir(&created.dir)
+            .expect("read dir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+        assert_eq!(
+            instances.get("atomic").expect("get").config.name,
+            "Atomic Two"
+        );
     }
 
     #[test]

@@ -367,26 +367,15 @@ fn remove_if_present(path: &Path) -> Result<(), Error> {
     }
 }
 
-/// Counter making every temporary cache file name unique within this process.
-static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// Writes bytes through a temporary file, so a crash never leaves a half-written cache entry.
+/// Writes a cache file atomically. See [`crate::paths::write_atomic`].
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Error> {
-    let io = |path: &Path| {
-        let path = path.to_path_buf();
-        move |source| Error::Io { path, source }
-    };
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(io(parent))?;
-    }
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "cache".to_string());
-    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let tmp = path.with_file_name(format!("{name}.{}.{seq}.tmp", std::process::id()));
-    std::fs::write(&tmp, bytes).map_err(io(&tmp))?;
-    std::fs::rename(&tmp, path).map_err(io(path))
+    crate::paths::write_atomic(path, bytes).map_err(|err| match err {
+        crate::paths::Error::Io { path, source } => Error::Io { path, source },
+        other => Error::Io {
+            path: path.to_path_buf(),
+            source: std::io::Error::other(other.to_string()),
+        },
+    })
 }
 
 /// Parses JSON, naming the file or URL it came from in the error.
