@@ -1,0 +1,16 @@
+---
+source: crates/gcl-core/src/loaders/forgelike_tests.rs
+expression: shape(&profile)
+---
+{
+  "client_processors": 6,
+  "data_keys": 10,
+  "json": "/version.json",
+  "legacy": false,
+  "libraries": 70,
+  "minecraft": "1.21.1",
+  "processors": 10,
+  "profile": "NeoForge",
+  "spec": 1,
+  "version": "neoforge-21.1.250"
+}

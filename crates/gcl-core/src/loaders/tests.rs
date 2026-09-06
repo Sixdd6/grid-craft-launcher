@@ -303,8 +303,10 @@ async fn quilt_list_and_install_use_the_v3_api() {
         .expect("list");
     assert_eq!(versions.len(), 3);
     assert_eq!(versions[0].version, "0.20.0-beta.9");
-    // Nothing in the quilt fixture is stable, so nothing is recommended.
-    assert!(versions.iter().all(|v| !v.stable && !v.recommended));
+    // Quilt omits `stable`, so the newest build is the recommended one.
+    assert!(versions.iter().all(|v| !v.stable));
+    assert!(versions[0].recommended);
+    assert!(versions[1..].iter().all(|v| !v.recommended));
 
     let id = install(&ctx, &ep, Loader::Quilt, "1.20.1", "0.20.0-beta.9")
         .await
@@ -358,4 +360,68 @@ async fn forge_like_and_vanilla_loaders_are_not_supported_yet() {
             .expect_err("not supported yet");
         assert!(matches!(err, Error::Unsupported(_, l) if l == loader));
     }
+}
+
+#[tokio::test]
+async fn fabric_like_urls_percent_encode_the_version_segments() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+        .mount(&server)
+        .await;
+    let h = Harness::new();
+    let dl = h.dl();
+    let ctx = h.ctx(&dl);
+
+    let versions = list_versions(
+        &ctx,
+        &endpoints(&server.uri()),
+        Loader::Fabric,
+        "1.20.1/../../evil",
+    )
+    .await
+    .expect("list");
+    assert!(versions.is_empty());
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("mock server records requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].url.path(),
+        "/v2/versions/loader/1.20.1%2F..%2F..%2Fevil"
+    );
+}
+
+#[tokio::test]
+async fn fabric_like_install_urls_percent_encode_the_loader_version() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    let h = Harness::new();
+    let dl = h.dl();
+    let ctx = h.ctx(&dl);
+
+    let err = install(
+        &ctx,
+        &endpoints(&server.uri()),
+        Loader::Quilt,
+        "1.20.1",
+        "0.20.0 beta9",
+    )
+    .await
+    .expect_err("404");
+    assert!(matches!(err, Error::NoSuchVersion { .. }), "{err:?}");
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("mock server records requests");
+    assert_eq!(
+        requests[0].url.path(),
+        "/v3/versions/loader/1.20.1/0.20.0%20beta9/profile/json"
+    );
 }

@@ -129,7 +129,7 @@ pub fn plan_install(
 }
 
 /// Builds the spec and cache path for a library's main jar.
-fn library_spec(
+pub(crate) fn library_spec(
     lib: &Library,
     root: &crate::paths::Root,
     base_override: Option<&str>,

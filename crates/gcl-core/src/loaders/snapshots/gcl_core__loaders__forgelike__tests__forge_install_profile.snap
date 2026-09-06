@@ -1,0 +1,16 @@
+---
+source: crates/gcl-core/src/loaders/forgelike_tests.rs
+expression: shape(&profile)
+---
+{
+  "client_processors": 6,
+  "data_keys": 13,
+  "json": "/version.json",
+  "legacy": false,
+  "libraries": 36,
+  "minecraft": "1.20.1",
+  "processors": 10,
+  "profile": "forge",
+  "spec": 1,
+  "version": "1.20.1-forge-47.4.10"
+}

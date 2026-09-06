@@ -5,6 +5,7 @@
 
 pub mod fabric;
 pub mod fabriclike;
+pub mod forgelike;
 pub mod processors;
 pub mod quilt;
 
@@ -13,7 +14,11 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 pub use crate::instances::model::Loader;
-pub use processors::ProcessRunner;
+pub use forgelike::{
+    DataEntry, DataMap, InstallProfile, InstallerJar, Processor, build_data_map, library_specs,
+    substitute,
+};
+pub use processors::{JavaRunner, ProcessRunner, run_processors};
 
 use crate::download::DownloadCtx;
 use crate::http::HttpClient;
@@ -97,6 +102,12 @@ pub enum Error {
     /// An installer named a path that escapes the directory it is written into.
     #[error("unsafe path in installer: {0}")]
     UnsafePath(String),
+    /// A processor argument used a `{KEY}` the installer's data map does not define.
+    #[error("installer data map has no key {0}")]
+    UnknownDataKey(String),
+    /// A processor jar's manifest declares no `Main-Class`.
+    #[error("processor jar {0} declares no Main-Class")]
+    ProcessorMain(String),
 }
 
 /// One installable loader build for a given Minecraft version.
@@ -205,5 +216,7 @@ pub async fn install(
     }
 }
 
+#[cfg(test)]
+mod test_support;
 #[cfg(test)]
 mod tests;
