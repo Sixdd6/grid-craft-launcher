@@ -18,6 +18,9 @@ pub enum Error {
     /// A download or cache operation failed.
     #[error(transparent)]
     Download(#[from] crate::download::Error),
+    /// Java detection or a Mojang runtime install failed.
+    #[error(transparent)]
+    Java(#[from] crate::java::Error),
     /// A Mojang metadata fetch, cache read, or parse failed.
     #[error(transparent)]
     Mojang(#[from] crate::mojang::Error),
