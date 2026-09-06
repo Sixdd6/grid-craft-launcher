@@ -40,11 +40,14 @@ const UNSUPPORTED: &str = "unsupported";
 
 /// Parses `modrinth.index.json` into a [`PackPlan`].
 ///
+/// `extra_hosts` adds to [`ALLOWED_HOSTS`] for this call only; pass an empty slice for
+/// the specification's list on its own.
+///
 /// `dependencies` must name `minecraft` and exactly one loader: a modpack with no
 /// loader is not something this MVP installs, so it is a parse error rather than a
 /// vanilla instance. Files whose `env.client` is `unsupported` are dropped; `optional`
 /// files are kept, which is what the launcher's MVP promises.
-pub fn parse(json: &str) -> Result<PackPlan, Error> {
+pub fn parse(json: &str, extra_hosts: &[String]) -> Result<PackPlan, Error> {
     let raw: RawIndex = serde_json::from_str(json).map_err(|source| Error::Parse {
         what: "modrinth.index.json",
         detail: source.to_string(),
@@ -73,7 +76,7 @@ pub fn parse(json: &str) -> Result<PackPlan, Error> {
             detail: file.path.clone(),
         })?;
         let host = host_of(&url).ok_or_else(|| Error::DisallowedHost(url.clone()))?;
-        if !host_allowed(host) {
+        if !host_allowed(host, extra_hosts) {
             return Err(Error::DisallowedHost(host.to_string()));
         }
         let sha1 = file.hashes.sha1.ok_or(Error::Parse {

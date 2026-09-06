@@ -33,12 +33,12 @@ const CF_MANIFEST: &str = "manifest.json";
 /// `manifestType` value that marks a CurseForge zip as a Minecraft modpack.
 const CF_PACK_TYPE: &str = "minecraftModpack";
 
-/// Test-only override that adds hosts to the `.mrpack` download allowlist.
+/// Largest manifest this module reads out of a pack archive, in bytes.
 ///
-/// Its value is a comma-separated host list. It exists so an integration test can serve
-/// pack files from a local mock server; it is never a user setting, and nothing in the
-/// launcher sets it. See the `testing` skill for the other test-only environment seams.
-pub const EXTRA_HOSTS_ENV: &str = "GCL_PACK_EXTRA_HOSTS";
+/// A zip entry's declared size is attacker-controlled, so the manifest is read through a
+/// cap rather than into an unbounded `String`. 8 MiB is far above any real
+/// `modrinth.index.json`, whose files list is the only part that grows.
+const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Errors from detecting, parsing, or importing a modpack.
 #[derive(Debug, thiserror::Error)]
@@ -151,6 +151,9 @@ pub struct ImportRequest {
     pub keep_partial: bool,
     /// Where the pack came from, recorded in `instance.toml`.
     pub pack_source: Option<PackSource>,
+    /// Extra download hosts this one import may fetch `.mrpack` files from, on top of
+    /// [`mrpack::ALLOWED_HOSTS`]. Normally empty; a test points it at its mock server.
+    pub extra_hosts: Vec<String>,
 }
 
 /// What one [`import`] call produced.
@@ -178,7 +181,7 @@ pub fn detect(zip: &Path) -> Result<PackFormat, Error> {
         return Ok(PackFormat::Mrpack);
     }
     let text = match archive.by_name(CF_MANIFEST) {
-        Ok(mut entry) => read_entry(&mut entry, zip)?,
+        Ok(mut entry) => read_entry(&mut entry, zip, CF_MANIFEST)?,
         Err(_) => return Err(Error::UnknownFormat),
     };
     let manifest_type = serde_json::from_str::<serde_json::Value>(&text)
@@ -192,9 +195,13 @@ pub fn detect(zip: &Path) -> Result<PackFormat, Error> {
 
 /// Detects `zip`'s format and parses its manifest into a [`PackPlan`].
 ///
+/// `extra_hosts` adds to the `.mrpack` download allowlist; pass an empty slice for the
+/// specification's list on its own. It is [`ImportRequest::extra_hosts`], so a plan read
+/// ahead of an import and the import itself accept the same hosts.
+///
 /// This blocks on file I/O; async callers wrap it in `tokio::task::spawn_blocking`.
 #[tracing::instrument]
-pub fn read_plan(zip: &Path) -> Result<(PackFormat, PackPlan), Error> {
+pub fn read_plan(zip: &Path, extra_hosts: &[String]) -> Result<(PackFormat, PackPlan), Error> {
     let format = detect(zip)?;
     let name = match format {
         PackFormat::Mrpack => MRPACK_INDEX,
@@ -202,9 +209,9 @@ pub fn read_plan(zip: &Path) -> Result<(PackFormat, PackPlan), Error> {
     };
     let mut archive = open_zip(zip)?;
     let mut entry = archive.by_name(name).map_err(zip_at(zip))?;
-    let text = read_entry(&mut entry, zip)?;
+    let text = read_entry(&mut entry, zip, name)?;
     let plan = match format {
-        PackFormat::Mrpack => mrpack::parse(&text)?,
+        PackFormat::Mrpack => mrpack::parse(&text, extra_hosts)?,
         PackFormat::CurseForge => curseforge::parse(&text)?,
     };
     Ok((format, plan))
@@ -228,7 +235,8 @@ pub async fn import(
     req: ImportRequest,
 ) -> Result<ImportOutcome, Error> {
     let zip = req.zip.clone();
-    let (format, plan) = tokio::task::spawn_blocking(move || read_plan(&zip))
+    let extra_hosts = req.extra_hosts.clone();
+    let (format, plan) = tokio::task::spawn_blocking(move || read_plan(&zip, &extra_hosts))
         .await
         .map_err(join_at(&req.zip))??;
     ctx.log(format!(
@@ -245,8 +253,6 @@ pub async fn import(
         game_defaults,
     )?;
     ctx.log(format!("created instance {}", instance.slug));
-    instance.config.pack = req.pack_source.clone();
-    instance.save()?;
 
     match install(ctx, &mut instance, loader_ctx, ep, &plan, format, &req).await {
         Ok((installed, manual)) => Ok(ImportOutcome {
@@ -275,6 +281,12 @@ async fn install(
     format: PackFormat,
     req: &ImportRequest,
 ) -> Result<(usize, Vec<ManualDownload>), Error> {
+    // Recording the pack belongs inside this function, not beside `create`: a failing
+    // save is then rolled back like any other step, instead of leaving an instance that
+    // does not know which pack it came from.
+    instance.config.pack = req.pack_source.clone();
+    instance.save()?;
+
     if plan.loader != Loader::None {
         ctx.log(format!(
             "installing {} {}",
@@ -400,6 +412,7 @@ async fn install_curseforge_files(
         .filter_map(|(_, _, file_id)| file_id.parse().ok())
         .collect();
     let versions = client.files_batch(&file_ids).await?;
+    report_unresolved(ctx, &file_ids, &versions);
 
     let mut mod_ids: Vec<u32> = versions
         .iter()
@@ -424,12 +437,14 @@ async fn install_curseforge_files(
         ctx.log(format!("files {}/{total}: {}", index + 1, file.file_name));
 
         if file.url.is_none() {
-            let page_url = match project {
-                Some(project) => {
-                    crate::sources::curseforge::file_page_url(&project.page_url, &version.id)
-                }
-                None => crate::sources::pack_page_url(SourceId::CurseForge, &version.project_id),
+            // A project the batch did not return still gets a page under its own id,
+            // which CurseForge redirects to the real slug. `pack_page_url` would be
+            // wrong here: this is one file inside a project, not the pack itself.
+            let project_page = match project {
+                Some(project) => project.page_url.clone(),
+                None => crate::sources::page_url(SourceId::CurseForge, kind, &version.project_id),
             };
+            let page_url = crate::sources::curseforge::file_page_url(&project_page, &version.id);
             ctx.log(format!(
                 "{} must be downloaded by hand from {page_url}",
                 file.file_name
@@ -463,6 +478,27 @@ async fn install_curseforge_files(
         placed += 1;
     }
     Ok((placed, manual))
+}
+
+/// Logs the file ids `files_batch` did not answer for.
+///
+/// CurseForge drops an id it does not know rather than failing, so a pack naming a
+/// deleted file installs everything else and says nothing. This says it: those mods are
+/// simply not in the instance, and the user has to know before they wonder why.
+fn report_unresolved(ctx: &ContentCtx<'_>, asked: &[u32], got: &[Version]) {
+    let missing: Vec<String> = asked
+        .iter()
+        .filter(|id| !got.iter().any(|v| v.id == id.to_string()))
+        .map(u32::to_string)
+        .collect();
+    if !missing.is_empty() {
+        ctx.log(format!(
+            "CurseForge did not resolve {} of {} pack files: {}",
+            missing.len(),
+            asked.len(),
+            missing.join(", ")
+        ));
+    }
 }
 
 /// Copies every override prefix over `game_dir`, in order, and returns the file count.
@@ -623,21 +659,17 @@ fn host_of(url: &str) -> Option<&str> {
 
 /// Whether a `.mrpack` may download from `host`.
 ///
-/// The allowlist is [`mrpack::ALLOWED_HOSTS`], compared without regard to case. Tests
-/// add their mock server's host through [`EXTRA_HOSTS_ENV`].
-fn host_allowed(host: &str) -> bool {
-    if mrpack::ALLOWED_HOSTS
+/// The allowlist is [`mrpack::ALLOWED_HOSTS`] plus `extra`, compared without regard to
+/// case. `extra` only ever adds: it is [`ImportRequest::extra_hosts`], which a caller
+/// sets deliberately, and an empty slice leaves the specification's list exactly as it
+/// is.
+fn host_allowed(host: &str, extra: &[String]) -> bool {
+    mrpack::ALLOWED_HOSTS
         .iter()
         .any(|allowed| allowed.eq_ignore_ascii_case(host))
-    {
-        return true;
-    }
-    match std::env::var(EXTRA_HOSTS_ENV) {
-        Ok(extra) => extra
-            .split(',')
-            .any(|allowed| allowed.trim().eq_ignore_ascii_case(host)),
-        Err(_) => false,
-    }
+        || extra
+            .iter()
+            .any(|allowed| allowed.trim().eq_ignore_ascii_case(host))
 }
 
 /// Rejects a pack path that would land outside the game directory.
@@ -684,10 +716,28 @@ fn open_zip(path: &Path) -> Result<zip::ZipArchive<std::fs::File>, Error> {
     zip::ZipArchive::new(file).map_err(zip_at(path))
 }
 
-/// Reads one zip entry into a string.
-fn read_entry(entry: &mut impl std::io::Read, path: &Path) -> Result<String, Error> {
+/// Reads one zip entry into a string, refusing anything over [`MAX_MANIFEST_BYTES`].
+///
+/// `what` names the entry in the error. The read takes one byte more than the cap, so an
+/// oversized manifest is reported rather than silently truncated into a parse failure.
+fn read_entry(
+    entry: &mut impl std::io::Read,
+    path: &Path,
+    what: &'static str,
+) -> Result<String, Error> {
+    use std::io::Read as _;
+
     let mut text = String::new();
-    entry.read_to_string(&mut text).map_err(io_at(path))?;
+    entry
+        .take(MAX_MANIFEST_BYTES + 1)
+        .read_to_string(&mut text)
+        .map_err(io_at(path))?;
+    if text.len() as u64 > MAX_MANIFEST_BYTES {
+        return Err(Error::Parse {
+            what,
+            detail: "manifest too large".to_string(),
+        });
+    }
     Ok(text)
 }
 

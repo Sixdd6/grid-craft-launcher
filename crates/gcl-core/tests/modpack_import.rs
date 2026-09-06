@@ -35,8 +35,11 @@ const MOD_JAR: &[u8] = b"synthetic mod jar";
 /// Bytes of the pack file that lands outside a folder the content list manages.
 const CONFIG_TXT: &[u8] = b"key = value";
 
-/// Body of the one override file, which must end up in the game directory.
-const OVERRIDE_TOML: &str = "greeting = \"hello\"\n";
+/// Body of `overrides/config/x.toml`, which `client-overrides/` then replaces.
+const OVERRIDE_TOML: &str = "greeting = \"from overrides\"\n";
+
+/// Body of `client-overrides/config/x.toml`, which must win.
+const CLIENT_OVERRIDE_TOML: &str = "greeting = \"from client-overrides\"\n";
 
 /// Everything the contexts borrow, kept alive for the length of a test.
 struct Harness {
@@ -152,21 +155,21 @@ fn write_mrpack(dir: &std::path::Path, base: &str) -> PathBuf {
     let bytes = zip_bytes(&[
         ("modrinth.index.json", index.into_bytes()),
         ("overrides/config/x.toml", OVERRIDE_TOML.as_bytes().to_vec()),
+        ("overrides/config/only-base.toml", b"base = true\n".to_vec()),
         ("overrides/", Vec::new()),
+        (
+            "client-overrides/config/x.toml",
+            CLIENT_OVERRIDE_TOML.as_bytes().to_vec(),
+        ),
     ]);
     let path = dir.join("test.mrpack");
     std::fs::write(&path, bytes).expect("write mrpack");
     path
 }
 
-/// Lets a pack download from the mock server, which is not on the mrpack allowlist.
-///
-/// Every test sets the same value, so nextest's process-per-test isolation and a
-/// same-process run both see a stable one.
-fn allow_local_hosts() {
-    // SAFETY: tests run one per process under nextest, and every caller sets the same
-    // value, so no other thread can observe a half-written environment.
-    unsafe { std::env::set_var(modpacks::EXTRA_HOSTS_ENV, "127.0.0.1,localhost") };
+/// Hosts the mock server answers on, which the mrpack allowlist does not carry.
+fn local_hosts() -> Vec<String> {
+    vec!["127.0.0.1".to_string(), "localhost".to_string()]
 }
 
 /// Runs `import` over the harness with the pack's own source recorded.
@@ -211,6 +214,7 @@ async fn import(
                 project_id: "abc123".to_string(),
                 version_id: "ver456".to_string(),
             }),
+            extra_hosts: local_hosts(),
         },
     )
     .await
@@ -218,7 +222,6 @@ async fn import(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn import_installs_the_loader_the_files_and_the_overrides() {
-    allow_local_hosts();
     let server = MockServer::start().await;
     mock_pack_hosts(&server, 200).await;
 
@@ -264,10 +267,16 @@ async fn import_installs_the_loader_the_files_and_the_overrides() {
         "the client-unsupported file was skipped"
     );
 
-    // The override landed too.
+    // The overrides landed, and `client-overrides/` won where the two collide.
     assert_eq!(
         std::fs::read_to_string(game_dir.join("config/x.toml")).expect("override"),
-        OVERRIDE_TOML
+        CLIENT_OVERRIDE_TOML,
+        "client-overrides/ is applied after overrides/"
+    );
+    assert_eq!(
+        std::fs::read_to_string(game_dir.join("config/only-base.toml")).expect("override"),
+        "base = true\n",
+        "a file only overrides/ has still lands"
     );
 
     // Only the file under `mods/` is recorded in the content list.
@@ -300,7 +309,6 @@ async fn import_installs_the_loader_the_files_and_the_overrides() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_failed_download_removes_the_partial_instance() {
-    allow_local_hosts();
     let server = MockServer::start().await;
     mock_pack_hosts(&server, 404).await;
 
@@ -322,7 +330,6 @@ async fn a_failed_download_removes_the_partial_instance() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn keep_partial_leaves_the_instance_behind() {
-    allow_local_hosts();
     let server = MockServer::start().await;
     mock_pack_hosts(&server, 404).await;
 

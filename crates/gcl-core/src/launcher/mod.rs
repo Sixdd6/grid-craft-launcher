@@ -710,7 +710,16 @@ impl Launcher {
         name: Option<String>,
         pack_source: Option<PackSource>,
     ) -> Result<ImportOutcome, crate::Error> {
-        let (_, plan) = crate::modpacks::read_plan(zip)?;
+        let req = ImportRequest {
+            zip: zip.to_path_buf(),
+            name,
+            keep_partial: false,
+            pack_source,
+            // The launcher only ever fetches a pack's files from the hosts the mrpack
+            // specification names. `extra_hosts` exists for tests that serve them locally.
+            extra_hosts: Vec::new(),
+        };
+        let (_, plan) = crate::modpacks::read_plan(zip, &req.extra_hosts)?;
         let java = match plan.loader {
             Loader::Forge | Loader::NeoForge => Some(self.java_for_version(&plan.minecraft)?),
             _ => None,
@@ -724,12 +733,6 @@ impl Launcher {
         let loader_ctx = LoaderCtx {
             mojang: Some(&mojang),
             ..self.loader_ctx(&dl, java.as_ref(), self.process_runner.as_deref())
-        };
-        let req = ImportRequest {
-            zip: zip.to_path_buf(),
-            name,
-            keep_partial: false,
-            pack_source,
         };
         let outcome = self.block_on(crate::modpacks::import(
             &ctx,

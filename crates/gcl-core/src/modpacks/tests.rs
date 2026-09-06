@@ -125,7 +125,7 @@ fn mrpack_parse_reads_the_plan_and_skips_an_unsupported_client_file() {
             "unsupported"
         ),
     );
-    let plan = mrpack::parse(&index(&files, FABRIC_DEPS)).expect("parse");
+    let plan = mrpack::parse(&index(&files, FABRIC_DEPS), &[]).expect("parse");
 
     assert_eq!(plan.name, "Test Pack");
     assert_eq!(plan.version, "1.2.3");
@@ -156,7 +156,7 @@ fn mrpack_parse_reads_every_loader_key() {
         ("neoforge", Loader::NeoForge),
     ] {
         let deps = format!(r#"{{ "minecraft": "1.20.1", "{key}": "9.9" }}"#);
-        let plan = mrpack::parse(&index("", &deps)).expect("parse");
+        let plan = mrpack::parse(&index("", &deps), &[]).expect("parse");
         assert_eq!(plan.loader, loader, "{key}");
         assert_eq!(plan.loader_version, "9.9");
     }
@@ -169,7 +169,7 @@ fn mrpack_parse_rejects_a_disallowed_download_host() {
         "https://evil.example.com/a.jar",
         "required",
     );
-    let err = mrpack::parse(&index(&files, FABRIC_DEPS)).expect_err("disallowed");
+    let err = mrpack::parse(&index(&files, FABRIC_DEPS), &[]).expect_err("disallowed");
     assert!(
         matches!(&err, Error::DisallowedHost(host) if host == "evil.example.com"),
         "{err:?}"
@@ -182,17 +182,44 @@ fn mrpack_parse_accepts_every_allowed_host_case_insensitively() {
         let url = format!("https://{}/a.jar", host.to_ascii_uppercase());
         let files = mrpack_file("mods/a.jar", &url, "required");
         assert!(
-            mrpack::parse(&index(&files, FABRIC_DEPS)).is_ok(),
+            mrpack::parse(&index(&files, FABRIC_DEPS), &[]).is_ok(),
             "{host} was rejected"
         );
     }
 }
 
 #[test]
+fn mrpack_parse_accepts_an_extra_host_only_when_the_caller_asks_for_it() {
+    let files = mrpack_file("mods/a.jar", "https://127.0.0.1:8080/a.jar", "required");
+    let json = index(&files, FABRIC_DEPS);
+    assert!(
+        matches!(mrpack::parse(&json, &[]), Err(Error::DisallowedHost(_))),
+        "an empty extra list leaves the specification's allowlist alone"
+    );
+    let extra = vec!["127.0.0.1".to_string()];
+    assert!(mrpack::parse(&json, &extra).is_ok());
+}
+
+#[test]
+fn read_plan_refuses_a_manifest_over_the_size_cap() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let padding = "x".repeat(super::MAX_MANIFEST_BYTES as usize + 16);
+    let huge = format!(r#"{{ "name": "P", "summary": "{padding}" }}"#);
+    let zip = write_zip(dir.path(), "big.mrpack", &[(MRPACK_INDEX, &huge)]);
+
+    let err = read_plan(&zip, &[]).expect_err("too large");
+    assert!(
+        matches!(&err, Error::Parse { what, detail }
+            if *what == MRPACK_INDEX && detail == "manifest too large"),
+        "{err:?}"
+    );
+}
+
+#[test]
 fn mrpack_parse_rejects_a_path_that_escapes_the_game_directory() {
     for path in ["../evil.jar", "mods/../../evil.jar"] {
         let files = mrpack_file(path, "https://cdn.modrinth.com/a.jar", "required");
-        let err = mrpack::parse(&index(&files, FABRIC_DEPS)).expect_err("unsafe");
+        let err = mrpack::parse(&index(&files, FABRIC_DEPS), &[]).expect_err("unsafe");
         assert!(matches!(err, Error::UnsafePath(_)), "{path}: {err:?}");
     }
 }
@@ -203,7 +230,7 @@ fn mrpack_parse_rejects_a_file_without_a_sha1() {
         r#"{ "path": "mods/a.jar", "downloads": ["https://cdn.modrinth.com/a.jar"] }"#,
         FABRIC_DEPS,
     );
-    let err = mrpack::parse(&json).expect_err("no sha1");
+    let err = mrpack::parse(&json, &[]).expect_err("no sha1");
     assert!(
         matches!(err, Error::Parse { what: "hashes", .. }),
         "{err:?}"
@@ -216,7 +243,7 @@ fn mrpack_parse_rejects_a_file_with_no_download_url() {
         r#"{ "path": "mods/a.jar", "hashes": { "sha1": "aa" }, "downloads": [] }"#,
         FABRIC_DEPS,
     );
-    let err = mrpack::parse(&json).expect_err("no downloads");
+    let err = mrpack::parse(&json, &[]).expect_err("no downloads");
     assert!(
         matches!(
             err,
@@ -231,13 +258,15 @@ fn mrpack_parse_rejects_a_file_with_no_download_url() {
 
 #[test]
 fn mrpack_parse_rejects_dependencies_without_minecraft_or_a_loader() {
-    let no_mc = mrpack::parse(&index("", r#"{ "fabric-loader": "1" }"#)).expect_err("no minecraft");
+    let no_mc =
+        mrpack::parse(&index("", r#"{ "fabric-loader": "1" }"#), &[]).expect_err("no minecraft");
     assert!(
         matches!(&no_mc, Error::Parse { what: "dependencies", detail } if detail == "no minecraft"),
         "{no_mc:?}"
     );
 
-    let no_loader = mrpack::parse(&index("", r#"{ "minecraft": "1.20.1" }"#)).expect_err("none");
+    let no_loader =
+        mrpack::parse(&index("", r#"{ "minecraft": "1.20.1" }"#), &[]).expect_err("none");
     assert!(
         matches!(&no_loader, Error::Parse { what: "dependencies", detail } if detail == "no loader"),
         "{no_loader:?}"
@@ -247,7 +276,7 @@ fn mrpack_parse_rejects_dependencies_without_minecraft_or_a_loader() {
         "",
         r#"{ "minecraft": "1.20.1", "forge": "1", "neoforge": "2" }"#,
     );
-    let err = mrpack::parse(&two).expect_err("two loaders");
+    let err = mrpack::parse(&two, &[]).expect_err("two loaders");
     assert!(
         matches!(
             &err,
@@ -424,7 +453,7 @@ mod online {
         sink: EventSink,
         cancel: CancellationToken,
         sources: Vec<BoxSource>,
-        _rx: tokio::sync::mpsc::UnboundedReceiver<Event>,
+        rx: tokio::sync::mpsc::UnboundedReceiver<Event>,
         _dir: tempfile::TempDir,
     }
 
@@ -440,9 +469,20 @@ mod online {
                 sink,
                 cancel: CancellationToken::new(),
                 sources,
-                _rx: rx,
+                rx,
                 _dir: dir,
             }
+        }
+
+        /// Every `Event::Log` message emitted so far.
+        fn logs(&mut self) -> Vec<String> {
+            let mut out = Vec::new();
+            while let Ok(event) = self.rx.try_recv() {
+                if let Event::Log { message, .. } = event {
+                    out.push(message);
+                }
+            }
+            out
         }
 
         fn dl(&self) -> DownloadCtx<'_> {
@@ -638,7 +678,7 @@ mod online {
             KEY.to_string(),
             server.uri(),
         ));
-        let harness = Harness::new(vec![client]);
+        let mut harness = Harness::new(vec![client]);
         let mut instance = Instances::new(harness.root.clone())
             .create("Pack", "1.20.1", Loader::Fabric, None, &BTreeMap::new())
             .expect("create");
@@ -658,6 +698,15 @@ mod online {
                 sha1: None,
                 size: None,
                 source: Some((SourceId::CurseForge, "6002".to_string(), "1002".to_string())),
+                required: true,
+            },
+            // CurseForge answers nothing for this id, which must be reported, not hidden.
+            PackFile {
+                path: None,
+                url: None,
+                sha1: None,
+                size: None,
+                source: Some((SourceId::CurseForge, "6003".to_string(), "1003".to_string())),
                 required: true,
             },
         ];
@@ -685,10 +734,16 @@ mod online {
         assert_eq!(manual.len(), 1);
         assert_eq!(manual[0].version_id, "1002");
         assert_eq!(manual[0].file_name, "file-1002.jar");
+        assert_eq!(
+            manual[0].page_url, "https://www.curseforge.com/minecraft/texture-packs/two/files/1002",
+            "the file's own page under its project, not the pack's"
+        );
+
+        let logs = harness.logs();
         assert!(
-            manual[0].page_url.ends_with("/files/1002"),
-            "{}",
-            manual[0].page_url
+            logs.iter()
+                .any(|l| l.contains("did not resolve") && l.contains("1003")),
+            "the unresolved file id is reported: {logs:?}"
         );
     }
 
