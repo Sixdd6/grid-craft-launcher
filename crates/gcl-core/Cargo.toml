@@ -1,0 +1,13 @@
+[package]
+name = "gcl-core"
+description = "Core library for GRID Craft Launcher: instances, versions, loaders, sources, auth, launch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
