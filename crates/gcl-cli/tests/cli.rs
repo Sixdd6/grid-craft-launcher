@@ -245,3 +245,246 @@ fn unknown_instance_reports_an_error_and_exits_one() {
         .code(1)
         .stderr(predicates::str::contains("error:"));
 }
+
+mod common;
+
+const FABRIC_LOADERS: &str = include_str!("../../../tests/fixtures/fabric/loader_1.20.1.json");
+const MC: &str = "1.20.1";
+
+/// A mock Fabric meta serving the loader list fixture for 1.20.1.
+async fn mock_fabric() -> MockServer {
+    let server = MockServer::start().await;
+    common::serve(
+        &server,
+        &format!("/v2/versions/loader/{MC}"),
+        FABRIC_LOADERS.as_bytes().to_vec(),
+    )
+    .await;
+    server
+}
+
+/// Writes a `config.toml` that pins the java binary, so no test reaches the runtime endpoints.
+fn pin_java(root: &Path) {
+    std::fs::write(
+        root.join("config.toml"),
+        "[jvm]\njava_path = \"/usr/bin/java\"\n",
+    )
+    .expect("write config");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn loader_list_json_prints_every_build() {
+    let server = mock_fabric().await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().to_path_buf();
+    let uri = server.uri();
+
+    let out = tokio::task::spawn_blocking(move || {
+        gcl(&root)
+            .env("GCL_FABRIC_BASE_URL", uri)
+            .args(["--json", "loader", "list", MC, "--loader", "fabric"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone()
+    })
+    .await
+    .expect("command runs");
+
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("stdout is json");
+    let entries = parsed.as_array().expect("an array");
+    assert_eq!(entries.len(), 3, "{parsed}");
+    assert_eq!(entries[0]["version"], "0.19.5");
+    assert_eq!(entries[0]["recommended"], true);
+}
+
+#[test]
+fn account_add_offline_becomes_the_active_account() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    gcl(dir.path())
+        .args(["account", "add-offline", "alice"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("alice"));
+
+    let out = gcl(dir.path())
+        .args(["--json", "account", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("stdout is json");
+    let entries = parsed.as_array().expect("an array");
+    assert_eq!(entries.len(), 1, "{parsed}");
+    assert_eq!(entries[0]["name"], "alice");
+    assert_eq!(entries[0]["kind"], "offline");
+    assert_eq!(entries[0]["active"], true);
+}
+
+#[test]
+fn account_remove_takes_a_name_and_empties_the_list() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    gcl(dir.path())
+        .args(["account", "add-offline", "alice"])
+        .assert()
+        .success();
+    gcl(dir.path())
+        .args(["account", "remove", "alice"])
+        .assert()
+        .success();
+    let out = gcl(dir.path())
+        .args(["--json", "account", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("stdout is json");
+    assert_eq!(parsed.as_array().expect("an array").len(), 0);
+}
+
+#[test]
+fn settings_set_is_shown_as_an_override_over_the_preseeded_options() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    gcl(dir.path())
+        .args(["settings", "defaults", "set", "renderDistance", "8"])
+        .assert()
+        .success();
+    gcl(dir.path())
+        .args(["instance", "create", "Demo", "--minecraft", MC])
+        .assert()
+        .success();
+    gcl(dir.path())
+        .args(["settings", "set", "demo", "renderDistance", "16"])
+        .assert()
+        .success();
+
+    let out = gcl(dir.path())
+        .args(["--json", "settings", "show", "demo"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("stdout is json");
+    assert_eq!(parsed["overrides"]["renderDistance"], "16", "{parsed}");
+    assert_eq!(parsed["options"]["renderDistance"], "8", "{parsed}");
+
+    gcl(dir.path())
+        .args(["settings", "unset", "demo", "renderDistance"])
+        .assert()
+        .success();
+    let out = gcl(dir.path())
+        .args(["--json", "settings", "show", "demo"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("stdout is json");
+    assert!(parsed["overrides"].as_object().expect("a map").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn launch_dry_run_names_the_offline_user() {
+    let server = MockServer::start().await;
+    common::mock_vanilla(&server, MC).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().to_path_buf();
+    let uri = server.uri();
+
+    let out = tokio::task::spawn_blocking(move || {
+        pin_java(&root);
+        gcl(&root)
+            .env("GCL_MOJANG_BASE_URL", &uri)
+            .args(["instance", "create", "Demo", "--minecraft", MC])
+            .assert()
+            .success();
+        gcl(&root)
+            .env("GCL_MOJANG_BASE_URL", &uri)
+            .args(["launch", "demo", "--offline-user", "bob", "--dry-run"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone()
+    })
+    .await
+    .expect("command runs");
+
+    let text = String::from_utf8(out).expect("utf-8 stdout");
+    assert!(text.starts_with("program: "), "{text}");
+    assert!(text.contains("\nargs:\n"), "{text}");
+    let args: Vec<&str> = text.lines().map(str::trim).collect();
+    let user = args
+        .iter()
+        .position(|a| *a == "--username")
+        .expect("a --username argument");
+    assert_eq!(args[user + 1], "bob", "{text}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn launch_dry_run_json_is_the_launch_command() {
+    let server = MockServer::start().await;
+    common::mock_vanilla(&server, MC).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().to_path_buf();
+    let uri = server.uri();
+
+    let out = tokio::task::spawn_blocking(move || {
+        pin_java(&root);
+        gcl(&root)
+            .env("GCL_MOJANG_BASE_URL", &uri)
+            .args(["instance", "create", "Demo", "--minecraft", MC])
+            .assert()
+            .success();
+        gcl(&root)
+            .env("GCL_MOJANG_BASE_URL", &uri)
+            .args([
+                "--json",
+                "launch",
+                "demo",
+                "--offline-user",
+                "bob",
+                "--dry-run",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone()
+    })
+    .await
+    .expect("command runs");
+
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("stdout is json");
+    assert_eq!(parsed["program"], "/usr/bin/java", "{parsed}");
+    let args: Vec<String> = parsed["args"]
+        .as_array()
+        .expect("an args array")
+        .iter()
+        .map(|a| a.as_str().unwrap_or_default().to_string())
+        .collect();
+    assert!(args.iter().any(|a| a == "bob"), "{parsed}");
+}
+
+#[test]
+fn launch_of_an_unknown_instance_exits_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    gcl(dir.path())
+        .args(["launch", "nope", "--offline-user", "bob", "--dry-run"])
+        .assert()
+        .code(1)
+        .stderr(predicates::str::contains("error:"));
+}
+
+#[test]
+fn debug_verify_source_still_rejects_an_unknown_source() {
+    Command::cargo_bin("gcl")
+        .unwrap()
+        .args(["debug", "verify-source", "curseforge"])
+        .assert()
+        .code(2);
+}

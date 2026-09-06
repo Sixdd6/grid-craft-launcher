@@ -80,6 +80,14 @@ impl OptionsFile {
         })
     }
 
+    /// Every `key:value` pair, in file order. Lines with no `:` are skipped.
+    pub fn pairs(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.lines.iter().filter_map(|line| match line {
+            Line::Pair { key, value } => Some((key.as_str(), value.as_str())),
+            Line::Other(_) => None,
+        })
+    }
+
     /// Sets `key` to `value`, replacing the first matching `Pair` line in place, or appending
     /// a new line when no line has that key.
     ///
@@ -224,6 +232,13 @@ mod tests {
         let text = "renderDistance:8\n# a comment\nguiScale:2\nnoColonHere\n";
         let file = OptionsFile::parse(text);
         assert_eq!(file.to_string(), text);
+    }
+
+    #[test]
+    fn pairs_lists_key_value_lines_in_order_and_skips_the_rest() {
+        let file = OptionsFile::parse("renderDistance:8\n# a comment\nguiScale:2\n");
+        let pairs: Vec<(&str, &str)> = file.pairs().collect();
+        assert_eq!(pairs, vec![("renderDistance", "8"), ("guiScale", "2")]);
     }
 
     #[test]

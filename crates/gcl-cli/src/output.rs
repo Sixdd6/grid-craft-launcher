@@ -1,7 +1,8 @@
 //! Rendering: aligned text columns, JSON documents, and the background event printer.
 //!
 //! Command results go to stdout so `--json` output stays parseable. Progress events go to
-//! stderr, in the same format the command was asked for.
+//! stderr, in the same format the command was asked for. The one exception is a game log
+//! line in text mode: it is the launch's output, so it goes to stdout.
 
 use std::collections::HashMap;
 use std::thread::JoinHandle;
@@ -102,11 +103,9 @@ fn print_event_text(labels: &mut HashMap<TaskId, String>, event: &Event) {
             let label = labels.remove(id).unwrap_or_else(|| id.to_string());
             eprintln!("[{label}] failed: {error}");
         }
-        Event::Log { level, message } => match level {
-            LogLevel::Warn => eprintln!("warn: {message}"),
-            LogLevel::Error => eprintln!("error: {message}"),
-            LogLevel::Debug | LogLevel::Info => {}
-        },
+        // Only the game process logs, so every line is one line of its output. It goes to
+        // stdout, where a caller watching a launch expects it.
+        Event::Log { message, .. } => println!("[game] {message}"),
         Event::Warning(message) => eprintln!("warning: {message}"),
     }
 }

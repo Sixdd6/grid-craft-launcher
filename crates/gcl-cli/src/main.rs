@@ -10,9 +10,13 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use gcl_core::Launcher;
 
+use commands::account::AccountCommand;
 use commands::config::ConfigCommand;
 use commands::instance::InstanceCommand;
 use commands::java::JavaCommand;
+use commands::launch::LaunchArgs;
+use commands::loader::LoaderCommand;
+use commands::settings::SettingsCommand;
 use commands::version::VersionCommand;
 use output::Format;
 
@@ -41,6 +45,23 @@ enum Command {
         #[command(subcommand)]
         command: InstanceCommand,
     },
+    /// Mod loaders: list the builds for a version, install an instance's loader.
+    Loader {
+        #[command(subcommand)]
+        command: LoaderCommand,
+    },
+    /// Accounts: add an offline one, list them, select one, remove one.
+    Account {
+        #[command(subcommand)]
+        command: AccountCommand,
+    },
+    /// Game settings: per-instance `options.txt` overrides and the defaults.
+    Settings {
+        #[command(subcommand)]
+        command: SettingsCommand,
+    },
+    /// Install what an instance is missing, then start the game.
+    Launch(LaunchArgs),
     /// Java runtimes: list them, ensure one.
     Java {
         #[command(subcommand)]
@@ -116,6 +137,19 @@ fn dispatch(launcher: &mut Launcher, format: Format, command: Command) -> Result
             commands::instance::run(launcher, format, command)?;
             Ok(ExitCode::SUCCESS)
         }
+        Command::Loader { command } => {
+            commands::loader::run(launcher, format, command)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Account { command } => {
+            commands::account::run(launcher, format, command)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Settings { command } => {
+            commands::settings::run(launcher, format, command)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Launch(args) => commands::launch::run(launcher, format, args),
         Command::Java { command } => {
             commands::java::run(launcher, format, command)?;
             Ok(ExitCode::SUCCESS)
@@ -128,7 +162,10 @@ fn dispatch(launcher: &mut Launcher, format: Format, command: Command) -> Result
             command: DebugCommand::VerifySource { source },
         } => {
             // `main` has already turned away every source we cannot verify.
-            let passed = commands::debug::verify_mojang(launcher)?;
+            let passed = match commands::debug::loader_for(&source) {
+                Some(loader) => commands::debug::verify_loader(launcher, loader)?,
+                None => commands::debug::verify_mojang(launcher)?,
+            };
             if passed {
                 Ok(ExitCode::SUCCESS)
             } else {
