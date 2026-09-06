@@ -3,16 +3,19 @@
 //! The client takes a base URL so tests can point it at a mock server. Both the manifest
 //! and every version JSON are cached under `cache/versions/`.
 
+pub mod args;
 pub mod manifest;
 pub mod rules;
 pub mod version;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::download::hash::sha1_hex;
 use crate::http::HttpClient;
 use crate::paths::Root;
 
+pub use args::{ArgContext, default_legacy_jvm_args, expand_arguments, expand_legacy};
 pub use manifest::{Latest, ManifestEntry, VersionManifest, VersionType};
 pub use rules::{Action, OsRule, Rule, RuleContext, rules_allow};
 pub use version::{
@@ -190,6 +193,90 @@ impl Mojang {
             None => Ok(None),
         }
     }
+
+    /// Follows `inheritsFrom` through the cache and merges the chain into one version.
+    pub fn resolve(&self, v: VersionJson) -> Result<VersionJson, Error> {
+        let mut seen = HashSet::from([v.id.clone()]);
+        let mut ancestors: Vec<VersionJson> = Vec::new();
+        let mut next = v.inherits_from.clone();
+        while let Some(parent_id) = next {
+            if !seen.insert(parent_id.clone()) {
+                return Err(Error::InheritanceLoop(parent_id));
+            }
+            let parent = self
+                .load_cached_version(&parent_id)?
+                .ok_or_else(|| Error::UnknownVersion(parent_id))?;
+            next = parent.inherits_from.clone();
+            ancestors.push(parent);
+        }
+        // Fold the oldest ancestor forward, then the version we started from.
+        let mut acc: Option<VersionJson> = None;
+        for ancestor in ancestors.into_iter().rev() {
+            acc = Some(match acc {
+                None => ancestor,
+                Some(parent) => merge(parent, ancestor),
+            });
+        }
+        Ok(match acc {
+            None => v,
+            Some(parent) => merge(parent, v),
+        })
+    }
+}
+
+/// Merges a child profile over its parent version. See the `mojang-meta` skill for the rules.
+pub fn merge(parent: VersionJson, child: VersionJson) -> VersionJson {
+    let keep_both = {
+        let id = child.id.to_lowercase();
+        id.contains("forge")
+    };
+    VersionJson {
+        id: child.id,
+        inherits_from: None,
+        main_class: child.main_class.or(parent.main_class),
+        arguments: merge_arguments(parent.arguments, child.arguments),
+        minecraft_arguments: child.minecraft_arguments.or(parent.minecraft_arguments),
+        libraries: merge_libraries(parent.libraries, child.libraries, keep_both),
+        downloads: child.downloads.or(parent.downloads),
+        asset_index: child.asset_index.or(parent.asset_index),
+        assets: child.assets.or(parent.assets),
+        java_version: child.java_version.or(parent.java_version),
+        logging: child.logging.or(parent.logging),
+        kind: child.kind.or(parent.kind),
+        release_time: child.release_time.or(parent.release_time),
+    }
+}
+
+/// Appends the child's argument lists to the parent's, keeping order.
+fn merge_arguments(parent: Option<Arguments>, child: Option<Arguments>) -> Option<Arguments> {
+    match (parent, child) {
+        (None, child) => child,
+        (parent, None) => parent,
+        (Some(mut parent), Some(child)) => {
+            parent.game.extend(child.game);
+            parent.jvm.extend(child.jvm);
+            Some(parent)
+        }
+    }
+}
+
+/// Merges libraries by `group:artifact`. Forge profiles keep both versions on the classpath.
+fn merge_libraries(parent: Vec<Library>, child: Vec<Library>, keep_both: bool) -> Vec<Library> {
+    let mut out = parent;
+    for lib in child {
+        let key = MavenCoord::parse(&lib.name).ok().map(|c| c.key());
+        let existing = match (keep_both, &key) {
+            (false, Some(key)) => out.iter().position(|l| {
+                MavenCoord::parse(&l.name).ok().map(|c| c.key()).as_ref() == Some(key)
+            }),
+            _ => None,
+        };
+        match existing {
+            Some(i) => out[i] = lib,
+            None => out.push(lib),
+        }
+    }
+    out
 }
 
 /// Reads a file, returning `None` when it does not exist.
@@ -433,5 +520,168 @@ mod tests {
                 .expect("no error")
                 .is_none()
         );
+    }
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+
+    const V1_20_1: &str = include_str!("../../../../tests/fixtures/mojang/1.20.1.json");
+
+    fn parent() -> VersionJson {
+        serde_json::from_str(V1_20_1).expect("fixture parses")
+    }
+
+    /// A loader-style child: a new main class and one library the parent also has.
+    fn child(id: &str) -> VersionJson {
+        VersionJson {
+            id: id.to_string(),
+            inherits_from: Some("1.20.1".to_string()),
+            main_class: Some("net.fabricmc.loader.impl.launch.knot.KnotClient".to_string()),
+            arguments: Some(Arguments {
+                game: vec![Argument::Plain("--fabric".to_string())],
+                jvm: Vec::new(),
+            }),
+            minecraft_arguments: None,
+            libraries: vec![Library {
+                name: "com.google.code.gson:gson:2.11".to_string(),
+                downloads: None,
+                url: Some("https://maven.fabricmc.net/".to_string()),
+                sha1: None,
+                size: None,
+                rules: Vec::new(),
+                natives: None,
+                extract: None,
+            }],
+            downloads: None,
+            asset_index: None,
+            assets: None,
+            java_version: None,
+            logging: None,
+            kind: None,
+            release_time: None,
+        }
+    }
+
+    fn versions_of(v: &VersionJson, key: &str) -> Vec<String> {
+        v.libraries
+            .iter()
+            .filter_map(|l| MavenCoord::parse(&l.name).ok())
+            .filter(|c| c.key() == key)
+            .map(|c| c.version)
+            .collect()
+    }
+
+    #[test]
+    fn child_library_replaces_the_parent_version() {
+        let p = parent();
+        let game_args = p
+            .arguments
+            .as_ref()
+            .map(|a| a.game.len())
+            .expect("parent has arguments");
+        let merged = merge(p, child("fabric-loader-0.15.11-1.20.1"));
+        assert_eq!(versions_of(&merged, "com.google.code.gson:gson"), ["2.11"]);
+        assert_eq!(
+            merged.main_class.as_deref(),
+            Some("net.fabricmc.loader.impl.launch.knot.KnotClient")
+        );
+        assert_eq!(merged.id, "fabric-loader-0.15.11-1.20.1");
+        assert_eq!(
+            merged.arguments.expect("arguments").game.len(),
+            game_args + 1
+        );
+    }
+
+    #[test]
+    fn child_inherits_parent_downloads_and_assets() {
+        let p = parent();
+        let assets = p.assets.clone();
+        let merged = merge(p, child("fabric-loader-0.15.11-1.20.1"));
+        assert_eq!(merged.assets, assets);
+        assert!(merged.downloads.is_some());
+        assert!(merged.asset_index.is_some());
+        assert_eq!(merged.java_version.expect("inherited").major_version, 17);
+    }
+
+    #[test]
+    fn a_forge_child_keeps_both_library_versions() {
+        let merged = merge(parent(), child("1.20.1-forge-47.2.0"));
+        assert_eq!(
+            versions_of(&merged, "com.google.code.gson:gson"),
+            ["2.10", "2.11"]
+        );
+    }
+
+    #[test]
+    fn legacy_arguments_take_the_child_when_it_has_them() {
+        let mut c = child("legacy-child");
+        c.minecraft_arguments = Some("--child".to_string());
+        let mut p = parent();
+        p.minecraft_arguments = Some("--parent".to_string());
+        assert_eq!(merge(p, c).minecraft_arguments.as_deref(), Some("--child"));
+
+        let mut p = parent();
+        p.minecraft_arguments = Some("--parent".to_string());
+        assert_eq!(
+            merge(p, child("legacy-child"))
+                .minecraft_arguments
+                .as_deref(),
+            Some("--parent")
+        );
+    }
+
+    fn mojang_with(dir: &Path) -> Mojang {
+        Mojang::new(
+            HttpClient::new().expect("client builds"),
+            Root::from_path(dir),
+        )
+    }
+
+    #[test]
+    fn resolve_merges_a_cached_parent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mojang = mojang_with(dir.path());
+        write_atomic(&mojang.version_file("1.20.1"), V1_20_1.as_bytes()).expect("seed parent");
+        let resolved = mojang
+            .resolve(child("fabric-loader-0.15.11-1.20.1"))
+            .expect("resolves");
+        assert_eq!(resolved.id, "fabric-loader-0.15.11-1.20.1");
+        assert_eq!(
+            versions_of(&resolved, "com.google.code.gson:gson"),
+            ["2.11"]
+        );
+        assert!(resolved.inherits_from.is_none());
+    }
+
+    #[test]
+    fn resolve_returns_a_version_with_no_parent_unchanged() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let v = parent();
+        let resolved = mojang_with(dir.path())
+            .resolve(v.clone())
+            .expect("resolves");
+        assert_eq!(resolved, v);
+    }
+
+    #[test]
+    fn resolve_reports_a_self_referencing_parent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mojang = mojang_with(dir.path());
+        let mut v = parent();
+        v.inherits_from = Some(v.id.clone());
+        let body = serde_json::to_string(&v).expect("serializes");
+        write_atomic(&mojang.version_file(&v.id), body.as_bytes()).expect("seed");
+        assert!(matches!(mojang.resolve(v), Err(Error::InheritanceLoop(_))));
+    }
+
+    #[test]
+    fn resolve_reports_a_parent_that_is_not_cached() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(matches!(
+            mojang_with(dir.path()).resolve(child("fabric-loader-0.15.11-1.20.1")),
+            Err(Error::UnknownVersion(_))
+        ));
     }
 }
