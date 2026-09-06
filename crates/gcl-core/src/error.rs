@@ -42,4 +42,7 @@ pub enum Error {
     /// A content source search or resolve failed.
     #[error(transparent)]
     Sources(#[from] crate::sources::Error),
+    /// Adding, updating, or importing content into an instance failed.
+    #[error(transparent)]
+    Content(#[from] crate::content::Error),
 }

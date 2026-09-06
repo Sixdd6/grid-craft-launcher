@@ -4,6 +4,7 @@
 
 pub mod auth;
 pub mod config;
+pub mod content;
 pub mod download;
 pub mod error;
 pub mod events;
