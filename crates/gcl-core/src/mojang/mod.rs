@@ -4,6 +4,8 @@
 //! and every version JSON are cached under `cache/versions/`.
 
 pub mod args;
+pub mod assets;
+pub mod install;
 pub mod manifest;
 pub mod rules;
 pub mod version;
@@ -16,6 +18,8 @@ use crate::http::HttpClient;
 use crate::paths::Root;
 
 pub use args::{ArgContext, default_legacy_jvm_args, expand_arguments, expand_legacy};
+pub use assets::{AssetIndex, AssetObject, RESOURCES_BASE, asset_specs, materialize_legacy};
+pub use install::{InstallPlan, install_version, install_version_with, plan_install};
 pub use manifest::{Latest, ManifestEntry, VersionManifest, VersionType};
 pub use rules::{Action, OsRule, Rule, RuleContext, rules_allow};
 pub use version::{
@@ -67,6 +71,17 @@ pub enum Error {
         version: String,
         /// The missing field's name.
         field: &'static str,
+    },
+    /// A download into the cache failed.
+    #[error(transparent)]
+    Download(#[from] crate::download::Error),
+    /// Reading a zip archive failed.
+    #[error("zip error in {path}: {source}")]
+    Zip {
+        /// The archive being read.
+        path: PathBuf,
+        /// The underlying zip error.
+        source: zip::result::ZipError,
     },
     /// A downloaded version JSON did not match the sha1 the manifest published.
     #[error("version {id}: sha1 mismatch, expected {expected}, got {actual}")]
