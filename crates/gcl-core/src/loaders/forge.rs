@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 
 use super::fabriclike::segment;
-use super::{Error, Loader, LoaderCtx, LoaderVersion};
+use super::{Error, Loader, LoaderCtx, LoaderVersion, sort_newest_first};
 
 /// Production maven host, which serves installer jars.
 pub const MAVEN: &str = "https://maven.minecraftforge.net";
@@ -29,9 +29,9 @@ struct Promotions {
 
 /// Lists Forge builds for one Minecraft version, newest first.
 ///
-/// `base` is the metadata host. The maven list is in oldest-first release order, so it is
-/// reversed. The promotions document names the recommended and the latest build; both count as
-/// stable. When it names neither, the newest build is recommended.
+/// `base` is the metadata host. The maven list is in upstream release order, so it is sorted
+/// numerically. The promotions document names the recommended and the latest build; both count
+/// as stable. When it names neither, the newest build is recommended.
 pub async fn list(ctx: &LoaderCtx<'_>, base: &str, mc: &str) -> Result<Vec<LoaderVersion>, Error> {
     let base = base.trim_end_matches('/');
     let all: BTreeMap<String, Vec<String>> = ctx
@@ -53,7 +53,6 @@ pub async fn list(ctx: &LoaderCtx<'_>, base: &str, mc: &str) -> Result<Vec<Loade
     let prefix = format!("{mc}-");
     let mut versions: Vec<LoaderVersion> = builds
         .iter()
-        .rev()
         .map(|full| {
             let version = full.strip_prefix(&prefix).unwrap_or(full).to_string();
             let is_recommended = recommended.is_some_and(|r| *r == version);
@@ -64,6 +63,7 @@ pub async fn list(ctx: &LoaderCtx<'_>, base: &str, mc: &str) -> Result<Vec<Loade
             }
         })
         .collect();
+    sort_newest_first(&mut versions);
     if !versions.iter().any(|v| v.recommended)
         && let Some(first) = versions.first_mut()
     {

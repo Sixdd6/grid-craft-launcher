@@ -5,7 +5,7 @@
 use serde::Deserialize;
 
 use super::fabriclike::segment;
-use super::{Error, Loader, LoaderCtx, LoaderVersion};
+use super::{Error, Loader, LoaderCtx, LoaderVersion, sort_newest_first};
 
 /// Production maven host, which serves the version API and installer jars.
 pub const MAVEN: &str = "https://maven.neoforged.net";
@@ -25,9 +25,9 @@ struct Versions {
 
 /// Lists NeoForge builds for one Minecraft version, newest first.
 ///
-/// The API returns every build in oldest-first order, so the list is filtered by
-/// [`mc_for_version`] and reversed. A `-beta` build is not stable; the newest stable build is
-/// recommended, or the newest build when none is stable.
+/// The API returns every build in upstream order, which mixes release lines, so the list is
+/// filtered by [`mc_for_version`] and sorted numerically. A `-beta` build is not stable; the
+/// newest stable build is recommended, or the newest build when none is stable.
 pub async fn list(ctx: &LoaderCtx<'_>, base: &str, mc: &str) -> Result<Vec<LoaderVersion>, Error> {
     let url = format!(
         "{}/api/maven/versions/releases/{GROUP_PATH}",
@@ -37,7 +37,6 @@ pub async fn list(ctx: &LoaderCtx<'_>, base: &str, mc: &str) -> Result<Vec<Loade
     let mut versions: Vec<LoaderVersion> = all
         .versions
         .iter()
-        .rev()
         .filter(|v| mc_for_version(v).as_deref() == Some(mc))
         .map(|v| LoaderVersion {
             stable: !v.contains("-beta"),
@@ -45,6 +44,7 @@ pub async fn list(ctx: &LoaderCtx<'_>, base: &str, mc: &str) -> Result<Vec<Loade
             version: v.clone(),
         })
         .collect();
+    sort_newest_first(&mut versions);
     if versions.is_empty() {
         return Err(Error::Unsupported(mc.to_string(), Loader::NeoForge));
     }

@@ -470,6 +470,81 @@ async fn neoforge_list_versions_keeps_only_one_minecraft_version() {
     );
 }
 
+#[test]
+fn versions_sort_newest_first_by_component_value() {
+    let mut versions: Vec<LoaderVersion> = [
+        "21.1.9",
+        "26.2.0.79",
+        "21.1.250",
+        "21.1.250-beta",
+        "21.1.100",
+    ]
+    .into_iter()
+    .map(|v| LoaderVersion {
+        version: v.to_string(),
+        stable: true,
+        recommended: false,
+    })
+    .collect();
+
+    sort_newest_first(&mut versions);
+
+    let order: Vec<&str> = versions.iter().map(|v| v.version.as_str()).collect();
+    assert_eq!(
+        order,
+        [
+            "26.2.0.79",
+            "21.1.250",
+            "21.1.250-beta",
+            "21.1.100",
+            "21.1.9"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn neoforge_list_versions_sorts_a_shuffled_upstream_list() {
+    let body = serde_json::json!({
+        "isSnapshot": false,
+        "versions": [
+            "21.1.100",
+            "21.1.250-beta",
+            "26.2.0.79",
+            "21.1.9",
+            "21.1.250",
+            "20.4.190",
+        ],
+    })
+    .to_string();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/maven/versions/releases/net/neoforged/neoforge"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .mount(&server)
+        .await;
+    let h = Harness::new();
+    let dl = h.dl();
+    let ctx = h.ctx(&dl);
+
+    let versions = list_versions(&ctx, &endpoints(&server.uri()), Loader::NeoForge, "1.21.1")
+        .await
+        .expect("list");
+
+    let order: Vec<&str> = versions.iter().map(|v| v.version.as_str()).collect();
+    assert_eq!(
+        order,
+        ["21.1.250", "21.1.250-beta", "21.1.100", "21.1.9"],
+        "upstream order must not decide the list"
+    );
+    assert_eq!(versions[0].version, "21.1.250");
+    assert!(
+        versions[0].recommended,
+        "the true newest build is recommended"
+    );
+    assert!(versions[1..].iter().all(|v| !v.recommended));
+    assert!(!versions[1].stable, "a -beta build is not stable");
+}
+
 #[tokio::test]
 async fn forge_like_install_without_java_is_java_required() {
     let h = Harness::new();

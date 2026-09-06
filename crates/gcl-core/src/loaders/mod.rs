@@ -161,11 +161,65 @@ impl Default for LoaderEndpoints {
         LoaderEndpoints {
             fabric: fabric::BASE.to_string(),
             quilt: quilt::BASE.to_string(),
-            forge_meta: "https://files.minecraftforge.net".to_string(),
-            forge_maven: "https://maven.minecraftforge.net".to_string(),
-            neoforge: "https://maven.neoforged.net".to_string(),
+            forge_meta: forge::META.to_string(),
+            forge_maven: forge::MAVEN.to_string(),
+            neoforge: neoforge::MAVEN.to_string(),
         }
     }
+}
+
+/// Orders loader builds newest first by their version string.
+///
+/// Loader hosts publish their lists in upstream order, which is not always sorted: NeoForge's
+/// API returns whole release lines out of order. Sorting here makes "newest" mean the same
+/// thing for every loader.
+pub(crate) fn sort_newest_first(versions: &mut [LoaderVersion]) {
+    versions.sort_by(|a, b| compare_versions(&b.version, &a.version));
+}
+
+/// One component of a version string: a number, or a word such as a `beta` suffix.
+#[derive(Debug, PartialEq, Eq)]
+enum Part {
+    /// A numeric component, compared by value rather than by text.
+    Num(u64),
+    /// A non-numeric component, which marks a prerelease.
+    Text(String),
+}
+
+/// Splits a version on `.` and `-` into comparable components.
+fn parts(version: &str) -> Vec<Part> {
+    version
+        .split(['.', '-', '+', '_'])
+        .filter(|p| !p.is_empty())
+        .map(|p| match p.parse::<u64>() {
+            Ok(n) => Part::Num(n),
+            Err(_) => Part::Text(p.to_ascii_lowercase()),
+        })
+        .collect()
+}
+
+/// Compares two version strings component by component. A prerelease sorts below its release.
+fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+
+    let (a, b) = (parts(a), parts(b));
+    for index in 0..a.len().max(b.len()) {
+        let ordering = match (a.get(index), b.get(index)) {
+            (Some(Part::Num(x)), Some(Part::Num(y))) => x.cmp(y),
+            (Some(Part::Text(x)), Some(Part::Text(y))) => x.cmp(y),
+            // A number outranks a word, so `1.0` beats `1.0-beta` on the same component.
+            (Some(Part::Num(_)), Some(Part::Text(_))) => Ordering::Greater,
+            (Some(Part::Text(_)), Some(Part::Num(_))) => Ordering::Less,
+            // A longer version wins only when the extra component is numeric.
+            (Some(Part::Num(_)), None) | (None, Some(Part::Text(_))) => Ordering::Greater,
+            (Some(Part::Text(_)), None) | (None, Some(Part::Num(_))) => Ordering::Less,
+            (None, None) => Ordering::Equal,
+        };
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+    Ordering::Equal
 }
 
 /// Builds the cached version id one loader build installs under.

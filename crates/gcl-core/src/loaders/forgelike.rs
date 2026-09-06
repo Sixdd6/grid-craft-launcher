@@ -219,7 +219,10 @@ async fn is_installed(
     let Ok(data) = data_map(installer, ctx.root, mc, &client_jar, work).await else {
         return Ok(false);
     };
-    outputs_current(&profile, &data, ctx.root).await
+    // An unreadable output leaves the install unproven, so install again rather than fail.
+    Ok(outputs_current(&profile, &data, ctx.root)
+        .await
+        .unwrap_or(false))
 }
 
 /// Installs the vanilla version a Forge-like build inherits from and returns its client jar.
