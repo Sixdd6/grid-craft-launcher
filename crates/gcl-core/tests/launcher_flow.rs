@@ -3,9 +3,12 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use gcl_core::content::AddRequest;
+use gcl_core::download::hash::sha1_hex;
 use gcl_core::instances::model::Loader;
 use gcl_core::launcher::{Endpoints, LaunchOutcome};
 use gcl_core::loaders::LoaderEndpoints;
+use gcl_core::sources::SourceId;
 use gcl_core::{Launcher, auth};
 use wiremock::MockServer;
 
@@ -31,6 +34,7 @@ fn launcher(dir: &tempfile::TempDir, mojang: Option<String>, fabric: Option<Stri
             fabric: fabric.unwrap_or_else(|| "http://fabric.invalid".to_string()),
             ..LoaderEndpoints::default()
         },
+        ..Endpoints::default()
     };
     let (launcher, _rx) =
         Launcher::open_with_endpoints(dir.path().to_path_buf(), endpoints).expect("build launcher");
@@ -156,6 +160,7 @@ fn forge_launcher(dir: &tempfile::TempDir, uri: String, runner: Arc<FakeRunner>)
             forge_meta: uri,
             ..LoaderEndpoints::default()
         },
+        ..Endpoints::default()
     };
     let (launcher, _rx) =
         Launcher::open_with_endpoints(dir.path().to_path_buf(), endpoints).expect("build launcher");
@@ -305,6 +310,170 @@ async fn launching_with_an_unknown_account_is_not_found() {
             "{err:?}"
         );
         dir
+    })
+    .await
+    .expect("blocking task");
+}
+
+/// Modrinth fixtures the content tests answer from.
+const MODRINTH_PROJECT: &str = include_str!("../../../tests/fixtures/modrinth/project_sodium.json");
+const MODRINTH_VERSIONS: &str =
+    include_str!("../../../tests/fixtures/modrinth/versions_sodium_1.20.1_fabric.json");
+
+/// Project id the Sodium fixture carries.
+const SODIUM_ID: &str = "AANobbMI";
+
+/// Bytes the mock Modrinth serves as the mod jar.
+const SODIUM_JAR: &[u8] = b"synthetic sodium jar";
+
+/// A launcher over a fresh root with Modrinth pointed at `uri` and every other host dead.
+fn modrinth_launcher(dir: &tempfile::TempDir, uri: String) -> Launcher {
+    let endpoints = Endpoints {
+        mojang: "http://mojang.invalid".to_string(),
+        modrinth: uri,
+        curseforge: "http://curseforge.invalid".to_string(),
+        loaders: LoaderEndpoints {
+            fabric: "http://fabric.invalid".to_string(),
+            ..LoaderEndpoints::default()
+        },
+    };
+    let (launcher, _rx) =
+        Launcher::open_with_endpoints(dir.path().to_path_buf(), endpoints).expect("build launcher");
+    launcher
+}
+
+/// Serves the Sodium project, one version rewritten to this server, and the jar itself.
+///
+/// The fixture's file points at Modrinth's CDN and hashes the real jar, so both the URL and
+/// the sha1 are rewritten here: the launcher verifies what it downloads.
+async fn mock_modrinth(server: &MockServer) {
+    let base = server.uri();
+    let versions: Vec<serde_json::Value> =
+        serde_json::from_str(MODRINTH_VERSIONS).expect("versions fixture");
+    let mut version = versions.into_iter().next().expect("one version");
+    version["dependencies"] = serde_json::json!([]);
+    version["files"] = serde_json::json!([{
+        "url": format!("{base}/files/sodium.jar"),
+        "filename": "sodium.jar",
+        "size": SODIUM_JAR.len(),
+        "primary": true,
+        "hashes": { "sha1": sha1_hex(SODIUM_JAR) },
+    }]);
+
+    serve(
+        server,
+        "/project/sodium",
+        MODRINTH_PROJECT.as_bytes().to_vec(),
+    )
+    .await;
+    serve(
+        server,
+        &format!("/project/{SODIUM_ID}/version"),
+        serde_json::json!([version]).to_string().into_bytes(),
+    )
+    .await;
+    serve(server, "/files/sodium.jar", SODIUM_JAR.to_vec()).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn add_content_installs_a_modrinth_mod_and_the_list_reflects_it() {
+    let server = MockServer::start().await;
+    mock_modrinth(&server).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let uri = server.uri();
+
+    tokio::task::spawn_blocking(move || {
+        let launcher = modrinth_launcher(&dir, uri);
+        let instance = launcher
+            .instances()
+            .create("Pack", MC, Loader::Fabric, None, &BTreeMap::new())
+            .expect("create instance");
+
+        let outcome = launcher
+            .add_content(
+                &instance.slug,
+                AddRequest {
+                    source: SourceId::Modrinth,
+                    project: "sodium".to_string(),
+                    version: None,
+                    kind: None,
+                    world: None,
+                },
+            )
+            .expect("add content");
+        assert_eq!(outcome.installed.len(), 1, "{outcome:?}");
+        assert!(outcome.manual.is_empty());
+        assert_eq!(outcome.installed[0].project_id, SODIUM_ID);
+
+        let jar = instance.game_dir().join("mods").join("sodium.jar");
+        assert_eq!(std::fs::read(&jar).expect("placed jar"), SODIUM_JAR);
+
+        let listed = launcher.list_content(&instance.slug).expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].file_name, "sodium.jar");
+
+        let disabled = launcher
+            .set_content_enabled(&instance.slug, SODIUM_ID, false)
+            .expect("disable");
+        assert!(disabled.ends_with("sodium.jar.disabled"), "{disabled:?}");
+        assert!(!jar.exists());
+
+        launcher
+            .remove_content(&instance.slug, SODIUM_ID)
+            .expect("remove");
+        assert!(
+            launcher
+                .list_content(&instance.slug)
+                .expect("list")
+                .is_empty(),
+            "the entry is gone from instance.toml"
+        );
+        assert!(!disabled.exists(), "the file is gone from disk");
+        assert!(
+            launcher
+                .pending_manual(&instance.slug)
+                .expect("pending")
+                .is_empty(),
+            "nothing needed a hand download"
+        );
+        dir
+    })
+    .await
+    .expect("blocking task");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sources_hold_curseforge_only_when_a_key_is_configured() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let with_key = tempfile::tempdir().expect("tempdir");
+    tokio::task::spawn_blocking(move || {
+        // The key is read from the environment first, and `just` loads a `.env`, so a real
+        // key on this machine must not decide the test.
+        // SAFETY: nextest runs every test in its own process, so nothing else reads the env.
+        unsafe {
+            std::env::remove_var("CURSEFORGE_API_KEY");
+        }
+        let launcher = modrinth_launcher(&dir, "http://modrinth.invalid".to_string());
+        let ids: Vec<SourceId> = launcher.sources().iter().map(|s| s.id()).collect();
+        assert_eq!(ids, vec![SourceId::Modrinth]);
+        assert!(launcher.source(SourceId::CurseForge).is_err());
+
+        // The key is read once, when the launcher opens, so it goes into `config.toml` first.
+        let config = gcl_core::config::Config {
+            keys: gcl_core::config::Keys {
+                curseforge_api_key: Some("test-key".to_string()),
+                msa_client_id: None,
+            },
+            ..gcl_core::config::Config::default()
+        };
+        config
+            .save(&with_key.path().join("config.toml"))
+            .expect("save config");
+        let keyed = modrinth_launcher(&with_key, "http://modrinth.invalid".to_string());
+        let ids: Vec<SourceId> = keyed.sources().iter().map(|s| s.id()).collect();
+        assert_eq!(ids, vec![SourceId::Modrinth, SourceId::CurseForge]);
+        assert!(keyed.source(SourceId::CurseForge).is_ok());
+        (dir, with_key)
     })
     .await
     .expect("blocking task");

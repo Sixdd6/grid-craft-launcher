@@ -9,13 +9,16 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
+use serde::{Deserialize, Serialize};
+
 use crate::auth::offline::offline_account;
 use crate::auth::store::Accounts;
 use crate::config::Config;
+use crate::content::{AddOutcome, AddRequest, ContentCtx, ManualDownload, UpdateCandidate};
 use crate::download::{DownloadCtx, cleanup_partials};
 use crate::events::{Event, EventSink};
 use crate::http::HttpClient;
-use crate::instances::model::Loader;
+use crate::instances::model::{ContentEntry, ContentKind, Loader, PackSource};
 use crate::instances::{Instance, Instances, now_rfc3339};
 use crate::java::{
     JavaInstall, JavaSource, RUNTIME_MANIFEST, component_for_major, detect_all, install_runtime,
@@ -25,10 +28,14 @@ use crate::launch::{JvmSettings, LaunchCommand, LaunchInputs};
 use crate::loaders::{
     LoaderCtx, LoaderEndpoints, LoaderVersion, ProcessRunner, keep_both_libraries,
 };
+use crate::modpacks::{ImportOutcome, ImportRequest};
 use crate::mojang::assets::RESOURCES_BASE;
 use crate::mojang::rules::RuleContext;
 use crate::mojang::{InstallPlan, Mojang, PISTON_META, VersionManifest, install_version};
 use crate::paths::Root;
+use crate::sources::curseforge::CurseForge;
+use crate::sources::modrinth::Modrinth;
+use crate::sources::{BoxSource, SearchPage, SearchQuery, SourceId};
 
 /// Test-only override for the Mojang metadata base URL, read by [`Launcher::mojang`].
 pub const MOJANG_BASE_URL_ENV: &str = "GCL_MOJANG_BASE_URL";
@@ -48,6 +55,18 @@ pub const FORGE_MAVEN_BASE_URL_ENV: &str = "GCL_FORGE_MAVEN_BASE_URL";
 /// Test-only override for the NeoForge maven host, read by [`Launcher::loader_endpoints`].
 pub const NEOFORGE_BASE_URL_ENV: &str = "GCL_NEOFORGE_BASE_URL";
 
+/// Test-only override for the Modrinth API base URL, read by [`Endpoints::from_env`].
+pub const MODRINTH_BASE_URL_ENV: &str = "GCL_MODRINTH_BASE_URL";
+
+/// Test-only override for the CurseForge API base URL, read by [`Endpoints::from_env`].
+pub const CURSEFORGE_BASE_URL_ENV: &str = "GCL_CURSEFORGE_BASE_URL";
+
+/// File under an instance directory that lists the downloads the user must fetch by hand.
+pub const PENDING_MANUAL_FILE: &str = "pending-manual.json";
+
+/// Why [`Launcher::source`] refuses CurseForge when no API key is configured.
+const NO_CURSEFORGE_KEY: &str = "no CURSEFORGE_API_KEY";
+
 /// Every metadata host the launcher talks to.
 ///
 /// [`Launcher::new`] fills it from the test-only environment overrides;
@@ -56,6 +75,10 @@ pub const NEOFORGE_BASE_URL_ENV: &str = "GCL_NEOFORGE_BASE_URL";
 pub struct Endpoints {
     /// Mojang metadata base URL.
     pub mojang: String,
+    /// Modrinth API base URL.
+    pub modrinth: String,
+    /// CurseForge API base URL.
+    pub curseforge: String,
     /// Loader metadata and maven hosts.
     pub loaders: LoaderEndpoints,
 }
@@ -64,6 +87,8 @@ impl Default for Endpoints {
     fn default() -> Self {
         Endpoints {
             mojang: PISTON_META.to_string(),
+            modrinth: crate::sources::modrinth::BASE.to_string(),
+            curseforge: crate::sources::curseforge::BASE.to_string(),
             loaders: LoaderEndpoints::default(),
         }
     }
@@ -74,6 +99,8 @@ impl Endpoints {
     pub fn from_env() -> Endpoints {
         Endpoints {
             mojang: env_base(MOJANG_BASE_URL_ENV, PISTON_META),
+            modrinth: env_base(MODRINTH_BASE_URL_ENV, crate::sources::modrinth::BASE),
+            curseforge: env_base(CURSEFORGE_BASE_URL_ENV, crate::sources::curseforge::BASE),
             loaders: LoaderEndpoints {
                 fabric: env_base(FABRIC_BASE_URL_ENV, crate::loaders::fabric::BASE),
                 quilt: env_base(QUILT_BASE_URL_ENV, crate::loaders::quilt::BASE),
@@ -113,6 +140,7 @@ pub struct Launcher {
     events: EventSink,
     cancel: CancellationToken,
     endpoints: Endpoints,
+    sources: Vec<BoxSource>,
     process_runner: Option<Arc<dyn ProcessRunner>>,
 }
 
@@ -160,11 +188,13 @@ impl Launcher {
 
         let http = HttpClient::new()?;
         let (events, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let sources = build_sources(&http, &config, &endpoints);
         let launcher = Launcher {
             runtime,
             root,
             config,
             http,
+            sources,
             events,
             cancel: CancellationToken::new(),
             endpoints,
@@ -499,6 +529,239 @@ impl Launcher {
         })
     }
 
+    /// Every configured content source, in preference order.
+    ///
+    /// Modrinth is always present. CurseForge is present only when
+    /// [`Config::curseforge_api_key`] found a key when this launcher opened. The list is
+    /// built once, so a later `config_mut` edit of the key changes nothing until a new
+    /// [`Launcher`] is opened.
+    pub fn sources(&self) -> Vec<BoxSource> {
+        self.sources.clone()
+    }
+
+    /// The configured source with this id.
+    ///
+    /// A CurseForge lookup without an API key is [`crate::sources::Error::Disabled`].
+    pub fn source(&self, id: SourceId) -> Result<BoxSource, crate::Error> {
+        self.sources
+            .iter()
+            .find(|source| source.id() == id)
+            .cloned()
+            .ok_or_else(|| {
+                crate::Error::from(crate::sources::Error::Disabled {
+                    source_id: id,
+                    reason: NO_CURSEFORGE_KEY.to_string(),
+                })
+            })
+    }
+
+    /// Searches one source for projects matching `q`. Blocks.
+    pub fn search(&self, id: SourceId, q: &SearchQuery) -> Result<SearchPage, crate::Error> {
+        let source = self.source(id)?;
+        Ok(self.block_on(async { source.search(q).await })?)
+    }
+
+    /// Installs a project into an instance, following its required dependencies. Blocks.
+    ///
+    /// The instance is saved by the placement itself. A file the author opted out of
+    /// third-party distribution is appended to `pending-manual.json` under the instance
+    /// directory, and reported in [`AddOutcome::manual`]; it never fails the call.
+    #[tracing::instrument(skip(self))]
+    pub fn add_content(&self, slug: &str, req: AddRequest) -> Result<AddOutcome, crate::Error> {
+        let mut instance = self.instances().get(slug)?;
+        let dl = self.download_ctx();
+        let ctx = self.content_ctx(&dl);
+        let outcome = self.block_on(crate::content::add(&ctx, &mut instance, req))?;
+        append_pending(&self.pending_path(slug), &outcome.manual)?;
+        Ok(outcome)
+    }
+
+    /// The content `instance.toml` records, in install order.
+    pub fn list_content(&self, slug: &str) -> Result<Vec<ContentEntry>, crate::Error> {
+        Ok(self.instances().get(slug)?.config.content)
+    }
+
+    /// Deletes one installed project from disk and from `instance.toml`.
+    pub fn remove_content(&self, slug: &str, project_id: &str) -> Result<(), crate::Error> {
+        let mut instance = self.instances().get(slug)?;
+        Ok(crate::instances::content::remove(
+            &mut instance,
+            project_id,
+        )?)
+    }
+
+    /// Enables or disables one installed project. Returns the path its file now has.
+    pub fn set_content_enabled(
+        &self,
+        slug: &str,
+        project_id: &str,
+        enabled: bool,
+    ) -> Result<PathBuf, crate::Error> {
+        let mut instance = self.instances().get(slug)?;
+        Ok(crate::instances::content::set_enabled(
+            &mut instance,
+            project_id,
+            enabled,
+        )?)
+    }
+
+    /// Lists the installed content that has a newer compatible version at its source. Blocks.
+    #[tracing::instrument(skip(self))]
+    pub fn check_updates(&self, slug: &str) -> Result<Vec<UpdateCandidate>, crate::Error> {
+        let instance = self.instances().get(slug)?;
+        let dl = self.download_ctx();
+        let ctx = self.content_ctx(&dl);
+        Ok(self.block_on(crate::content::check_updates(&ctx, &instance))?)
+    }
+
+    /// Installs every candidate [`Launcher::check_updates`] returned. Blocks.
+    ///
+    /// One [`AddOutcome`] comes back per candidate, in the order they were given. Manual
+    /// downloads are appended to `pending-manual.json`, exactly as [`Launcher::add_content`]
+    /// appends them.
+    #[tracing::instrument(skip(self, candidates))]
+    pub fn apply_updates(
+        &self,
+        slug: &str,
+        candidates: &[UpdateCandidate],
+    ) -> Result<Vec<AddOutcome>, crate::Error> {
+        let mut instance = self.instances().get(slug)?;
+        let dl = self.download_ctx();
+        let ctx = self.content_ctx(&dl);
+        let mut outcomes = Vec::with_capacity(candidates.len());
+        for candidate in candidates {
+            let outcome =
+                self.block_on(crate::content::apply_update(&ctx, &mut instance, candidate))?;
+            append_pending(&self.pending_path(slug), &outcome.manual)?;
+            outcomes.push(outcome);
+        }
+        Ok(outcomes)
+    }
+
+    /// The downloads this instance still needs the user to fetch by hand.
+    ///
+    /// An instance that never hit one has no `pending-manual.json`, which reads as empty.
+    pub fn pending_manual(&self, slug: &str) -> Result<Vec<ManualDownload>, crate::Error> {
+        read_pending(&self.pending_path(slug))
+    }
+
+    /// Verifies a hand-downloaded file, installs it, and drops it from the pending list.
+    ///
+    /// Blocks.
+    #[tracing::instrument(skip(self, pending))]
+    pub fn import_manual_file(
+        &self,
+        slug: &str,
+        pending: &ManualDownload,
+        file: &Path,
+        kind: ContentKind,
+    ) -> Result<ContentEntry, crate::Error> {
+        let mut instance = self.instances().get(slug)?;
+        let dl = self.download_ctx();
+        let ctx = self.content_ctx(&dl);
+        let entry = self.block_on(crate::content::import_manual(
+            &ctx,
+            &mut instance,
+            pending,
+            file,
+            kind,
+        ))?;
+        remove_pending(&self.pending_path(slug), pending)?;
+        Ok(entry)
+    }
+
+    /// Imports a modpack archive on disk as a new instance. Blocks.
+    pub fn import_modpack_file(
+        &self,
+        zip: &Path,
+        name: Option<String>,
+    ) -> Result<ImportOutcome, crate::Error> {
+        self.import_pack(zip, name, None)
+    }
+
+    /// Downloads a modpack from a source and imports it as a new instance. Blocks.
+    ///
+    /// `project` is an id or a slug; `version` pins one by id or number, and without one
+    /// the newest release wins.
+    #[tracing::instrument(skip(self))]
+    pub fn import_modpack(
+        &self,
+        source: SourceId,
+        project: &str,
+        version: Option<&str>,
+        name: Option<String>,
+    ) -> Result<ImportOutcome, crate::Error> {
+        let (zip, pack_source) = {
+            let dl = self.download_ctx();
+            let ctx = self.content_ctx(&dl);
+            self.block_on(crate::modpacks::fetch_pack(&ctx, source, project, version))?
+        };
+        self.import_pack(&zip, name, Some(pack_source))
+    }
+
+    /// Shared body of the two modpack imports.
+    ///
+    /// The pack's manifest is parsed first, because a Forge or NeoForge pack needs a JVM for
+    /// its installer processors and only the manifest says which Minecraft version that JVM
+    /// has to match.
+    fn import_pack(
+        &self,
+        zip: &Path,
+        name: Option<String>,
+        pack_source: Option<PackSource>,
+    ) -> Result<ImportOutcome, crate::Error> {
+        let (_, plan) = crate::modpacks::read_plan(zip)?;
+        let java = match plan.loader {
+            Loader::Forge | Loader::NeoForge => Some(self.java_for_version(&plan.minecraft)?),
+            _ => None,
+        };
+
+        let endpoints = self.loader_endpoints();
+        let mojang = self.mojang();
+        let instances = self.instances();
+        let dl = self.download_ctx();
+        let ctx = self.content_ctx(&dl);
+        let loader_ctx = LoaderCtx {
+            mojang: Some(&mojang),
+            ..self.loader_ctx(&dl, java.as_ref(), self.process_runner.as_deref())
+        };
+        let req = ImportRequest {
+            zip: zip.to_path_buf(),
+            name,
+            keep_partial: false,
+            pack_source,
+        };
+        let outcome = self.block_on(crate::modpacks::import(
+            &ctx,
+            &instances,
+            &loader_ctx,
+            &endpoints,
+            &self.config.game_defaults,
+            req,
+        ))?;
+        append_pending(&self.pending_path(&outcome.instance.slug), &outcome.manual)?;
+        Ok(outcome)
+    }
+
+    /// A content context over this launcher's sources, root, event sink, and `dl`.
+    ///
+    /// [`ContentCtx`] borrows the [`DownloadCtx`], which this launcher hands out by value,
+    /// so the caller keeps one alive and passes it in. [`Launcher::loader_ctx`] does the
+    /// same.
+    fn content_ctx<'a>(&'a self, dl: &'a DownloadCtx<'a>) -> ContentCtx<'a> {
+        ContentCtx {
+            sources: &self.sources,
+            dl,
+            root: &self.root,
+            sink: &self.events,
+        }
+    }
+
+    /// Path of one instance's pending hand-download list.
+    fn pending_path(&self, slug: &str) -> PathBuf {
+        self.root.instance_dir(slug).join(PENDING_MANUAL_FILE)
+    }
+
     /// The JVM the Forge or NeoForge installer runs its processors under.
     ///
     /// A `java_path` set on the instance or in `config.toml` is taken as given, the same way a
@@ -597,6 +860,129 @@ impl std::fmt::Debug for Launcher {
     }
 }
 
+/// Builds the source list: Modrinth always, CurseForge only with an API key.
+fn build_sources(http: &HttpClient, config: &Config, endpoints: &Endpoints) -> Vec<BoxSource> {
+    let mut sources: Vec<BoxSource> = vec![Arc::new(Modrinth::with_base_url(
+        http.clone(),
+        endpoints.modrinth.clone(),
+    ))];
+    match config.curseforge_api_key() {
+        Some(key) => sources.push(Arc::new(CurseForge::with_base_url(
+            http.clone(),
+            key,
+            endpoints.curseforge.clone(),
+        ))),
+        None => tracing::debug!("no CurseForge API key, that source stays off"),
+    }
+    sources
+}
+
+/// One [`ManualDownload`] as `pending-manual.json` stores it.
+///
+/// [`ManualDownload`] is not serialisable itself, because nothing else persists it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PendingRecord {
+    source: SourceId,
+    project_id: String,
+    version_id: String,
+    file_name: String,
+    page_url: String,
+    #[serde(default)]
+    fingerprint: Option<u32>,
+    #[serde(default)]
+    sha1: Option<String>,
+}
+
+impl From<&ManualDownload> for PendingRecord {
+    fn from(pending: &ManualDownload) -> Self {
+        PendingRecord {
+            source: pending.source,
+            project_id: pending.project_id.clone(),
+            version_id: pending.version_id.clone(),
+            file_name: pending.file_name.clone(),
+            page_url: pending.page_url.clone(),
+            fingerprint: pending.fingerprint,
+            sha1: pending.sha1.clone(),
+        }
+    }
+}
+
+impl From<PendingRecord> for ManualDownload {
+    fn from(record: PendingRecord) -> Self {
+        ManualDownload {
+            source: record.source,
+            project_id: record.project_id,
+            version_id: record.version_id,
+            file_name: record.file_name,
+            page_url: record.page_url,
+            fingerprint: record.fingerprint,
+            sha1: record.sha1,
+        }
+    }
+}
+
+/// What makes two pending downloads the same entry.
+fn pending_key(pending: &ManualDownload) -> (SourceId, &str, &str) {
+    (
+        pending.source,
+        pending.project_id.as_str(),
+        pending.version_id.as_str(),
+    )
+}
+
+/// Reads the pending hand-download list at `path`. A missing file reads as empty.
+pub(crate) fn read_pending(path: &Path) -> Result<Vec<ManualDownload>, crate::Error> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err.into()),
+    };
+    let records: Vec<PendingRecord> = serde_json::from_str(&text)
+        .map_err(|err| std::io::Error::other(format!("{}: invalid JSON: {err}", path.display())))?;
+    Ok(records.into_iter().map(ManualDownload::from).collect())
+}
+
+/// Appends `items` to the pending list at `path`, skipping ones already listed.
+///
+/// Two entries are the same when their source, project id, and version id match. Writing
+/// nothing is not an error: an empty `items` leaves the file, and its absence, alone.
+pub(crate) fn append_pending(path: &Path, items: &[ManualDownload]) -> Result<(), crate::Error> {
+    if items.is_empty() {
+        return Ok(());
+    }
+    let mut listed = read_pending(path)?;
+    for item in items {
+        if listed
+            .iter()
+            .any(|kept| pending_key(kept) == pending_key(item))
+        {
+            continue;
+        }
+        listed.push(item.clone());
+    }
+    write_pending(path, &listed)
+}
+
+/// Drops `item` from the pending list at `path`. An entry that is not there is not an error.
+pub(crate) fn remove_pending(path: &Path, item: &ManualDownload) -> Result<(), crate::Error> {
+    let mut listed = read_pending(path)?;
+    let before = listed.len();
+    listed.retain(|kept| pending_key(kept) != pending_key(item));
+    if listed.len() == before {
+        return Ok(());
+    }
+    write_pending(path, &listed)
+}
+
+/// Writes the whole pending list at `path`, atomically.
+fn write_pending(path: &Path, items: &[ManualDownload]) -> Result<(), crate::Error> {
+    let records: Vec<PendingRecord> = items.iter().map(PendingRecord::from).collect();
+    let text = serde_json::to_string_pretty(&records)
+        .map_err(|err| std::io::Error::other(err.to_string()))?;
+    crate::paths::write_atomic(path, text.as_bytes())?;
+    Ok(())
+}
+
 /// Reads a test-only base URL override, falling back to the production endpoint.
 fn env_base(var: &str, default: &str) -> String {
     std::env::var(var)
@@ -629,6 +1015,19 @@ mod tests {
         // SAFETY: guarded by ENV_LOCK; no other thread reads the env while it is held.
         unsafe {
             std::env::remove_var("GCL_ROOT");
+        }
+        guard
+    }
+
+    /// Clears the CurseForge API key from the environment, for the test's lifetime.
+    ///
+    /// `just` loads a `.env` before it runs the tests, so a key on this machine would
+    /// otherwise decide what [`build_sources`] builds.
+    fn clean_key() -> std::sync::MutexGuard<'static, ()> {
+        let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: guarded by ENV_LOCK; no other thread reads the env while it is held.
+        unsafe {
+            std::env::remove_var("CURSEFORGE_API_KEY");
         }
         guard
     }
@@ -804,6 +1203,8 @@ mod tests {
     fn seamed(dir: &tempfile::TempDir) -> Launcher {
         let endpoints = Endpoints {
             mojang: "http://mojang.invalid".to_string(),
+            modrinth: "http://modrinth.invalid".to_string(),
+            curseforge: "http://curseforge.invalid".to_string(),
             loaders: LoaderEndpoints {
                 fabric: "http://fabric.invalid".to_string(),
                 quilt: "http://quilt.invalid".to_string(),
@@ -961,5 +1362,136 @@ mod tests {
             )
             .expect("create");
         assert_eq!(created.dir, launcher.root().instance_dir("pack"));
+    }
+
+    /// A pending hand-download, with `n` in every field that identifies it.
+    fn pending(n: u32) -> ManualDownload {
+        ManualDownload {
+            source: SourceId::CurseForge,
+            project_id: format!("project-{n}"),
+            version_id: format!("version-{n}"),
+            file_name: format!("mod-{n}.jar"),
+            page_url: format!("https://example.invalid/{n}"),
+            fingerprint: Some(n),
+            sha1: None,
+        }
+    }
+
+    #[test]
+    fn a_missing_pending_file_reads_as_empty() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(PENDING_MANUAL_FILE);
+        assert!(read_pending(&path).expect("read").is_empty());
+    }
+
+    #[test]
+    fn pending_downloads_round_trip_through_the_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(PENDING_MANUAL_FILE);
+        append_pending(&path, &[pending(1), pending(2)]).expect("append");
+        assert_eq!(
+            read_pending(&path).expect("read"),
+            vec![pending(1), pending(2)]
+        );
+
+        // The same entry twice is listed once; a new one is added.
+        append_pending(&path, &[pending(1), pending(3)]).expect("append again");
+        assert_eq!(
+            read_pending(&path).expect("read"),
+            vec![pending(1), pending(2), pending(3)]
+        );
+
+        remove_pending(&path, &pending(2)).expect("remove");
+        assert_eq!(
+            read_pending(&path).expect("read"),
+            vec![pending(1), pending(3)]
+        );
+        // Removing what is not listed changes nothing.
+        remove_pending(&path, &pending(2)).expect("remove again");
+        assert_eq!(
+            read_pending(&path).expect("read"),
+            vec![pending(1), pending(3)]
+        );
+    }
+
+    #[test]
+    fn appending_nothing_creates_no_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(PENDING_MANUAL_FILE);
+        append_pending(&path, &[]).expect("append nothing");
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn pending_manual_of_an_instance_starts_empty() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+        let instance = launcher
+            .instances()
+            .create(
+                "Pack",
+                "1.20.1",
+                crate::instances::model::Loader::None,
+                None,
+                &std::collections::BTreeMap::new(),
+            )
+            .expect("create");
+        assert!(
+            launcher
+                .pending_manual(&instance.slug)
+                .expect("pending")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn sources_always_hold_modrinth() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+        assert_eq!(
+            launcher.source(SourceId::Modrinth).expect("modrinth").id(),
+            SourceId::Modrinth
+        );
+    }
+
+    #[test]
+    fn a_source_that_is_not_configured_is_disabled() {
+        let _guard = clean_key();
+        let http = HttpClient::new().expect("http");
+        let sources = build_sources(&http, &Config::default(), &Endpoints::default());
+        assert_eq!(sources.len(), 1, "no key was configured");
+        assert_eq!(sources[0].id(), SourceId::Modrinth);
+    }
+
+    #[test]
+    fn a_configured_key_adds_curseforge() {
+        let http = HttpClient::new().expect("http");
+        let config = Config {
+            keys: crate::config::Keys {
+                curseforge_api_key: Some("test-key".to_string()),
+                msa_client_id: None,
+            },
+            ..Config::default()
+        };
+        let sources = build_sources(&http, &config, &Endpoints::default());
+        let ids: Vec<SourceId> = sources.iter().map(|s| s.id()).collect();
+        assert_eq!(ids, vec![SourceId::Modrinth, SourceId::CurseForge]);
+    }
+
+    #[test]
+    fn from_env_reads_the_source_overrides() {
+        let _guard = clean_env();
+        // SAFETY: guarded by ENV_LOCK; both variables are removed before the assert.
+        unsafe {
+            std::env::set_var(MODRINTH_BASE_URL_ENV, "http://modrinth-from-env.invalid");
+            std::env::set_var(CURSEFORGE_BASE_URL_ENV, "http://cf-from-env.invalid");
+        }
+        let endpoints = Endpoints::from_env();
+        unsafe {
+            std::env::remove_var(MODRINTH_BASE_URL_ENV);
+            std::env::remove_var(CURSEFORGE_BASE_URL_ENV);
+        }
+        assert_eq!(endpoints.modrinth, "http://modrinth-from-env.invalid");
+        assert_eq!(endpoints.curseforge, "http://cf-from-env.invalid");
     }
 }
