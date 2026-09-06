@@ -12,4 +12,7 @@ pub enum Error {
     /// An error loading or saving the config file.
     #[error(transparent)]
     Config(#[from] crate::config::Error),
+    /// An HTTP request or streamed download failed.
+    #[error(transparent)]
+    Http(#[from] crate::http::Error),
 }

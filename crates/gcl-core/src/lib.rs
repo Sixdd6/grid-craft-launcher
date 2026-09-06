@@ -5,6 +5,7 @@
 pub mod config;
 pub mod error;
 pub mod events;
+pub mod http;
 pub mod paths;
 
 pub use error::Error;
