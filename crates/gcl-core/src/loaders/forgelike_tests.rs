@@ -296,3 +296,74 @@ fn library_specs_skip_rule_excluded_entries_and_target_the_libraries_dir() {
         Some("a25db9d4d385ccda4825ae1b47a7a61d86e595af")
     );
 }
+
+/// Parses one library out of JSON, so a test can describe exactly the fields it cares about.
+fn library(value: serde_json::Value) -> crate::mojang::version::Library {
+    serde_json::from_value(value).expect("library parses")
+}
+
+#[test]
+fn library_specs_skip_artifacts_the_installer_ships_itself() {
+    let layout = Layout::new();
+    let libs = [
+        // The universal jar: it lives in `maven/` inside the installer, so it has no URL.
+        library(serde_json::json!({
+            "name": "net.minecraftforge:forge:1.20.1-47.4.10:universal",
+            "downloads": { "artifact": {
+                "path": "net/minecraftforge/forge/1.20.1-47.4.10/forge-1.20.1-47.4.10-universal.jar",
+                "url": "",
+                "sha1": "0000000000000000000000000000000000000000",
+                "size": 1,
+            }}
+        })),
+        // An empty artifact URL with a repository `url` is still fetchable.
+        library(serde_json::json!({
+            "name": "com.example:from-repo:1.0",
+            "url": "https://example.test/maven/",
+            "downloads": { "artifact": {
+                "path": "com/example/from-repo/1.0/from-repo-1.0.jar",
+                "url": "",
+                "sha1": "1111111111111111111111111111111111111111",
+                "size": 2,
+            }}
+        })),
+        library(serde_json::json!({ "name": "com.example:plain:1.0" })),
+    ];
+
+    let specs = library_specs(&libs, &layout.root, &RuleContext::current()).expect("specs");
+
+    let names: Vec<&str> = specs.iter().map(|s| s.label.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "library com.example:from-repo:1.0",
+            "library com.example:plain:1.0"
+        ]
+    );
+    assert!(specs.iter().all(|s| !s.url.is_empty()), "{specs:?}");
+}
+
+#[test]
+fn library_specs_skip_rule_excluded_entries() {
+    let layout = Layout::new();
+    let rules = RuleContext::current();
+    let other_os = match rules.os_name {
+        "windows" => "linux",
+        _ => "windows",
+    };
+    let libs = [
+        library(serde_json::json!({
+            "name": "com.example:only-elsewhere:1.0",
+            "rules": [{ "action": "allow", "os": { "name": other_os } }],
+        })),
+        library(serde_json::json!({
+            "name": "com.example:everywhere:1.0",
+            "rules": [{ "action": "allow" }],
+        })),
+    ];
+
+    let specs = library_specs(&libs, &layout.root, &rules).expect("specs");
+
+    assert_eq!(specs.len(), 1);
+    assert_eq!(specs[0].label, "library com.example:everywhere:1.0");
+}

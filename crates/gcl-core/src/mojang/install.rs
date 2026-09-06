@@ -140,7 +140,8 @@ pub(crate) fn library_spec(
         .and_then(|a| a.path.clone())
         .unwrap_or_else(|| coord.path());
     let dest = crate::paths::safe_join(&root.libraries_dir(), &path)?;
-    let url = match (artifact, base_override) {
+    // A loader profile can publish an artifact with an empty URL; fall back to the repository.
+    let url = match (artifact.filter(|a| !a.url.trim().is_empty()), base_override) {
         (Some(a), None) => a.url.clone(),
         (_, base) => join_url(base.or(lib.url.as_deref()).unwrap_or(LIBRARIES_BASE), &path),
     };

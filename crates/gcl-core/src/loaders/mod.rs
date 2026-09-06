@@ -5,7 +5,9 @@
 
 pub mod fabric;
 pub mod fabriclike;
+pub mod forge;
 pub mod forgelike;
+pub mod neoforge;
 pub mod processors;
 pub mod quilt;
 
@@ -18,7 +20,7 @@ pub use forgelike::{
     DataEntry, DataMap, InstallProfile, InstallerJar, Processor, build_data_map, library_specs,
     substitute,
 };
-pub use processors::{JavaRunner, ProcessRunner, run_processors};
+pub use processors::{JavaRunner, ProcessRunner, outputs_current, run_processors};
 
 use crate::download::DownloadCtx;
 use crate::http::HttpClient;
@@ -134,6 +136,9 @@ pub struct LoaderCtx<'a> {
     pub java: Option<&'a JavaInstall>,
     /// How installer processors are run. Required for Forge and NeoForge.
     pub runner: Option<&'a dyn ProcessRunner>,
+    /// Mojang client used to install the vanilla version a Forge-like build patches.
+    /// `None` builds one against the production endpoints.
+    pub mojang: Option<&'a crate::mojang::Mojang>,
 }
 
 /// Base URLs for every loader's metadata and maven hosts. Tests override them.
@@ -143,7 +148,7 @@ pub struct LoaderEndpoints {
     pub fabric: String,
     /// Quilt meta base, without the `/v3` path.
     pub quilt: String,
-    /// Forge promotions host.
+    /// Forge metadata host, which serves the version list and the promotions.
     pub forge_meta: String,
     /// Forge maven host, which serves versions and installers.
     pub forge_maven: String,
@@ -190,10 +195,9 @@ pub async fn list_versions(
     match loader {
         Loader::Fabric => fabric::list(ctx, &ep.fabric, mc).await,
         Loader::Quilt => quilt::list(ctx, &ep.quilt, mc).await,
-        // Task 4 adds Forge and NeoForge.
-        Loader::Forge | Loader::NeoForge | Loader::None => {
-            Err(Error::Unsupported(mc.to_string(), loader))
-        }
+        Loader::Forge => forge::list(ctx, &ep.forge_meta, mc).await,
+        Loader::NeoForge => neoforge::list(ctx, &ep.neoforge, mc).await,
+        Loader::None => Err(Error::Unsupported(mc.to_string(), loader)),
     }
 }
 
@@ -209,10 +213,15 @@ pub async fn install(
     match loader {
         Loader::Fabric => fabric::install(ctx, &ep.fabric, mc, loader_version).await,
         Loader::Quilt => quilt::install(ctx, &ep.quilt, mc, loader_version).await,
-        // Task 4 adds Forge and NeoForge.
-        Loader::Forge | Loader::NeoForge | Loader::None => {
-            Err(Error::Unsupported(mc.to_string(), loader))
+        Loader::Forge => {
+            let url = forge::installer_url(&ep.forge_maven, mc, loader_version);
+            forgelike::install(ctx, loader, mc, loader_version, url).await
         }
+        Loader::NeoForge => {
+            let url = neoforge::installer_url(&ep.neoforge, loader_version);
+            forgelike::install(ctx, loader, mc, loader_version, url).await
+        }
+        Loader::None => Err(Error::Unsupported(mc.to_string(), loader)),
     }
 }
 

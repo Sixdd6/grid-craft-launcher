@@ -9,14 +9,23 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use super::Error;
-use crate::download::DownloadSpec;
+use super::fabriclike::read_optional;
+use super::processors::{JavaRunner, outputs_current, run_processors};
+use super::{Error, Loader, LoaderCtx, version_id};
+use crate::download::{DownloadSpec, download_all, download_one};
+use crate::mojang::assets::RESOURCES_BASE;
 use crate::mojang::version::{Library, MavenCoord};
-use crate::mojang::{RuleContext, rules_allow};
-use crate::paths::{Root, safe_join};
+use crate::mojang::{Mojang, RuleContext, VersionJson, install_version_with, rules_allow};
+use crate::paths::{Root, safe_join, write_atomic};
 
 /// Archive path of the jar manifest.
 const MANIFEST: &str = "META-INF/MANIFEST.MF";
+
+/// Archive path of the install profile.
+const PROFILE: &str = "install_profile.json";
+
+/// Archive path of the launcher version JSON, when the profile names none.
+const VERSION_JSON: &str = "version.json";
 
 /// `install_profile.json` from a Forge or NeoForge installer jar.
 #[derive(Debug, Deserialize)]
@@ -78,6 +87,207 @@ pub struct Processor {
     /// Files the processor promises to write, as `path template` to `sha1 template`.
     #[serde(default)]
     pub outputs: BTreeMap<String, String>,
+}
+
+/// Installs a Forge or NeoForge build headlessly and returns its cached version id.
+///
+/// The installer jar is never executed: its profile is read out of the archive, its libraries
+/// are fetched, and its processors are run as child JVMs. `installer_url` comes from
+/// [`super::forge::installer_url`] or [`super::neoforge::installer_url`].
+///
+/// Needs [`LoaderCtx::java`]. [`LoaderCtx::runner`] defaults to a real [`JavaRunner`].
+#[tracing::instrument(skip(ctx), fields(url = %installer_url))]
+pub async fn install(
+    ctx: &LoaderCtx<'_>,
+    loader: Loader,
+    mc: &str,
+    loader_version: &str,
+    installer_url: String,
+) -> Result<String, Error> {
+    let id = version_id(loader, mc, loader_version);
+    let version_file = safe_join(&ctx.root.versions_dir(), &format!("{id}.json"))?;
+    let installer = safe_join(
+        &ctx.root.installers_dir(),
+        &format!("{loader}-{mc}-{loader_version}-installer.jar"),
+    )?;
+    let work = safe_join(&ctx.root.installers_dir(), &id)?;
+
+    if is_installed(ctx, &version_file, &installer, mc, &work).await? {
+        tracing::debug!(%id, "loader install is complete");
+        return Ok(id);
+    }
+
+    let java = ctx.java.ok_or(Error::JavaRequired(loader))?;
+    download_one(
+        ctx.dl,
+        &DownloadSpec {
+            url: installer_url,
+            sha1: None,
+            size: None,
+            dest: installer.clone(),
+            label: format!("{loader} {loader_version} installer"),
+        },
+    )
+    .await
+    .map_err(|err| match err {
+        // The maven host has no such build: report the version, not the transfer.
+        crate::download::Error::Http(crate::http::Error::Status { status: 404, .. }) => {
+            Error::NoSuchVersion {
+                loader,
+                mc: mc.to_string(),
+                version: loader_version.to_string(),
+            }
+        }
+        other => Error::Download(other),
+    })?;
+
+    let libraries_dir = ctx.root.libraries_dir();
+    let (profile, mut version) = {
+        let path = installer.clone();
+        blocking(installer.clone(), move || {
+            let jar = InstallerJar::open(path)?;
+            let profile = read_profile(&jar)?;
+            let version = read_version(&jar, &profile)?;
+            // `maven/` holds artifacts that are on no repository, such as the universal jar.
+            jar.extract_prefix("maven/", &libraries_dir)?;
+            Ok((profile, version))
+        })
+        .await?
+    };
+
+    let rules = RuleContext::current();
+    let mut specs = library_specs(&profile.libraries, ctx.root, &rules)?;
+    specs.extend(library_specs(&version.libraries, ctx.root, &rules)?);
+    download_all(ctx.dl, specs).await?;
+
+    // The processors patch the vanilla client jar, so vanilla must be installed first.
+    let client_jar = install_vanilla(ctx, mc).await?;
+    let data = data_map(&installer, ctx.root, mc, &client_jar, &work).await?;
+    let logs = safe_join(&ctx.root.logs_dir().join("installers"), &id)?;
+    let runner = ctx.runner.unwrap_or(&JavaRunner);
+    run_processors(
+        runner,
+        &java.path,
+        &profile,
+        &data,
+        ctx.root,
+        &logs,
+        ctx.dl.sink,
+    )
+    .await?;
+
+    version.id = id.clone();
+    version.inherits_from = Some(mc.to_string());
+    let bytes = serde_json::to_vec_pretty(&version).map_err(|source| Error::Json {
+        url: version_file.display().to_string(),
+        source,
+    })?;
+    write_atomic(&version_file, &bytes)?;
+    Ok(id)
+}
+
+/// True when the cached version JSON parses and every processor output is already correct.
+///
+/// The profile lives inside the installer jar, so this can only answer once that jar is in the
+/// cache. Anything unreadable answers false, which makes the caller install again.
+async fn is_installed(
+    ctx: &LoaderCtx<'_>,
+    version_file: &Path,
+    installer: &Path,
+    mc: &str,
+    work: &Path,
+) -> Result<bool, Error> {
+    if !installer.is_file() {
+        return Ok(false);
+    }
+    let Some(text) = read_optional(version_file)? else {
+        return Ok(false);
+    };
+    if serde_json::from_str::<VersionJson>(&text).is_err() {
+        return Ok(false);
+    }
+    let path = installer.to_path_buf();
+    let Ok(profile) = blocking(path.clone(), move || {
+        read_profile(&InstallerJar::open(path)?)
+    })
+    .await
+    else {
+        return Ok(false);
+    };
+    // Vanilla is installed under its own id, so its client jar is where a plan would put it.
+    let client_jar = safe_join(&ctx.root.versions_dir(), mc)?.join(format!("{mc}.jar"));
+    let Ok(data) = data_map(installer, ctx.root, mc, &client_jar, work).await else {
+        return Ok(false);
+    };
+    outputs_current(&profile, &data, ctx.root).await
+}
+
+/// Installs the vanilla version a Forge-like build inherits from and returns its client jar.
+async fn install_vanilla(ctx: &LoaderCtx<'_>, mc: &str) -> Result<PathBuf, Error> {
+    let owned;
+    let mojang = match ctx.mojang {
+        Some(mojang) => mojang,
+        None => {
+            owned = Mojang::new(ctx.http.clone(), ctx.root.clone());
+            &owned
+        }
+    };
+    let plan = install_version_with(mojang, ctx.dl, mc, None, RESOURCES_BASE).await?;
+    Ok(plan.client_jar)
+}
+
+/// Builds the profile's client-side data map, off the async thread.
+async fn data_map(
+    installer: &Path,
+    root: &Root,
+    mc: &str,
+    client_jar: &Path,
+    work: &Path,
+) -> Result<DataMap, Error> {
+    let (path, root, mc) = (installer.to_path_buf(), root.clone(), mc.to_string());
+    let (client_jar, work) = (client_jar.to_path_buf(), work.to_path_buf());
+    blocking(installer.to_path_buf(), move || {
+        let jar = InstallerJar::open(path)?;
+        let profile = read_profile(&jar)?;
+        build_data_map(&profile, &jar, &root, &mc, &client_jar, &work)
+    })
+    .await
+}
+
+/// Reads and parses `install_profile.json`, rejecting a pre-1.13 profile. Blocking.
+fn read_profile(jar: &InstallerJar) -> Result<InstallProfile, Error> {
+    let bytes = jar.read_entry(PROFILE)?;
+    let profile: InstallProfile = serde_json::from_slice(&bytes).map_err(|source| Error::Json {
+        url: format!("{}!/{PROFILE}", jar.path.display()),
+        source,
+    })?;
+    if profile.is_legacy() {
+        return Err(Error::LegacyInstaller);
+    }
+    Ok(profile)
+}
+
+/// Reads the launcher version JSON the profile names. Blocking.
+fn read_version(jar: &InstallerJar, profile: &InstallProfile) -> Result<VersionJson, Error> {
+    let name = profile.json.as_deref().unwrap_or(VERSION_JSON);
+    let bytes = jar.read_entry(name)?;
+    serde_json::from_slice(&bytes).map_err(|source| Error::Json {
+        url: format!("{}!{name}", jar.path.display()),
+        source,
+    })
+}
+
+/// Runs blocking jar work on the blocking pool, tagging a join failure with `path`.
+async fn blocking<T: Send + 'static>(
+    path: PathBuf,
+    work: impl FnOnce() -> Result<T, Error> + Send + 'static,
+) -> Result<T, Error> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|source| Error::Io {
+            path,
+            source: std::io::Error::other(source),
+        })?
 }
 
 /// True when a processor with these `sides` takes part in a client install.
@@ -280,13 +490,26 @@ pub fn library_specs(
 ) -> Result<Vec<DownloadSpec>, Error> {
     let mut specs = Vec::with_capacity(libs.len());
     for lib in libs {
-        if !rules_allow(&lib.rules, rules) {
+        if !rules_allow(&lib.rules, rules) || comes_from_the_installer(lib) {
             continue;
         }
         let (spec, _dest) = crate::mojang::install::library_spec(lib, root, None)?;
         specs.push(spec);
     }
     Ok(specs)
+}
+
+/// True for a library the installer ships in `maven/` rather than publishing on a repository.
+///
+/// Those entries carry an empty artifact URL and no repository `url`, so there is nothing to
+/// fetch; [`InstallerJar::extract_prefix`] has already written them.
+fn comes_from_the_installer(lib: &Library) -> bool {
+    let empty_artifact_url = lib
+        .downloads
+        .as_ref()
+        .and_then(|d| d.artifact.as_ref())
+        .is_some_and(|a| a.url.trim().is_empty());
+    empty_artifact_url && lib.url.is_none()
 }
 
 /// Cache path of one maven coordinate below the shared libraries directory.

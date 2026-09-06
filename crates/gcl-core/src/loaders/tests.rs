@@ -15,13 +15,18 @@ const FABRIC_PROFILE: &str = include_str!("../../../../tests/fixtures/fabric/pro
 const QUILT_LIST: &str = include_str!("../../../../tests/fixtures/quilt/loader_1.20.1.json");
 const QUILT_PROFILE: &str = include_str!("../../../../tests/fixtures/quilt/profile_1.20.1.json");
 const VANILLA: &str = include_str!("../../../../tests/fixtures/mojang/1.20.1.json");
+const FORGE_LIST: &str = include_str!("../../../../tests/fixtures/forge/maven-metadata.json");
+const FORGE_PROMOS: &str = include_str!("../../../../tests/fixtures/forge/promotions_slim.json");
+const NEOFORGE_LIST: &str = include_str!("../../../../tests/fixtures/neoforge/versions.json");
 
-/// Endpoints with both fabric-like bases pointed at one mock server.
+/// Endpoints with every loader host pointed at one mock server.
 fn endpoints(uri: &str) -> LoaderEndpoints {
     LoaderEndpoints {
         fabric: uri.to_string(),
         quilt: uri.to_string(),
-        ..LoaderEndpoints::default()
+        forge_meta: uri.to_string(),
+        forge_maven: uri.to_string(),
+        neoforge: uri.to_string(),
     }
 }
 
@@ -67,6 +72,7 @@ impl Harness {
             dl,
             java: None,
             runner: None,
+            mojang: None,
         }
     }
 
@@ -344,21 +350,141 @@ async fn quilt_list_and_install_use_the_v3_api() {
 }
 
 #[tokio::test]
-async fn forge_like_and_vanilla_loaders_are_not_supported_yet() {
+async fn vanilla_is_not_a_loader() {
     let h = Harness::new();
     let dl = h.dl();
     let ctx = h.ctx(&dl);
     let ep = LoaderEndpoints::default();
 
-    for loader in [Loader::Forge, Loader::NeoForge, Loader::None] {
-        let err = list_versions(&ctx, &ep, loader, "1.20.1")
+    let err = list_versions(&ctx, &ep, Loader::None, "1.20.1")
+        .await
+        .expect_err("vanilla has no loader builds");
+    assert!(
+        matches!(err, Error::Unsupported(_, Loader::None)),
+        "{err:?}"
+    );
+    let err = install(&ctx, &ep, Loader::None, "1.20.1", "1.0")
+        .await
+        .expect_err("vanilla has nothing to install");
+    assert!(
+        matches!(err, Error::Unsupported(_, Loader::None)),
+        "{err:?}"
+    );
+}
+
+/// Serves the two Forge metadata documents.
+async fn mock_forge_meta() -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/net/minecraftforge/forge/maven-metadata.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(FORGE_LIST))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/net/minecraftforge/forge/promotions_slim.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(FORGE_PROMOS))
+        .mount(&server)
+        .await;
+    server
+}
+
+#[tokio::test]
+async fn forge_list_versions_is_newest_first_with_the_promoted_build_recommended() {
+    let server = mock_forge_meta().await;
+    let h = Harness::new();
+    let dl = h.dl();
+    let ctx = h.ctx(&dl);
+
+    let versions = list_versions(&ctx, &endpoints(&server.uri()), Loader::Forge, "1.20.1")
+        .await
+        .expect("list");
+
+    // The `<mc>-` prefix is stripped and the maven order is reversed.
+    assert_eq!(versions[0].version, "47.4.23");
+    assert_eq!(versions[versions.len() - 1].version, "47.0.0");
+    let recommended: Vec<&str> = versions
+        .iter()
+        .filter(|v| v.recommended)
+        .map(|v| v.version.as_str())
+        .collect();
+    assert_eq!(recommended, ["47.4.10"], "promotions_slim names 47.4.10");
+    let stable: Vec<&str> = versions
+        .iter()
+        .filter(|v| v.stable)
+        .map(|v| v.version.as_str())
+        .collect();
+    assert_eq!(stable, ["47.4.23", "47.4.10"], "latest and recommended");
+}
+
+#[tokio::test]
+async fn forge_list_versions_for_an_unlisted_minecraft_version_is_unsupported() {
+    let server = mock_forge_meta().await;
+    let h = Harness::new();
+    let dl = h.dl();
+    let ctx = h.ctx(&dl);
+
+    let err = list_versions(&ctx, &endpoints(&server.uri()), Loader::Forge, "1.99")
+        .await
+        .expect_err("no such Minecraft version");
+    assert!(
+        matches!(err, Error::Unsupported(_, Loader::Forge)),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn neoforge_list_versions_keeps_only_one_minecraft_version() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/maven/versions/releases/net/neoforged/neoforge"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(NEOFORGE_LIST))
+        .mount(&server)
+        .await;
+    let h = Harness::new();
+    let dl = h.dl();
+    let ctx = h.ctx(&dl);
+    let ep = endpoints(&server.uri());
+
+    let versions = list_versions(&ctx, &ep, Loader::NeoForge, "1.21.1")
+        .await
+        .expect("list");
+    assert_eq!(versions.len(), 1);
+    assert_eq!(versions[0].version, "21.1.250");
+    assert!(versions[0].stable);
+    assert!(versions[0].recommended);
+
+    // The year-based builds map to their own Minecraft line, newest first.
+    let versions = list_versions(&ctx, &ep, Loader::NeoForge, "26.2")
+        .await
+        .expect("list");
+    assert_eq!(versions[0].version, "26.2.0.79");
+    assert!(versions[0].recommended);
+    assert!(versions[1..].iter().all(|v| !v.recommended));
+
+    let err = list_versions(&ctx, &ep, Loader::NeoForge, "1.7.10")
+        .await
+        .expect_err("no builds");
+    assert!(
+        matches!(err, Error::Unsupported(_, Loader::NeoForge)),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn forge_like_install_without_java_is_java_required() {
+    let h = Harness::new();
+    let dl = h.dl();
+    let ctx = h.ctx(&dl);
+    let ep = LoaderEndpoints::default();
+
+    for loader in [Loader::Forge, Loader::NeoForge] {
+        let err = install(&ctx, &ep, loader, "1.20.1", "47.4.10")
             .await
-            .expect_err("not supported yet");
-        assert!(matches!(err, Error::Unsupported(_, l) if l == loader));
-        let err = install(&ctx, &ep, loader, "1.20.1", "1.0")
-            .await
-            .expect_err("not supported yet");
-        assert!(matches!(err, Error::Unsupported(_, l) if l == loader));
+            .expect_err("no java, no install");
+        assert!(
+            matches!(err, Error::JavaRequired(l) if l == loader),
+            "{err:?}"
+        );
     }
 }
 

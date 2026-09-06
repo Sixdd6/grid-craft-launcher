@@ -54,9 +54,16 @@ impl ProcessRunner for JavaRunner {
             .stderr(std::process::Stdio::from(err))
             .status()
             .await?;
-        // A process killed by a signal has no exit code; report it as -1.
-        Ok(status.code().unwrap_or(-1))
+        Ok(exit_code(&status))
     }
+}
+
+/// Exit code reported for a process a signal killed, which has no code of its own.
+const SIGNALLED: i32 = -1;
+
+/// Reads a finished process's exit code, mapping a signal death to [`SIGNALLED`].
+fn exit_code(status: &std::process::ExitStatus) -> i32 {
+    status.code().unwrap_or(SIGNALLED)
 }
 
 /// Joins classpath entries with the platform's separator.
@@ -126,6 +133,29 @@ pub async fn run_processors(
         task.finish();
     }
     Ok(())
+}
+
+/// True when every client-side processor's declared outputs are present with the right sha1.
+///
+/// A processor that declares no outputs is not checkable, so it does not count either way.
+pub async fn outputs_current(
+    profile: &InstallProfile,
+    data: &DataMap,
+    root: &Root,
+) -> Result<bool, Error> {
+    for processor in &profile.processors {
+        if !runs_on_client(&processor.sides) {
+            continue;
+        }
+        let outputs = resolve_outputs(processor, data, root)?;
+        if outputs.is_empty() {
+            continue;
+        }
+        if first_bad_output(&outputs).await.is_some() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Resolves a processor's `outputs` into `(path, expected sha1)` pairs.

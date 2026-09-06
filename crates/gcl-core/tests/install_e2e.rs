@@ -13,8 +13,10 @@ use gcl_core::mojang::version::{
 use gcl_core::mojang::{MANIFEST_PATH, Mojang, VersionJson, install_version_with};
 use gcl_core::paths::Root;
 use tokio_util::sync::CancellationToken;
-use wiremock::matchers::{method, path as path_matcher};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::MockServer;
+
+mod common;
+use common::serve;
 
 /// A zip holding one native library and one file the extract filter must drop.
 fn natives_jar() -> Vec<u8> {
@@ -31,14 +33,6 @@ fn natives_jar() -> Vec<u8> {
         zip.finish().expect("finish zip");
     }
     buf.into_inner()
-}
-
-async fn serve(server: &MockServer, at: &str, body: Vec<u8>) {
-    Mock::given(method("GET"))
-        .and(path_matcher(at.to_string()))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
-        .mount(server)
-        .await;
 }
 
 const LIB_A_PATH: &str = "com/example/alpha/1.0/alpha-1.0.jar";

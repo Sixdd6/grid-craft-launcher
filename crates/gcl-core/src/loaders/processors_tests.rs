@@ -328,3 +328,26 @@ async fn each_processor_emits_a_started_and_finished_event() {
     }
     assert_eq!((started, finished), (2, 2));
 }
+
+#[test]
+fn join_classpath_uses_the_platform_separator() {
+    let entries = [PathBuf::from("/a/one.jar"), PathBuf::from("/b/two.jar")];
+    let joined = join_classpath(&entries);
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    assert_eq!(joined.matches(sep).count(), 1, "{joined}");
+    assert!(joined.starts_with("/a/one.jar"), "{joined}");
+    assert!(joined.ends_with("two.jar"), "{joined}");
+    assert_eq!(join_classpath(&[]), "");
+}
+
+#[test]
+#[cfg(unix)]
+fn exit_code_reports_a_signal_death_as_minus_one() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let killed = std::process::ExitStatus::from_raw(9);
+    assert_eq!(killed.code(), None);
+    assert_eq!(exit_code(&killed), SIGNALLED);
+    // A normal exit keeps its own code. Raw status 0x100 is "exited with 1".
+    assert_eq!(exit_code(&std::process::ExitStatus::from_raw(0x100)), 1);
+}

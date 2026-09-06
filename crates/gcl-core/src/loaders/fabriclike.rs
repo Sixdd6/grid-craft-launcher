@@ -23,7 +23,7 @@ const SEGMENT: &AsciiSet = &CONTROLS
     .add(b'}');
 
 /// Percent-encodes one URL path segment.
-fn segment(value: &str) -> String {
+pub(super) fn segment(value: &str) -> String {
     utf8_percent_encode(value, SEGMENT).to_string()
 }
 
@@ -121,7 +121,7 @@ pub async fn install(
 }
 
 /// Reads a file, returning `None` when it does not exist.
-fn read_optional(path: &std::path::Path) -> Result<Option<String>, Error> {
+pub(super) fn read_optional(path: &std::path::Path) -> Result<Option<String>, Error> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
