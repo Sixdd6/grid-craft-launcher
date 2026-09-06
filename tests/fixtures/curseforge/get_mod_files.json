@@ -177,7 +177,16 @@
           "gameVersionTypeId": 68441
         }
       ],
-      "dependencies": [],
+      "dependencies": [
+        {
+          "modId": 306612,
+          "relationType": 3
+        },
+        {
+          "modId": 999001,
+          "relationType": 4
+        }
+      ],
       "modules": [
         {
           "name": "META-INF",

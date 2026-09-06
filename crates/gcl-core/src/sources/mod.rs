@@ -4,6 +4,8 @@
 //! `mod-sources` skill has the endpoint and rate-limit detail for each source's
 //! implementation; this module holds only the shared trait and data types.
 
+pub mod curseforge;
+pub mod fingerprint;
 pub mod modrinth;
 pub mod types;
 

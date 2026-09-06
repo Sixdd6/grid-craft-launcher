@@ -1835,6 +1835,7 @@ dependencies = [
  "hex",
  "insta",
  "md-5 0.11.0",
+ "murmur2",
  "percent-encoding",
  "regex",
  "reqwest",
@@ -3299,6 +3300,12 @@ dependencies = [
  "thiserror 2.0.20",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "murmur2"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb585ade2549a017db2e35978b77c319214fa4b37cede841e27954dd6e8f3ca8"
 
 [[package]]
 name = "natord"
