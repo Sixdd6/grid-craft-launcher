@@ -43,13 +43,18 @@ enum Line {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OptionsFile {
     lines: Vec<Line>,
+    /// Whether the source text used `\r\n` line endings. Set from the parsed input and
+    /// carried through to [`OptionsFile::to_string`] so a Windows-style `options.txt` round
+    /// trips byte-for-byte.
+    crlf: bool,
 }
 
 impl OptionsFile {
     /// Parses `text` into lines, splitting each at its first `:` into a key/value pair.
     ///
     /// A line with no `:` is kept as-is. Trailing newline handling is symmetric with
-    /// [`OptionsFile::to_string`]: an empty or all-blank input yields no lines.
+    /// [`OptionsFile::to_string`]: an empty or all-blank input yields no lines. If any line in
+    /// `text` ends with `\r\n`, [`OptionsFile::to_string`] emits `\r\n` for every line.
     pub fn parse(text: &str) -> OptionsFile {
         let mut lines = Vec::new();
         for raw in text.lines() {
@@ -61,7 +66,10 @@ impl OptionsFile {
                 None => lines.push(Line::Other(raw.to_string())),
             }
         }
-        OptionsFile { lines }
+        OptionsFile {
+            lines,
+            crlf: text.contains("\r\n"),
+        }
     }
 
     /// Returns the value for `key`, if a `Pair` line with that key exists.
@@ -74,19 +82,27 @@ impl OptionsFile {
 
     /// Sets `key` to `value`, replacing the first matching `Pair` line in place, or appending
     /// a new line when no line has that key.
-    pub fn set(&mut self, key: &str, value: &str) {
+    ///
+    /// Returns `true` when the file actually changed: a new line was appended, or an existing
+    /// line's value differed from `value`. Returns `false` when the key already held exactly
+    /// `value`, so a caller can skip rewriting an unchanged file.
+    pub fn set(&mut self, key: &str, value: &str) -> bool {
         for line in &mut self.lines {
             if let Line::Pair { key: k, value: v } = line
                 && k == key
             {
+                if v == value {
+                    return false;
+                }
                 *v = value.to_string();
-                return;
+                return true;
             }
         }
         self.lines.push(Line::Pair {
             key: key.to_string(),
             value: value.to_string(),
         });
+        true
     }
 
     /// Removes the first `Pair` line with the given key. Returns whether one was removed.
@@ -113,6 +129,7 @@ impl OptionsFile {
         if self.lines.is_empty() {
             return String::new();
         }
+        let newline = if self.crlf { "\r\n" } else { "\n" };
         let mut out = String::new();
         for line in &self.lines {
             match line {
@@ -123,7 +140,7 @@ impl OptionsFile {
                 }
                 Line::Other(text) => out.push_str(text),
             }
-            out.push('\n');
+            out.push_str(newline);
         }
         out
     }
@@ -156,18 +173,25 @@ pub fn write(path: &Path, f: &OptionsFile) -> Result<(), Error> {
 /// starting with `key:`, or appends `key:value` if absent. Every other line is left
 /// untouched, in its original order.
 ///
-/// Returns the number of keys applied.
+/// Returns the number of keys whose value actually changed (added or different from what was
+/// already there). The file is only rewritten when that count is non-zero, so applying the
+/// same overrides twice leaves the file untouched on the second call.
 pub fn apply_overrides_to(
     game_dir: &Path,
     overrides: &BTreeMap<String, String>,
 ) -> Result<usize, Error> {
     let path = game_dir.join(OPTIONS_FILE);
     let mut file = read(&path)?;
+    let mut changed = 0usize;
     for (key, value) in overrides {
-        file.set(key, value);
+        if file.set(key, value) {
+            changed += 1;
+        }
     }
-    write(&path, &file)?;
-    Ok(overrides.len())
+    if changed > 0 {
+        write(&path, &file)?;
+    }
+    Ok(changed)
 }
 
 /// Preseeds `options.txt` in `game_dir` from `defaults`, but only when the file does not
@@ -209,16 +233,56 @@ mod tests {
     }
 
     #[test]
+    fn set_writes_a_line_with_a_colon_inside_the_value() {
+        let mut file = OptionsFile::default();
+        file.set("resourcePacks", "[\"a:b\"]");
+        assert_eq!(file.to_string(), "resourcePacks:[\"a:b\"]\n");
+    }
+
+    #[test]
     fn empty_text_round_trips_to_empty_string() {
         let file = OptionsFile::parse("");
         assert_eq!(file.to_string(), "");
     }
 
     #[test]
+    fn crlf_input_round_trips_byte_identical() {
+        let text = "renderDistance:8\r\nguiScale:2\r\n";
+        let file = OptionsFile::parse(text);
+        assert_eq!(file.to_string(), text);
+    }
+
+    #[test]
+    fn set_on_a_crlf_file_keeps_crlf_line_endings() {
+        let mut file = OptionsFile::parse("renderDistance:8\r\nguiScale:2\r\n");
+        file.set("renderDistance", "16");
+        file.set("lang", "en_us");
+        assert_eq!(
+            file.to_string(),
+            "renderDistance:16\r\nguiScale:2\r\nlang:en_us\r\n"
+        );
+    }
+
+    #[test]
     fn set_replaces_an_existing_key_in_place() {
         let mut file = OptionsFile::parse("a:1\nb:2\n");
-        file.set("a", "9");
+        assert!(file.set("a", "9"));
         assert_eq!(file.to_string(), "a:9\nb:2\n");
+    }
+
+    #[test]
+    fn set_returns_false_when_the_value_is_unchanged() {
+        let mut file = OptionsFile::parse("a:1\n");
+        assert!(!file.set("a", "1"));
+        assert_eq!(file.to_string(), "a:1\n");
+    }
+
+    #[test]
+    fn set_with_a_duplicate_key_replaces_only_the_first_occurrence() {
+        let mut file = OptionsFile::parse("a:1\nb:2\na:3\n");
+        assert!(file.set("a", "9"));
+        assert_eq!(file.get("a"), Some("9"));
+        assert_eq!(file.to_string(), "a:9\nb:2\na:3\n");
     }
 
     #[test]
@@ -256,6 +320,34 @@ mod tests {
         assert_eq!(changed, 2);
         let text = std::fs::read_to_string(game_dir.join("options.txt")).unwrap();
         assert_eq!(text, "renderDistance:16\nguiScale:2\nlang:en_us\n");
+    }
+
+    #[test]
+    fn apply_overrides_to_is_a_no_op_on_a_second_identical_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let game_dir = dir.path();
+        std::fs::write(
+            game_dir.join("options.txt"),
+            "renderDistance:8\nguiScale:2\n",
+        )
+        .unwrap();
+        let overrides = defaults(&[("renderDistance", "16"), ("lang", "en_us")]);
+
+        let first = apply_overrides_to(game_dir, &overrides).unwrap();
+        assert_eq!(first, 2);
+        let path = game_dir.join("options.txt");
+        let after_first = std::fs::read(&path).unwrap();
+        let mtime_first = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+        let second = apply_overrides_to(game_dir, &overrides).unwrap();
+        assert_eq!(second, 0);
+        let after_second = std::fs::read(&path).unwrap();
+        let mtime_second = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(after_first, after_second);
+        assert_eq!(
+            mtime_first, mtime_second,
+            "file was rewritten on a no-op call"
+        );
     }
 
     #[test]
