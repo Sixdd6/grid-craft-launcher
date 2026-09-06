@@ -7,6 +7,7 @@ pub mod download;
 pub mod error;
 pub mod events;
 pub mod http;
+pub mod mojang;
 pub mod paths;
 
 pub use error::Error;

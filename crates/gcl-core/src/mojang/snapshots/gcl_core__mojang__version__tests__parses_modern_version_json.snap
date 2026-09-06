@@ -1,0 +1,17 @@
+---
+source: crates/gcl-core/src/mojang/version.rs
+expression: "serde_json::json!({\n    \"id\": v.id, \"main_class\": v.main_class, \"libraries\": v.libraries.len(),\n    \"java_version\": v.java_version, \"assets\": v.assets, \"game_args\":\n    v.arguments.as_ref().map(|a| a.game.len()), \"jvm_args\":\n    v.arguments.as_ref().map(|a| a.jvm.len()), \"minecraft_arguments\":\n    v.minecraft_arguments,\n})"
+---
+{
+  "assets": "5",
+  "game_args": 28,
+  "id": "1.20.1",
+  "java_version": {
+    "component": "java-runtime-gamma",
+    "majorVersion": 17
+  },
+  "jvm_args": 11,
+  "libraries": 88,
+  "main_class": "net.minecraft.client.main.Main",
+  "minecraft_arguments": null
+}

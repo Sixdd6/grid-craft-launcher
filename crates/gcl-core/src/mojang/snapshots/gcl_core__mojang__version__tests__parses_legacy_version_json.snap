@@ -1,0 +1,14 @@
+---
+source: crates/gcl-core/src/mojang/version.rs
+expression: "serde_json::json!({\n    \"id\": v.id, \"main_class\": v.main_class, \"libraries\": v.libraries.len(),\n    \"java_version\": v.java_version, \"assets\": v.assets,\n})"
+---
+{
+  "assets": "1.8",
+  "id": "1.8.9",
+  "java_version": {
+    "component": "jre-legacy",
+    "majorVersion": 8
+  },
+  "libraries": 37,
+  "main_class": "net.minecraft.client.main.Main"
+}
