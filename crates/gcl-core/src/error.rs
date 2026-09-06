@@ -15,4 +15,7 @@ pub enum Error {
     /// An HTTP request or streamed download failed.
     #[error(transparent)]
     Http(#[from] crate::http::Error),
+    /// A download or cache operation failed.
+    #[error(transparent)]
+    Download(#[from] crate::download::Error),
 }
