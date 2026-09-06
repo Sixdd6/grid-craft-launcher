@@ -9,4 +9,7 @@ pub enum Error {
     /// An error resolving or creating the app root layout.
     #[error(transparent)]
     Paths(#[from] crate::paths::Error),
+    /// An error loading or saving the config file.
+    #[error(transparent)]
+    Config(#[from] crate::config::Error),
 }
