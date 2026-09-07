@@ -3,6 +3,7 @@ import { Theme } from "../theme.slint";
 import { SettingsState } from "../state.slint";
 import { Button } from "../components/button.slint";
 import { Card } from "../components/card.slint";
+import { SettingsEditor } from "../components/settings-editor.slint";
 
 // Launcher-wide settings: root, downloads, JVM defaults, API keys, game defaults, and the
 // source check.
@@ -273,46 +274,23 @@ export component SettingsScreen inherits Rectangle {
 
                 // `options.txt` keys written into every new instance.
                 Card {
-                    title: "Game defaults";
+                    title: "Game settings";
 
-                    if SettingsState.game_defaults.length == 0: Text {
-                        text: "No defaults yet. A key added here is preseeded into every new "
-                            + "instance.";
+                    Text {
+                        text: "These are preseeded into every new instance. An instance that "
+                            + "already has an options.txt keeps what the game wrote; set a "
+                            + "value on that instance instead.";
                         color: Theme.text-muted;
                         font-size: Theme.font-size-small;
                         wrap: word-wrap;
                     }
 
-                    for row in SettingsState.game_defaults: default_row := HorizontalLayout {
-                        spacing: Theme.gap;
-                        height: Theme.row-height;
+                    SettingsEditor { }
 
-                        Text {
-                            text: row.key;
-                            color: Theme.text;
-                            font-size: Theme.font-size;
-                            vertical-alignment: center;
-                            width: 180px;
-                            overflow: elide;
-                        }
-
-                        Text {
-                            text: row.value;
-                            color: Theme.text-muted;
-                            font-size: Theme.font-size;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                            overflow: elide;
-                        }
-
-                        row_delete := Button {
-                            text: "Remove";
-                            kind: "danger";
-                            enabled: !SettingsState.busy;
-                            clicked => {
-                                SettingsState.default_unset(row.key);
-                            }
-                        }
+                    Text {
+                        text: "Advanced: add a key the catalog does not know";
+                        color: Theme.text-muted;
+                        font-size: Theme.font-size-small;
                     }
 
                     HorizontalLayout {

@@ -1,0 +1,171 @@
+import { ComboBox, LineEdit, Slider, Switch } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { SettingRowModel } from "../types.slint";
+import { Button } from "button.slint";
+
+// One setting, edited with the control its catalog entry names.
+//
+// Pure layout. The row reports what the user did and never decides what it means: the value
+// a slider sends is its number formatted with the row's own `decimals`, and a choice sends
+// the position it picked, which `src/screens/settings_editor.rs` maps back to the token
+// `options.txt` stores.
+//
+// A slider saves when the drag ends, or `commit_delay` after the last change when no release
+// follows — an arrow key, or a screen reader's increment — so one drag is one save and not
+// one save per pixel.
+export component SettingRow inherits Rectangle {
+    in property <SettingRowModel> entry;
+    // False while a save is running: every control is dead until the rows come back.
+    in property <bool> enabled: true;
+    callback changed(string /* key */, string /* value */);
+    callback chose(string /* key */, int /* index */);
+    callback reset(string /* key */);
+
+    // How long after the last slider change the value is saved, when no release follows.
+    property <duration> commit_delay: 250ms;
+
+    height: Theme.row-height + Theme.gap;
+    // The row itself is what a test and a screen reader find the setting by: the key names
+    // it, the label describes it, and the value is the string `options.txt` would hold.
+    accessible-role: text;
+    accessible-label: root.entry.key;
+    accessible-description: root.entry.label;
+    accessible-value: root.entry.value;
+
+    HorizontalLayout {
+        spacing: Theme.gap;
+
+        VerticalLayout {
+            alignment: center;
+            width: 2 * Theme.label-width;
+
+            Text {
+                text: root.entry.label;
+                color: root.entry.inherited ? Theme.text-muted : Theme.text;
+                font-size: Theme.font-size;
+                overflow: elide;
+            }
+        }
+
+        // The control. Exactly one of these is built, by the row's kind.
+        if root.entry.control == "slider": Rectangle {
+            horizontal-stretch: 1;
+
+            HorizontalLayout {
+                spacing: Theme.gap;
+
+                setting_slider := Slider {
+                    minimum: root.entry.minimum;
+                    maximum: root.entry.maximum;
+                    step: root.entry.step;
+                    value: root.entry.number;
+                    enabled: root.enabled;
+                    horizontal-stretch: 1;
+                    changed(value) => {
+                        commit.running = false;
+                        commit.running = true;
+                    }
+                    released(value) => {
+                        commit.running = false;
+                        root.changed(root.entry.key, value.to-fixed(root.entry.decimals));
+                    }
+                }
+
+                Text {
+                    text: setting_slider.value.to-fixed(root.entry.decimals);
+                    color: Theme.text;
+                    font-size: Theme.font-size;
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
+                    width: Theme.status-width;
+                }
+            }
+
+            commit := Timer {
+                interval: root.commit_delay;
+                running: false;
+                triggered => {
+                    self.running = false;
+                    root.changed(
+                        root.entry.key, setting_slider.value.to-fixed(root.entry.decimals));
+                }
+            }
+        }
+
+        if root.entry.control == "toggle": Rectangle {
+            horizontal-stretch: 1;
+
+            HorizontalLayout {
+                alignment: start;
+
+                setting_switch := Switch {
+                    checked: root.entry.checked;
+                    enabled: root.enabled;
+                    toggled => {
+                        root.changed(root.entry.key, self.checked ? "true" : "false");
+                    }
+                }
+            }
+        }
+
+        if root.entry.control == "choice": Rectangle {
+            horizontal-stretch: 1;
+
+            HorizontalLayout {
+                alignment: start;
+
+                setting_combo := ComboBox {
+                    model: root.entry.choices;
+                    current-index: root.entry.choice_index;
+                    enabled: root.enabled;
+                    width: 2 * Theme.label-width;
+                    selected => {
+                        root.chose(root.entry.key, self.current-index);
+                    }
+                }
+            }
+        }
+
+        if root.entry.control == "text": Rectangle {
+            horizontal-stretch: 1;
+
+            HorizontalLayout {
+                setting_field := LineEdit {
+                    text: root.entry.value;
+                    enabled: root.enabled;
+                    horizontal-stretch: 1;
+                    accepted(value) => {
+                        root.changed(root.entry.key, value);
+                    }
+                }
+            }
+        }
+
+        // Where the shown value comes from: default, preseed, file, or override.
+        VerticalLayout {
+            alignment: center;
+            width: 3 * Theme.status-width / 2;
+
+            Text {
+                text: root.entry.source;
+                color: root.entry.inherited ? Theme.text-muted : Theme.accent;
+                font-size: Theme.font-size-small;
+                horizontal-alignment: right;
+                overflow: elide;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            width: 5 * Theme.status-width / 4;
+
+            if root.entry.resettable: setting_reset_button := Button {
+                text: "Reset";
+                enabled: root.enabled;
+                clicked => {
+                    root.reset(root.entry.key);
+                }
+            }
+        }
+    }
+}

@@ -1,4 +1,4 @@
-import { AccountRow, ContentRow, LogLine, PendingRow, SettingRow } from "types.slint";
+import { AccountRow, ContentRow, LogLine, PendingRow, SettingRow, SettingRowModel } from "types.slint";
 
 // The two shell services a screen may reach.
 //
@@ -12,6 +12,88 @@ export global Shell {
     // Where a list's selection lands after an arrow key. Carries the current index (-1 when
     // nothing is chosen), the step, and the row count, and returns the new index.
     callback move_selection(int /* current */, int /* delta */, int /* len */) -> int;
+}
+
+// Everything the typed game-settings editor reads and reports.
+//
+// One global serves both places the editor is mounted, because only one of them is on screen
+// at a time: the settings screen edits the launcher preseed, the instance detail screen's
+// Settings tab edits that instance's overrides. `src/screens/settings_editor.rs` owns it and
+// knows which layer the open screen edits; the editor itself only shows rows and reports
+// what the user did to them.
+//
+// `rows` is the visible list: a header line for every group, then that group's settings
+// while the group is open. The search box filters it. Every default here is preview content.
+export global SettingsEditorState {
+    // The visible lines, headers included, in group order.
+    in-out property <[SettingRowModel]> rows: [
+        {
+            key: "Video",
+            label: "Video",
+            group: "Video",
+            control: "group",
+            checked: true,
+            choice_index: 3,
+        },
+        {
+            key: "renderDistance",
+            label: "Render Distance",
+            group: "Video",
+            control: "slider",
+            value: "16",
+            number: 16,
+            minimum: 2,
+            maximum: 32,
+            step: 1,
+            decimals: 0,
+            source: "preseed",
+            inherited: false,
+            resettable: true,
+        },
+        {
+            key: "fullscreen",
+            label: "Fullscreen",
+            group: "Video",
+            control: "toggle",
+            value: "false",
+            checked: false,
+            source: "default",
+            inherited: true,
+            resettable: false,
+        },
+        {
+            key: "graphicsMode",
+            label: "Graphics",
+            group: "Video",
+            control: "choice",
+            value: "1",
+            choices: ["Fast", "Fancy", "Fabulous"],
+            choice_index: 1,
+            source: "default",
+            inherited: true,
+            resettable: false,
+        },
+    ];
+    // What the search box holds. An empty string shows every group.
+    in-out property <string> search: "";
+    // True while a save or a reload is running.
+    in-out property <bool> busy: false;
+    // One line under the editor about the last thing that happened here.
+    in-out property <string> status: "";
+    // What a saved value is called on the open screen: "default" or "override".
+    in-out property <string> layer_name: "default";
+
+    // A slider, switch, or text field was set. Carries the key and the stored value.
+    callback changed(string /* key */, string /* value */);
+    // A choice was picked. Carries the key and the position in `choices`, which Rust maps
+    // back to the token `options.txt` stores.
+    callback chose(string /* key */, int /* index */);
+    // A row's Reset button was pressed: drop the value this screen's layer holds.
+    callback reset(string /* key */);
+    // A group header was pressed: open or close that group. Carries the group name.
+    callback toggle_group(string /* group */);
+    // The search box changed. Carries what it holds now.
+    callback search_changed(string);
 }
 
 // Everything the instance detail screen and its prompt read and report.
@@ -72,11 +154,9 @@ export global InstanceState {
             kind: "mod",
         },
     ];
-    // `options.txt` keys this instance rewrites on every launch.
-    in-out property <[SettingRow]> overrides: [
-        { key: "fov", value: "0.5" },
-        { key: "renderDistance", value: "12" },
-    ];
+    // Whether this instance has an `options.txt` yet. The read-only list of what it holds
+    // is only offered once the game has written one.
+    in-out property <bool> has_options: true;
     // What `options.txt` holds right now. Read-only: the game owns this file.
     in-out property <[SettingRow]> options: [
         { key: "version", value: "3465" },
@@ -144,10 +224,9 @@ export global InstanceState {
     callback add_content();
     // A hand-downloaded file was named. Carries the pending project id and the path typed.
     callback import_manual(string /* project_id */, string /* path */);
-    // Set one `options.txt` override. Carries the key and the value.
+    // Set one raw `options.txt` override, from the Advanced editor. Carries the key and the
+    // value. Everything the catalog knows is set through `SettingsEditorState` instead.
     callback override_set(string /* key */, string /* value */);
-    // Drop one `options.txt` override. Carries the key.
-    callback override_unset(string);
     // Save the JVM tab. Carries min MiB, max MiB, extra arguments, and the java path.
     callback jvm_save(int /* min */, int /* max */, string /* extra */, string /* java_path */);
     // Report where this instance's logs are written.
@@ -260,11 +339,6 @@ export global SettingsState {
     in-out property <string> curseforge_key_input: "";
     // What the user typed into the client id field. Cleared as soon as it is saved.
     in-out property <string> msa_client_id_input: "";
-    // `options.txt` keys preseeded into every new instance, in key order.
-    in-out property <[SettingRow]> game_defaults: [
-        { key: "fov", value: "0.5" },
-        { key: "renderDistance", value: "12" },
-    ];
     // One line about the last thing that happened here.
     in-out property <string> status: "Ready";
     // PASS/FAIL lines from the last source check, in check order.
@@ -284,7 +358,8 @@ export global SettingsState {
     callback save_curseforge_key(string);
     // Save the Microsoft client id. An empty string clears it.
     callback save_msa_client_id(string);
-    // Set one `options.txt` default. Carries the key and the value.
+    // Set one raw `options.txt` default, from the Advanced editor. Carries the key and the
+    // value. Everything the catalog knows is set through `SettingsEditorState` instead.
     callback default_set(string /* key */, string /* value */);
     // Drop one `options.txt` default. Carries the key.
     callback default_unset(string);

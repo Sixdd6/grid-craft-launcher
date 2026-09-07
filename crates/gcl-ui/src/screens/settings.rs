@@ -15,8 +15,8 @@ use gcl_core::sources::{ContentKind, SearchQuery};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::bridge::{Bridge, error_chain};
-use crate::models::setting_rows;
-use crate::{AccountsState, AppWindow, SettingRow, SettingsState};
+use crate::screens::settings_editor::{EditTarget, Editor};
+use crate::{AccountsState, AppWindow, SettingsState};
 
 /// The project the source check searches for. One hit is enough to prove the parser.
 const CHECK_PROJECT: &str = "sodium";
@@ -49,49 +49,65 @@ pub struct ConfigView {
 }
 
 /// Binds the `SettingsState` global to the launcher and reads the config once.
-pub fn wire(window: &AppWindow, bridge: &Bridge) {
+///
+/// `editor` is the shared typed settings editor: this screen opens it on the launcher
+/// defaults, and every save here reads it again, because a raw key added under Advanced is
+/// one more row it has to show.
+pub fn wire(window: &AppWindow, bridge: &Bridge, editor: &Editor) {
     let state = window.global::<SettingsState>();
 
     {
-        let bridge = bridge.clone();
-        state.on_open(move || load(&bridge));
+        let (bridge, editor) = (bridge.clone(), editor.clone());
+        state.on_open(move || load(&bridge, &editor));
     }
 
     {
-        let bridge = bridge.clone();
-        state.on_save_root(move |path| save_root(&bridge, path.as_str()));
+        let (bridge, editor) = (bridge.clone(), editor.clone());
+        state.on_save_root(move |path| save_root(&bridge, &editor, path.as_str()));
     }
 
     {
-        let bridge = bridge.clone();
-        state.on_save_downloads(move |count| save_downloads(&bridge, count));
+        let (bridge, editor) = (bridge.clone(), editor.clone());
+        state.on_save_downloads(move |count| save_downloads(&bridge, &editor, count));
     }
 
     {
-        let bridge = bridge.clone();
+        let (bridge, editor) = (bridge.clone(), editor.clone());
         state.on_save_jvm(move |min, max, java_path| {
-            save_jvm(&bridge, min.as_str(), max.as_str(), java_path.as_str());
+            save_jvm(
+                &bridge,
+                &editor,
+                min.as_str(),
+                max.as_str(),
+                java_path.as_str(),
+            );
         });
     }
 
     {
-        let bridge = bridge.clone();
-        state.on_save_curseforge_key(move |key| save_key(&bridge, Key::CurseForge, key.as_str()));
+        let (bridge, editor) = (bridge.clone(), editor.clone());
+        state.on_save_curseforge_key(move |key| {
+            save_key(&bridge, &editor, Key::CurseForge, key.as_str());
+        });
     }
 
     {
-        let bridge = bridge.clone();
-        state.on_save_msa_client_id(move |id| save_key(&bridge, Key::MsaClientId, id.as_str()));
+        let (bridge, editor) = (bridge.clone(), editor.clone());
+        state.on_save_msa_client_id(move |id| {
+            save_key(&bridge, &editor, Key::MsaClientId, id.as_str());
+        });
     }
 
     {
-        let bridge = bridge.clone();
-        state.on_default_set(move |key, value| default_set(&bridge, key.as_str(), value.as_str()));
+        let (bridge, editor) = (bridge.clone(), editor.clone());
+        state.on_default_set(move |key, value| {
+            default_set(&bridge, &editor, key.as_str(), value.as_str());
+        });
     }
 
     {
-        let bridge = bridge.clone();
-        state.on_default_unset(move |key| default_unset(&bridge, key.as_str()));
+        let (bridge, editor) = (bridge.clone(), editor.clone());
+        state.on_default_unset(move |key| default_unset(&bridge, &editor, key.as_str()));
     }
 
     {
@@ -99,11 +115,12 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
         state.on_verify_sources(move || verify_sources(&bridge));
     }
 
-    load(bridge);
+    load(bridge, editor);
 }
 
-/// Reads the config and the root in use, then fills the screen.
-fn load(bridge: &Bridge) {
+/// Reads the config and the root in use, then fills the screen and the typed editor.
+fn load(bridge: &Bridge, editor: &Editor) {
+    editor.open(bridge, EditTarget::Defaults);
     bridge.run_with_error(
         "Read settings",
         |launcher| {
@@ -135,8 +152,6 @@ fn apply_view(window: &AppWindow, view: &ConfigView) {
     state.set_java_path(view.java_path.as_str().into());
     state.set_curseforge_key_set(view.curseforge_key_set);
     state.set_msa_client_id_set(view.msa_client_id_set);
-    let rows: Vec<SettingRow> = setting_rows(&view.game_defaults.iter().cloned().collect());
-    state.set_game_defaults(ModelRc::new(VecModel::from(rows)));
     // Saving a client id here is what turns Microsoft sign-in on, so the other screen's
     // button, and the hint under it, are told at the same time rather than waiting for its
     // own reload.
@@ -150,12 +165,12 @@ fn apply_view(window: &AppWindow, view: &ConfigView) {
 }
 
 /// Points the launcher at another app root. Nothing is moved.
-fn save_root(bridge: &Bridge, path: &str) {
+fn save_root(bridge: &Bridge, editor: &Editor, path: &str) {
     let path = path.trim().to_string();
     if path.is_empty() {
         return;
     }
-    let bridge_after = bridge.clone();
+    let after = (bridge.clone(), editor.clone());
     busy(bridge, true);
     bridge.run_with_error(
         "Change app root",
@@ -173,15 +188,15 @@ fn save_root(bridge: &Bridge, path: &str) {
                     .global::<SettingsState>()
                     .set_status(root_change_status(old).into());
             }
-            done(window, &bridge_after, result.is_ok());
+            done(window, &after.0, &after.1, result.is_ok());
         },
     );
 }
 
 /// Changes how many downloads run at once.
-fn save_downloads(bridge: &Bridge, count: i32) {
+fn save_downloads(bridge: &Bridge, editor: &Editor, count: i32) {
     let count = count.clamp(MIN_PARALLEL, MAX_PARALLEL) as usize;
-    let bridge_after = bridge.clone();
+    let after = (bridge.clone(), editor.clone());
     busy(bridge, true);
     bridge.run_with_error(
         "Save downloads",
@@ -192,13 +207,13 @@ fn save_downloads(bridge: &Bridge, count: i32) {
                     .global::<SettingsState>()
                     .set_status(format!("{count} parallel download(s)").into());
             }
-            done(window, &bridge_after, result.is_ok());
+            done(window, &after.0, &after.1, result.is_ok());
         },
     );
 }
 
 /// Saves the default heap bounds and the java path, as typed.
-fn save_jvm(bridge: &Bridge, min: &str, max: &str, java_path: &str) {
+fn save_jvm(bridge: &Bridge, editor: &Editor, min: &str, max: &str, java_path: &str) {
     let Some(window) = bridge.weak().upgrade() else {
         return;
     };
@@ -212,7 +227,7 @@ fn save_jvm(bridge: &Bridge, min: &str, max: &str, java_path: &str) {
         return;
     }
     let java_path = java_path.trim().to_string();
-    let bridge_after = bridge.clone();
+    let after = (bridge.clone(), editor.clone());
     busy(bridge, true);
     bridge.run_with_error(
         "Save Java defaults",
@@ -229,7 +244,7 @@ fn save_jvm(bridge: &Bridge, min: &str, max: &str, java_path: &str) {
                     .global::<SettingsState>()
                     .set_status(format!("heap {min_mib}-{max_mib} MiB saved").into());
             }
-            done(window, &bridge_after, result.is_ok());
+            done(window, &after.0, &after.1, result.is_ok());
         },
     );
 }
@@ -254,7 +269,7 @@ impl Key {
 }
 
 /// Saves or clears one key. The value is never logged, shown, or read back.
-fn save_key(bridge: &Bridge, key: Key, value: &str) {
+fn save_key(bridge: &Bridge, editor: &Editor, key: Key, value: &str) {
     let value = value.trim().to_string();
     let cleared = value.is_empty();
     let stored = (!cleared).then_some(value);
@@ -267,7 +282,7 @@ fn save_key(bridge: &Bridge, key: Key, value: &str) {
             Key::MsaClientId => state.set_msa_client_id_input(SharedString::new()),
         }
     }
-    let bridge_after = bridge.clone();
+    let after = (bridge.clone(), editor.clone());
     busy(bridge, true);
     bridge.run_with_error(
         "Save key",
@@ -283,13 +298,13 @@ fn save_key(bridge: &Bridge, key: Key, value: &str) {
                     .global::<SettingsState>()
                     .set_status(key_status(key.label(), cleared).into());
             }
-            done(window, &bridge_after, result.is_ok());
+            done(window, &after.0, &after.1, result.is_ok());
         },
     );
 }
 
 /// Adds or replaces one `options.txt` default.
-fn default_set(bridge: &Bridge, key: &str, value: &str) {
+fn default_set(bridge: &Bridge, editor: &Editor, key: &str, value: &str) {
     let Some(window) = bridge.weak().upgrade() else {
         return;
     };
@@ -305,7 +320,7 @@ fn default_set(bridge: &Bridge, key: &str, value: &str) {
         return;
     }
     let shown = key.clone();
-    let bridge_after = bridge.clone();
+    let after = (bridge.clone(), editor.clone());
     busy(bridge, true);
     bridge.run_with_error(
         "Save game default",
@@ -320,16 +335,16 @@ fn default_set(bridge: &Bridge, key: &str, value: &str) {
                     .global::<SettingsState>()
                     .set_status(format!("default {shown} saved").into());
             }
-            done(window, &bridge_after, result.is_ok());
+            done(window, &after.0, &after.1, result.is_ok());
         },
     );
 }
 
 /// Drops one `options.txt` default.
-fn default_unset(bridge: &Bridge, key: &str) {
+fn default_unset(bridge: &Bridge, editor: &Editor, key: &str) {
     let key = key.to_string();
     let shown = key.clone();
-    let bridge_after = bridge.clone();
+    let after = (bridge.clone(), editor.clone());
     busy(bridge, true);
     bridge.run_with_error(
         "Remove game default",
@@ -344,7 +359,7 @@ fn default_unset(bridge: &Bridge, key: &str) {
                     .global::<SettingsState>()
                     .set_status(format!("default {shown} removed").into());
             }
-            done(window, &bridge_after, result.is_ok());
+            done(window, &after.0, &after.1, result.is_ok());
         },
     );
 }
@@ -395,10 +410,10 @@ fn verify_sources(bridge: &Bridge) {
 }
 
 /// Clears `busy`, and re-reads the config when the save landed.
-fn done(window: &AppWindow, bridge: &Bridge, saved: bool) {
+fn done(window: &AppWindow, bridge: &Bridge, editor: &Editor, saved: bool) {
     window.global::<SettingsState>().set_busy(false);
     if saved {
-        load(bridge);
+        load(bridge, editor);
     } else {
         // The error dialog is already up: `run_with_error` opened it.
         window

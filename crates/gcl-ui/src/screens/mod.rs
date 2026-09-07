@@ -5,3 +5,4 @@ pub mod browser;
 pub mod instance;
 pub mod instances;
 pub mod settings;
+pub mod settings_editor;

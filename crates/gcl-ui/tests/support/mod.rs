@@ -44,6 +44,12 @@ pub const FABRIC: &str = "0.19.5";
 /// never settles. No real list is anywhere near it.
 const COMBO_UP_CAP: usize = 4096;
 
+/// How far one [`TestApp::scroll`] step moves a scroll view, in logical pixels.
+const SCROLL_STEP: f32 = 80.0;
+
+/// How many scroll steps [`TestApp::scroll_to`] takes before it gives up.
+const SCROLL_STEPS: usize = 60;
+
 /// Offline account the harness creates, so a launch never has to open the name prompt.
 pub const PLAYER: &str = "Player";
 
@@ -320,6 +326,70 @@ impl TestApp {
         }
         self.press_key(slint::platform::Key::Return);
         pump();
+    }
+
+    /// Drags the slider with this id to `fraction` of its width, from 0.0 to 1.0.
+    ///
+    /// A press, a move, and a release, the way a mouse does it: the widget saves on the
+    /// release, so nothing else in the harness can stand in for a real drag. The value that
+    /// lands is where the pointer is, so a caller reads it back rather than predicting it.
+    pub fn drag_slider(&self, id: &str, fraction: f32) {
+        let element = self.el(id);
+        assert_ne!(
+            element.accessible_enabled(),
+            Some(false),
+            "`{id}` is showing but disabled"
+        );
+        let at = element.absolute_position();
+        let size = element.size();
+        let position = slint::LogicalPosition::new(
+            at.x + size.width * fraction.clamp(0.0, 1.0),
+            at.y + size.height / 2.0,
+        );
+        let window = self.window.window();
+        let button = slint::platform::PointerEventButton::Left;
+        window.dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+        window.dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
+        window.dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+        window.dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
+        pump();
+    }
+
+    /// Scrolls the window by `delta` logical pixels at its middle, where every screen's
+    /// scroll view sits.
+    ///
+    /// A negative delta scrolls down. The move comes first so the flickable under the
+    /// pointer is the one that gets the wheel.
+    pub fn scroll(&self, delta: f32) {
+        let size = self.window.window().size();
+        let position =
+            slint::LogicalPosition::new(size.width as f32 / 2.0, size.height as f32 / 2.0);
+        let window = self.window.window();
+        window.dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+        window.dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position,
+            delta_x: 0.0,
+            delta_y: delta,
+        });
+        pump();
+    }
+
+    /// Scrolls down until an element with this id is showing.
+    ///
+    /// Only what is inside a scroll view's viewport is in the element tree, so a control
+    /// further down the page cannot be found, let alone clicked, until it is scrolled to.
+    pub fn scroll_to(&self, id: &str) {
+        for _ in 0..SCROLL_STEPS {
+            if self.has(id) {
+                return;
+            }
+            self.scroll(-SCROLL_STEP);
+        }
+        assert!(
+            self.has(id),
+            "`{id}` never came into view. Showing: {:?}",
+            self.ids()
+        );
     }
 
     /// Sends one key press and release to whatever holds the focus.

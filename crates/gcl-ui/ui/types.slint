@@ -73,6 +73,32 @@ export struct SettingRow {
     value: string,
 }
 
+// One line of the typed settings editor: a group header, or one setting with the control it
+// is edited with.
+//
+// `control` is "group" for a header, else "slider", "toggle", "choice", or "text". A header
+// carries the group name in `label`, how many settings it holds in `choice_index`, and
+// whether it is open in `checked`. Everything else is a setting row: `value` is the string
+// `options.txt` would hold, and the typed fields are the same value read for its control.
+export struct SettingRowModel {
+    key: string,
+    label: string,
+    group: string,
+    control: string,
+    value: string,
+    number: float,
+    minimum: float,
+    maximum: float,
+    step: float,
+    decimals: int,
+    checked: bool,
+    choices: [string],
+    choice_index: int,
+    source: string,
+    inherited: bool,
+    resettable: bool,
+}
+
 // One loader build offered for an instance.
 export struct LoaderVersionRow {
     version: string,

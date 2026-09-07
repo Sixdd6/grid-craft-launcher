@@ -1,0 +1,105 @@
+import { Theme } from "../theme.slint";
+import { SettingsEditorState } from "../state.slint";
+import { LineEdit } from "std-widgets.slint";
+import { SettingRow } from "setting-row.slint";
+
+// The typed game-settings editor: a search box, then one collapsible group after another.
+//
+// Pure layout, and no scroll of its own: the screen that mounts it owns the scrolling, so
+// the editor never nests one ScrollView inside another. Every line comes from
+// `SettingsEditorState.rows`, which already holds group headers and only the rows of the
+// groups that are open, and every action is reported back through that global.
+export component SettingsEditor inherits VerticalLayout {
+    spacing: Theme.gap;
+
+    HorizontalLayout {
+        spacing: Theme.gap;
+        height: Theme.row-height;
+
+        settings_search_field := LineEdit {
+            placeholder-text: "Search settings";
+            text <=> SettingsEditorState.search;
+            horizontal-stretch: 1;
+            edited(text) => {
+                SettingsEditorState.search_changed(text);
+            }
+            accepted(text) => {
+                SettingsEditorState.search_changed(text);
+            }
+        }
+    }
+
+    if SettingsEditorState.rows.length == 0: Text {
+        text: "No setting matches that search.";
+        color: Theme.text-muted;
+        font-size: Theme.font-size;
+        height: Theme.row-height;
+        vertical-alignment: center;
+    }
+
+    for row in SettingsEditorState.rows: VerticalLayout {
+        // A header line. The whole band is the button that opens or closes the group.
+        if row.control == "group": group_toggle := Rectangle {
+            height: Theme.row-height;
+            background: Theme.surface-raised;
+            border-radius: Theme.radius;
+            accessible-role: button;
+            accessible-label: row.label;
+            accessible-expandable: true;
+            accessible-expanded: row.checked;
+            accessible-action-default => {
+                SettingsEditorState.toggle_group(row.key);
+            }
+
+            HorizontalLayout {
+                padding-left: Theme.gap;
+                padding-right: Theme.gap;
+                spacing: Theme.gap;
+
+                Text {
+                    text: (row.checked ? "▾ " : "▸ ") + row.label;
+                    color: Theme.text;
+                    font-size: Theme.font-size;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                Text {
+                    text: row.choice_index + "";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    vertical-alignment: center;
+                }
+            }
+
+            touch := TouchArea {
+                clicked => {
+                    SettingsEditorState.toggle_group(row.key);
+                }
+            }
+        }
+
+        if row.control != "group": SettingRow {
+            entry: row;
+            enabled: !SettingsEditorState.busy;
+            changed(key, value) => {
+                SettingsEditorState.changed(key, value);
+            }
+            chose(key, index) => {
+                SettingsEditorState.chose(key, index);
+            }
+            reset(key) => {
+                SettingsEditorState.reset(key);
+            }
+        }
+    }
+
+    if SettingsEditorState.status != "": Text {
+        text: SettingsEditorState.status;
+        color: Theme.text-muted;
+        font-size: Theme.font-size-small;
+        height: Theme.row-height;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}

@@ -13,8 +13,8 @@ crates/gcl-ui/
   ui/types.slint               exported structs crossing the Rust boundary
   ui/state.slint               Shell global plus the per-screen *State globals
   ui/components/               Button, Card, ListRow, ProgressBar, ProgressPanel, SearchBox,
-                                TabBar, Rail, ToastHost, Dialog and its Confirm/Prompt/Choice/
-                                DeviceCode/CreateInstance variants
+                                SettingRow, SettingsEditor, TabBar, Rail, ToastHost, Dialog and
+                                its Confirm/Prompt/Choice/DeviceCode/CreateInstance variants
   ui/screens/                  instances.slint, instance.slint, browser.slint, accounts.slint,
                                 settings.slint
   src/lib.rs                   `slint::include_modules!()` plus every module, so tests can
@@ -30,6 +30,8 @@ crates/gcl-ui/
   src/toasts.rs                the toast queue
   src/models/                  pure converters from gcl-core structs to Slint structs
   src/screens/*.rs              one module per screen, each exposing `wire(&window, &bridge, ...)`
+  src/screens/settings_editor.rs the typed game-settings editor, shared by the settings screen
+                                (preseed layer) and the instance Settings tab (override layer)
 ```
 
 ## Rules
@@ -56,7 +58,9 @@ crates/gcl-ui/
 
 Each screen is mounted behind `if App.screen == Screen.x: XScreen { }` in `app.slint`, so Rust has
 no handle into it once mounted. The fix is a global per screen — `InstancesState`, `InstanceState`,
-`AccountsState`, `SettingsState`, declared in `ui/state.slint` or `ui/app.slint` — that both the
+`AccountsState`, `SettingsState`, and `SettingsEditorState` for the typed settings editor both the
+settings screen and the instance Settings tab mount, declared in `ui/state.slint` or
+`ui/app.slint` — that both the
 screen and `src/screens/x.rs` reach: the screen binds its layout to the global, and `x.rs` calls
 `window.global::<XState>()` to read properties, set them, and answer callbacks. `Shell` (in
 `state.slint`) is the one global every screen may import directly, for the two services every
@@ -216,6 +220,14 @@ previewing, and describe what you saw in your report — the tool has no snapsho
   file is named on the detail screen.
 - **`stop()` is disabled**: `InstanceState.stop` exists so the button has a place to grow into, but
   it is a no-op that only reports why — `gcl-core` has no way to kill a running launch.
+- **A widget's own save rule decides what a test can drive**: `Slider` fires `released` on a
+  drag and on an arrow key, but a screen reader's increment only fires `changed`, so
+  `SettingRow` also keeps a 250 ms `Timer` that saves when the changes stop. That timer cannot
+  be driven from a flow test: `TestApp::pump` hands the loop no time, and the system-time
+  backend refuses `mock_elapsed_time` with a real duration. A flow test drags instead
+  (`TestApp::drag_slider`). A `ComboBox` reports every arrow step as a pick, and each pick
+  saves and reloads the rows, which tears the popup down; drive a choice by clicking, or
+  assert the conversion in a unit test.
 - **Verified by compile, not by hand**: keyboard routing is exercised through unit tests on the
   pure functions and a passing build, not a live keyboard session. The CurseForge and Microsoft
   sign-in flows in the accounts and browser screens are unverified live on this machine — they

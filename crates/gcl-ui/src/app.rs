@@ -98,11 +98,14 @@ pub fn build(
     });
 
     let run = RunState::new();
+    // The settings editor is wired first: both the settings screen and the instance detail
+    // screen open the same one, so they need its handle.
+    let editor = crate::screens::settings_editor::wire(&window, &bridge);
     crate::screens::instances::wire(&window, &bridge, &run);
-    crate::screens::instance::wire(&window, &bridge, &run);
+    crate::screens::instance::wire(&window, &bridge, &run, &editor);
     crate::screens::browser::wire(&window, &bridge);
     crate::screens::accounts::wire(&window, &bridge);
-    crate::screens::settings::wire(&window, &bridge);
+    crate::screens::settings::wire(&window, &bridge, &editor);
 
     start_forwarder(rx, window.as_weak());
 

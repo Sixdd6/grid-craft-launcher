@@ -1,0 +1,300 @@
+//! The typed settings editor, driven end to end through the Slint testing backend.
+//!
+//! One process may hold one Slint backend, so the whole flow runs inside a single `#[test]`,
+//! in order, over one window: the launcher defaults first, then the same keys on one
+//! instance's own layer. Every assertion reads the file the launcher wrote.
+
+#![cfg(unix)]
+
+mod support;
+
+use std::rc::Rc;
+use std::time::Duration;
+
+use gcl_core::instances::model::Loader;
+use gcl_ui::{AppWindow, SettingRowModel, SettingsEditorState};
+use slint::{ComponentHandle, Model};
+use support::TestApp;
+
+/// How long a flow waits for a job that only touches the disk.
+const QUICK: Duration = Duration::from_secs(20);
+
+/// The instance the second half of the flow edits.
+const SLUG: &str = "settings";
+
+#[test]
+fn the_settings_editor_saves_defaults_and_instance_overrides() {
+    support::init_backend();
+    let app = Rc::new(TestApp::new());
+    let driver = Rc::clone(&app);
+    support::run(async move {
+        let app = &driver;
+        the_settings_screen_shows_the_catalog(app).await;
+        a_slider_saves_a_launcher_default(app).await;
+        a_switch_saves_a_launcher_default(app).await;
+        an_instance_overrides_a_default_and_resets_it(app).await;
+    });
+}
+
+/// The visible editor lines.
+fn lines(window: &AppWindow) -> Vec<SettingRowModel> {
+    window
+        .global::<SettingsEditorState>()
+        .get_rows()
+        .iter()
+        .collect()
+}
+
+/// The editor line for one key, if it is showing.
+fn line(window: &AppWindow, key: &str) -> Option<SettingRowModel> {
+    lines(window).into_iter().find(|line| line.key == key)
+}
+
+/// The keys the editor is showing, for a failure message.
+fn keys(window: &AppWindow) -> Vec<String> {
+    lines(window)
+        .iter()
+        .map(|line| line.key.to_string())
+        .collect()
+}
+
+/// Waits until no read or save is running, so every control is live again.
+async fn idle(app: &TestApp) {
+    app.wait_until(
+        "the editor to finish reading",
+        |window| !window.global::<SettingsEditorState>().get_busy(),
+        QUICK,
+    )
+    .await;
+}
+
+/// Types `query` into the search box and waits until only its group and hits are left.
+async fn search(app: &TestApp, query: &str, key: &str) {
+    idle(app).await;
+    app.scroll_to("SettingsEditor::settings_search_field");
+    app.type_into("SettingsEditor::settings_search_field", query);
+    support::pump();
+    app.wait_until(
+        &format!("the editor to show `{key}` alone"),
+        |window| {
+            let showing = lines(window);
+            // One header plus the one hit.
+            showing.len() == 2 && showing[1].key == key
+        },
+        QUICK,
+    )
+    .await;
+}
+
+/// What `config.toml` holds for one game default.
+fn saved_default(app: &TestApp, key: &str) -> Option<String> {
+    app.launcher.config().game_defaults.get(key).cloned()
+}
+
+/// What `instance.toml` holds for one settings override.
+fn saved_override(app: &TestApp, key: &str) -> Option<String> {
+    app.launcher
+        .instances()
+        .get(SLUG)
+        .expect("read the instance")
+        .config
+        .settings_overrides
+        .get(key)
+        .cloned()
+}
+
+/// (a) The settings screen opens the editor over the whole catalog, grouped.
+async fn the_settings_screen_shows_the_catalog(app: &TestApp) {
+    app.click("Rail::rail_settings");
+    app.wait_until(
+        "the editor to fill",
+        |window| !lines(window).is_empty(),
+        QUICK,
+    )
+    .await;
+
+    let showing = lines(&app.window);
+    let headers: Vec<String> = showing
+        .iter()
+        .filter(|line| line.control == "group")
+        .map(|line| line.label.to_string())
+        .collect();
+    assert_eq!(
+        headers,
+        vec!["Video", "Controls", "Sound", "Chat", "Other"],
+        "every catalog group has a header, and a fresh root has no unknown key"
+    );
+    let render_distance = line(&app.window, "renderDistance").expect("a renderDistance row");
+    assert_eq!(render_distance.control, "slider");
+    assert_eq!(render_distance.source, "default");
+    assert!(
+        !render_distance.resettable,
+        "nothing is saved yet, so nothing offers Reset"
+    );
+    assert_eq!(
+        line(&app.window, "graphicsMode").map(|row| row.control.to_string()),
+        Some("choice".to_string())
+    );
+}
+
+/// (b) Increment the render-distance slider: the row and `config.toml` both move.
+async fn a_slider_saves_a_launcher_default(app: &TestApp) {
+    search(app, "renderDistance", "renderDistance").await;
+    let before = line(&app.window, "renderDistance").expect("the row").number;
+
+    idle(app).await;
+    app.scroll_to("SettingRow::setting_slider");
+    app.drag_slider("SettingRow::setting_slider", 0.75);
+    app.wait_until(
+        "the new render distance to reach config.toml",
+        |_| saved_default(app, "renderDistance").is_some(),
+        QUICK,
+    )
+    .await;
+    let saved = saved_default(app, "renderDistance").expect("a saved render distance");
+    let number: f32 = saved.parse().expect("a number");
+    assert!(
+        number > before,
+        "the drag moved the slider up from {before}, and {saved} is what was saved"
+    );
+
+    app.wait_until(
+        "the row to show the saved value",
+        |window| {
+            line(window, "renderDistance")
+                .is_some_and(|row| row.value == saved.as_str() && row.source == "preseed")
+        },
+        QUICK,
+    )
+    .await;
+    let row = line(&app.window, "renderDistance").expect("the row");
+    assert!(row.resettable, "a value this layer holds offers Reset");
+    assert!(!row.inherited);
+}
+
+/// (c) Flip the fullscreen switch: `true` is saved.
+async fn a_switch_saves_a_launcher_default(app: &TestApp) {
+    search(app, "fullscreen", "fullscreen").await;
+    let row = line(&app.window, "fullscreen").expect("the fullscreen row");
+    assert_eq!(row.control, "toggle");
+    assert!(!row.checked, "Minecraft ships windowed");
+
+    idle(app).await;
+    app.scroll_to("SettingRow::setting_switch");
+    app.click("SettingRow::setting_switch");
+    app.wait_until(
+        "fullscreen to reach config.toml",
+        |_| saved_default(app, "fullscreen").is_some(),
+        QUICK,
+    )
+    .await;
+    assert_eq!(saved_default(app, "fullscreen"), Some("true".to_string()));
+    app.wait_until(
+        "the switch row to come back checked",
+        |window| line(window, "fullscreen").is_some_and(|row| row.checked),
+        QUICK,
+    )
+    .await;
+}
+
+/// (d) The same key on an instance: the preseed is inherited, an override wins, Reset drops
+/// it again.
+async fn an_instance_overrides_a_default_and_resets_it(app: &TestApp) {
+    // Setup only: the create dialog has its own flow test, so the instance is made directly.
+    let defaults = app.launcher.config().game_defaults.clone();
+    app.launcher
+        .instances()
+        .create("Settings", support::MC, Loader::None, None, &defaults)
+        .expect("create the instance");
+
+    app.click("Rail::rail_instances");
+    support::pump();
+    app.click("InstancesScreen::refresh_button");
+    app.wait_until(
+        "the instance row to show",
+        |window| {
+            window
+                .global::<gcl_ui::InstancesState>()
+                .get_rows()
+                .iter()
+                .any(|row| row.slug == SLUG)
+        },
+        QUICK,
+    )
+    .await;
+    app.click("InstancesScreen::row_open");
+    app.wait_until(
+        "the detail screen to open",
+        |window| window.global::<gcl_ui::InstanceState>().get_name() == "Settings",
+        QUICK,
+    )
+    .await;
+    // Tab 1 is Settings.
+    app.el_nth("TabBar::tab_entry", 1)
+        .invoke_accessible_default_action();
+    support::pump();
+
+    app.wait_until(
+        "the instance editor to fill",
+        |window| !lines(window).is_empty(),
+        QUICK,
+    )
+    .await;
+    search(app, "renderDistance", "renderDistance").await;
+    let row = line(&app.window, "renderDistance").expect("the row");
+    assert_eq!(
+        row.source,
+        "file",
+        "creating the instance wrote the preseed into its options.txt. Showing: {:?}",
+        keys(&app.window)
+    );
+    assert!(!row.resettable, "an inherited row offers no Reset");
+    assert_eq!(
+        Some(row.value.to_string()),
+        saved_default(app, "renderDistance"),
+        "and what it wrote is the launcher default"
+    );
+
+    idle(app).await;
+    app.scroll_to("SettingRow::setting_slider");
+    app.drag_slider("SettingRow::setting_slider", 0.25);
+    app.wait_until(
+        "the override to reach instance.toml",
+        |_| saved_override(app, "renderDistance").is_some(),
+        QUICK,
+    )
+    .await;
+    let overridden = saved_override(app, "renderDistance").expect("the override");
+    assert_ne!(
+        Some(overridden.clone()),
+        saved_default(app, "renderDistance"),
+        "the instance now holds a value of its own"
+    );
+    app.wait_until(
+        "the row to say it is an override",
+        |window| line(window, "renderDistance").is_some_and(|row| row.source == "override"),
+        QUICK,
+    )
+    .await;
+
+    idle(app).await;
+    app.scroll_to("SettingRow::setting_reset_button");
+    app.click("SettingRow::setting_reset_button");
+    app.wait_until(
+        "the override to go from instance.toml",
+        |_| saved_override(app, "renderDistance").is_none(),
+        QUICK,
+    )
+    .await;
+    app.wait_until(
+        "the row to fall back to what options.txt holds",
+        |window| line(window, "renderDistance").is_some_and(|row| row.source == "file"),
+        QUICK,
+    )
+    .await;
+    assert_eq!(
+        saved_default(app, "renderDistance"),
+        line(&app.window, "renderDistance").map(|row| row.value.to_string()),
+        "the row is back on the value the instance was preseeded with"
+    );
+}

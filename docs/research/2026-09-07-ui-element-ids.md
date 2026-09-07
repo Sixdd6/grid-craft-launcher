@@ -29,9 +29,26 @@ screen opened that dialog.
 The Slint compiler writes an element name with `-` in place of `_`, so `find_by_element_id`
 answers to `InstancesScreen::create-button`. The GUI flow harness accepts either spelling.
 
-Every `Button`, `ListRow`, rail entry, tab entry, and the task panel's chevron also sets
-`accessible-role: button` and `accessible-action-default`, so a test presses them with
-`invoke_accessible_default_action`.
+Every `Button`, `ListRow`, rail entry, tab entry, the settings editor's group header, and the
+task panel's chevron also set `accessible-role: button` and `accessible-action-default`, so a
+test presses them with `invoke_accessible_default_action`.
+
+## Settings editor
+
+The typed settings editor repeats one `SettingRow` per setting, so every control in it carries
+the same id: `SettingRow::setting_slider`, `setting_switch`, `setting_combo`, `setting_field`,
+and `setting_reset_button`. The row itself sets `accessible-label` to the `options.txt` key and
+`accessible-value` to the stored value, so a test can read a row without knowing its position.
+`SettingsEditor::settings_search_field` filters the list down, which is the cheap way to leave
+exactly one row showing. `SettingsEditor::group_toggle` opens and closes one group; its
+`accessible-label` is the group name.
+
+## What a test can find
+
+Only what is drawn is in the element tree. A control below the fold of a `ScrollView` is not
+found until it is scrolled to, which is what `TestApp::scroll_to` is for. A `Slider` saves on
+release, so `TestApp::drag_slider` presses and releases on it rather than using
+`invoke_accessible_increment_action`, which changes the value without ending a drag.
 
 ## Ids
 
@@ -67,6 +84,15 @@ Every `Button`, `ListRow`, rail entry, tab entry, and the task panel's chevron a
 | `crates/gcl-ui/ui/components/rail.slint` | `Rail::rail_settings` | `Entry` |
 | `crates/gcl-ui/ui/components/search-box.slint` | `SearchBox::search_field` | `LineEdit` |
 | `crates/gcl-ui/ui/components/search-box.slint` | `SearchBox::clear_button` | `Button` |
+| `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::setting_slider` | `Slider` |
+| `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::commit` | `Timer` |
+| `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::setting_switch` | `Switch` |
+| `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::setting_combo` | `ComboBox` |
+| `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::setting_field` | `LineEdit` |
+| `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::setting_reset_button` | `Button` |
+| `crates/gcl-ui/ui/components/settings-editor.slint` | `SettingsEditor::settings_search_field` | `LineEdit` |
+| `crates/gcl-ui/ui/components/settings-editor.slint` | `SettingsEditor::group_toggle` | `Rectangle` |
+| `crates/gcl-ui/ui/components/settings-editor.slint` | `SettingsEditor::touch` | `TouchArea` |
 | `crates/gcl-ui/ui/components/tab-bar.slint` | `TabBar::tab_entry` | `Rectangle` |
 | `crates/gcl-ui/ui/components/tab-bar.slint` | `TabBar::label` | `Text` |
 | `crates/gcl-ui/ui/components/tab-bar.slint` | `TabBar::touch` | `TouchArea` |
@@ -115,8 +141,8 @@ Every `Button`, `ListRow`, rail entry, tab entry, and the task panel's chevron a
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::override_key_field` | `LineEdit` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::override_value_field` | `LineEdit` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::override_set_button` | `Button` |
-| `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::override_row` | `ListRow` |
-| `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::override_unset_button` | `Button` |
+| `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::options_toggle` | `Rectangle` |
+| `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::options_touch` | `TouchArea` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::option_row` | `ListRow` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::memory_min_spin` | `SpinBox` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::memory_max_spin` | `SpinBox` |
@@ -146,11 +172,9 @@ Every `Button`, `ListRow`, rail entry, tab entry, and the task panel's chevron a
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::curseforge_key_button` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::msa_client_id_field` | `LineEdit` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::msa_client_id_button` | `Button` |
-| `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::default_row` | `HorizontalLayout` |
-| `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::row_delete` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::default_key_field` | `LineEdit` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::default_value_field` | `LineEdit` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::default_add_button` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::verify_button` | `Button` |
 
-Total: 113 named elements.
+Total: 122 named elements.

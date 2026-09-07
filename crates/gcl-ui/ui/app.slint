@@ -1,9 +1,11 @@
 import { Theme } from "theme.slint";
 import {
     AccountRow, ContentRow, InstanceRow, LoaderVersionRow, LogLine, PendingRow,
-    Screen, SearchRow, SettingRow, TaskRow, ToastRow, VersionRow
+    Screen, SearchRow, SettingRow, SettingRowModel, TaskRow, ToastRow, VersionRow
 } from "types.slint";
-import { AccountsState, InstanceState, SettingsState, Shell } from "state.slint";
+import {
+    AccountsState, InstanceState, SettingsEditorState, SettingsState, Shell
+} from "state.slint";
 import { Palette, TextEdit } from "std-widgets.slint";
 import { Rail } from "components/rail.slint";
 import { ChoiceDialog } from "components/choice-dialog.slint";
@@ -23,8 +25,8 @@ import { SettingsScreen } from "screens/settings.slint";
 // Re-exported so the generated Rust module has every struct the screens will need.
 export {
     AccountRow, AccountsState, BrowserState, ContentRow, InstanceRow, InstanceState,
-    LoaderVersionRow, LogLine, PendingRow, Screen, SearchRow, SettingRow, SettingsState, Shell,
-    TaskRow, Theme, ToastRow, VersionRow
+    LoaderVersionRow, LogLine, PendingRow, Screen, SearchRow, SettingRow, SettingRowModel,
+    SettingsEditorState, SettingsState, Shell, TaskRow, Theme, ToastRow, VersionRow
 }
 
 // Shell state and the callbacks Rust wires up. Screens read from here, never from each other.

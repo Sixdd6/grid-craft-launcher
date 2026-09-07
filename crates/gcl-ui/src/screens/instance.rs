@@ -13,7 +13,8 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::bridge::Bridge;
 use crate::launch_flow;
-use crate::models::{content_row, pending_row, setting_rows};
+use crate::models::{content_row, pending_row};
+use crate::screens::settings_editor::{EditTarget, Editor};
 use crate::state::RunState;
 use crate::{
     App, AppWindow, BrowserState, ContentRow, InstanceState, PendingRow, Screen, SettingRow,
@@ -39,6 +40,9 @@ const PROMPT_RENAME: &str = "rename";
 /// the Slint models: only the ids reach the UI.
 #[derive(Clone, Default)]
 struct Shared {
+    /// The typed settings editor both screens share. The Settings tab opens it on this
+    /// instance's override layer every time the instance is read again.
+    editor: Editor,
     /// Newer versions the last check found, in the order `apply_updates` wants them.
     candidates: Arc<Mutex<Vec<UpdateCandidate>>>,
     /// The manual downloads the loaded instance still needs, by project id.
@@ -82,9 +86,12 @@ impl Shared {
 ///
 /// Nothing is loaded here: `app.slint` calls `load` when the shell navigates to this screen or
 /// the shown slug changes.
-pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState) {
+pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState, editor: &Editor) {
     let state = window.global::<InstanceState>();
-    let shared = Shared::default();
+    let shared = Shared {
+        editor: editor.clone(),
+        ..Shared::default()
+    };
 
     {
         let bridge = bridge.clone();
@@ -318,32 +325,6 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState) {
         let bridge = bridge.clone();
         let run = run.clone();
         let shared = shared.clone();
-        state.on_override_unset(move |key| {
-            let Some(slug) = shown_slug(&bridge) else {
-                return;
-            };
-            let (job_slug, key) = (slug.clone(), key.to_string());
-            let after = (bridge.clone(), run.clone(), shared.clone());
-            bridge.run(
-                "Unset override",
-                move |launcher| {
-                    launcher
-                        .unset_instance_override(&job_slug, &key)
-                        .map(|_| ())
-                },
-                move |_window, ()| {
-                    let (bridge, run, shared) = after;
-                    status(&bridge, "Override dropped");
-                    load(&bridge, &run, &shared, &slug);
-                },
-            );
-        });
-    }
-
-    {
-        let bridge = bridge.clone();
-        let run = run.clone();
-        let shared = shared.clone();
         state.on_jvm_save(move |min, max, extra, java_path| {
             let Some(slug) = shown_slug(&bridge) else {
                 return;
@@ -484,6 +465,11 @@ struct Loaded {
 
 /// Reads the instance and fills every property the screen shows.
 fn load(bridge: &Bridge, run: &RunState, shared: &Shared, slug: &str) {
+    // The Settings tab shows this instance's layer, so the shared editor is pointed at it
+    // every time the instance is read: a save, a rename, and the first open all land here.
+    shared
+        .editor
+        .open(bridge, EditTarget::Instance(slug.to_string()));
     let (job_slug, run, shared) = (slug.to_string(), run.clone(), shared.clone());
     let slug = slug.to_string();
     bridge.run(
@@ -513,9 +499,7 @@ fn load(bridge: &Bridge, run: &RunState, shared: &Shared, slug: &str) {
             state.set_pending(ModelRc::new(VecModel::from(pending_rows(&pending))));
             shared.set_pending(pending);
 
-            state.set_overrides(ModelRc::new(VecModel::from(setting_rows(
-                &config.settings_overrides,
-            ))));
+            state.set_has_options(!loaded.options.is_empty());
             state.set_options(ModelRc::new(VecModel::from(option_rows(&loaded.options))));
 
             // An instance that sets no heap shows the offered defaults. Saving the tab then

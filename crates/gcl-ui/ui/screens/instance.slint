@@ -1,9 +1,10 @@
-import { CheckBox, LineEdit, ListView, SpinBox } from "std-widgets.slint";
+import { CheckBox, LineEdit, ListView, ScrollView, SpinBox } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
 import { InstanceState, Shell } from "../state.slint";
 import { Button } from "../components/button.slint";
 import { EmptyState } from "../components/empty-state.slint";
 import { ListRow } from "../components/list-row.slint";
+import { SettingsEditor } from "../components/settings-editor.slint";
 import { TabBar } from "../components/tab-bar.slint";
 
 // One instance's detail view: header, four tabs, and nothing else.
@@ -23,6 +24,8 @@ export component InstanceScreen inherits Rectangle {
     property <string> override_key;
     // Value typed into the override editor.
     property <string> override_value;
+    // Whether the read-only options.txt list under Advanced is open.
+    property <bool> options_open: false;
 
     background: Theme.bg;
 
@@ -357,126 +360,120 @@ export component InstanceScreen inherits Rectangle {
             }
         }
 
-        // Settings tab: the overrides this instance rewrites, and what the file holds now.
+        // Settings tab: the typed editor over this instance's own layer, the raw key
+        // editor under it, and what `options.txt` holds right now.
         if InstanceState.tab == 1: VerticalLayout {
             spacing: Theme.gap;
             vertical-stretch: 1;
 
             Text {
-                text: "options.txt overrides, rewritten on every launch";
+                text: "A value set here is written into options.txt on every launch.";
                 color: Theme.text-muted;
                 font-size: Theme.font-size-small;
             }
 
-            HorizontalLayout {
-                spacing: Theme.gap;
-                height: Theme.row-height;
-
-                override_key_field := LineEdit {
-                    placeholder-text: "key";
-                    text <=> root.override_key;
-                    horizontal-stretch: 1;
-                }
-
-                override_value_field := LineEdit {
-                    placeholder-text: "value";
-                    text <=> root.override_value;
-                    horizontal-stretch: 1;
-                }
-
-                override_set_button := Button {
-                    text: "Set";
-                    kind: "primary";
-                    enabled: root.override_key != "";
-                    clicked => {
-                        InstanceState.override_set(root.override_key, root.override_value);
-                        root.override_key = "";
-                        root.override_value = "";
-                    }
-                }
-            }
-
-            if InstanceState.overrides.length == 0: Text {
-                text: "No overrides. The game keeps whatever it wrote.";
-                color: Theme.text-muted;
-                font-size: Theme.font-size;
-                height: Theme.row-height;
-                vertical-alignment: center;
-            }
-
-            if InstanceState.overrides.length > 0: ListView {
+            ScrollView {
                 vertical-stretch: 1;
 
-                for row in InstanceState.overrides: override_row := ListRow {
-                    title: row.key;
-                    height: Theme.row-height + Theme.gap;
+                VerticalLayout {
+                    spacing: Theme.gap;
+                    padding-right: Theme.pad;
+
+                    SettingsEditor { }
 
                     Text {
-                        text: row.key;
-                        color: Theme.text;
-                        font-size: Theme.font-size;
-                        vertical-alignment: center;
-                        horizontal-stretch: 1;
-                        overflow: elide;
-                    }
-
-                    Text {
-                        text: row.value;
+                        text: "Advanced: set a key the catalog does not know";
                         color: Theme.text-muted;
-                        font-size: Theme.font-size;
-                        vertical-alignment: center;
-                        horizontal-stretch: 1;
-                        overflow: elide;
+                        font-size: Theme.font-size-small;
                     }
 
-                    VerticalLayout {
-                        alignment: center;
-                        horizontal-stretch: 0;
-                        override_unset_button := Button {
-                            text: "Unset";
+                    HorizontalLayout {
+                        spacing: Theme.gap;
+                        height: Theme.row-height;
+
+                        override_key_field := LineEdit {
+                            placeholder-text: "key";
+                            text <=> root.override_key;
+                            horizontal-stretch: 1;
+                        }
+
+                        override_value_field := LineEdit {
+                            placeholder-text: "value";
+                            text <=> root.override_value;
+                            horizontal-stretch: 1;
+                        }
+
+                        override_set_button := Button {
+                            text: "Set";
+                            kind: "primary";
+                            enabled: root.override_key != "";
                             clicked => {
-                                InstanceState.override_unset(row.key);
+                                InstanceState.override_set(
+                                    root.override_key, root.override_value);
+                                root.override_key = "";
+                                root.override_value = "";
                             }
                         }
                     }
-                }
-            }
 
-            Text {
-                text: "Current options.txt";
-                color: Theme.text;
-                font-size: Theme.font-size;
-            }
+                    // What the game itself last wrote. Read-only, and only shown once the
+                    // file exists.
+                    if InstanceState.has_options: options_toggle := Rectangle {
+                        height: Theme.row-height;
+                        background: Theme.surface-raised;
+                        border-radius: Theme.radius;
+                        accessible-role: button;
+                        accessible-label: "Current options.txt";
+                        accessible-expandable: true;
+                        accessible-expanded: root.options_open;
+                        accessible-action-default => {
+                            root.options_open = !root.options_open;
+                        }
 
-            if InstanceState.options.length == 0: Text {
-                text: "No options.txt yet. The game writes it on its first run.";
-                color: Theme.text-muted;
-                font-size: Theme.font-size;
-                height: Theme.row-height;
-                vertical-alignment: center;
-            }
+                        HorizontalLayout {
+                            padding-left: Theme.gap;
+                            padding-right: Theme.gap;
 
-            if InstanceState.options.length > 0: ListView {
-                vertical-stretch: 1;
+                            Text {
+                                text: (root.options_open ? "▾ " : "▸ ")
+                                    + "Current options.txt";
+                                color: Theme.text;
+                                font-size: Theme.font-size;
+                                vertical-alignment: center;
+                            }
+                        }
 
-                for row in InstanceState.options: option_row := ListRow {
-                    title: row.key;
-                    Text {
-                        text: row.key;
-                        color: Theme.text-muted;
-                        font-size: Theme.font-size-small;
-                        vertical-alignment: center;
-                        horizontal-stretch: 1;
-                        overflow: elide;
+                        options_touch := TouchArea {
+                            clicked => {
+                                root.options_open = !root.options_open;
+                            }
+                        }
                     }
 
-                    Text {
-                        text: row.value;
-                        color: Theme.text-muted;
-                        font-size: Theme.font-size-small;
-                        vertical-alignment: center;
-                        horizontal-stretch: 1;
-                        overflow: elide;
+                    if InstanceState.has_options && root.options_open: VerticalLayout {
+                        spacing: 0;
+
+                        for row in InstanceState.options: option_row := ListRow {
+                            title: row.key;
+
+                            Text {
+                                text: row.key;
+                                color: Theme.text-muted;
+                                font-size: Theme.font-size-small;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
+
+                            Text {
+                                text: row.value;
+                                color: Theme.text-muted;
+                                font-size: Theme.font-size-small;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
+                        }
                     }
                 }
             }

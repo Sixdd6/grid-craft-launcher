@@ -18,6 +18,8 @@ use crate::{
     VersionRow,
 };
 
+pub mod settings;
+
 /// Builds the instances-list row for one instance.
 pub fn instance_row(i: &Instance, installed: bool, running: bool) -> InstanceRow {
     InstanceRow {

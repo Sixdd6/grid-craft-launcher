@@ -163,8 +163,8 @@ crates/gcl-ui/
   ui/types.slint                exported structs crossing the Rust boundary (InstanceRow, ContentRow, ...)
   ui/state.slint                Shell global plus the per-screen *State globals (below)
   ui/components/                Button, Card, ListRow, ProgressBar, ProgressPanel, SearchBox,
-                                 TabBar, Rail, ToastHost, Dialog and its Confirm/Prompt/Choice/
-                                 DeviceCode/CreateInstance variants
+                                 SettingRow, SettingsEditor, TabBar, Rail, ToastHost, Dialog and
+                                 its Confirm/Prompt/Choice/DeviceCode/CreateInstance variants
   ui/screens/                   instances.slint, instance.slint, browser.slint, accounts.slint,
                                  settings.slint — pure layout, no logic
   src/main.rs                   parses args (`--smoke`, `-h`, `-V`), opens `Launcher::new`, builds
@@ -177,7 +177,10 @@ crates/gcl-ui/
   src/keys.rs                   pure keyboard rules: key_to_screen, move_selection
   src/toasts.rs                 the toast queue: push, prune, sync to the App.toasts model
   src/models/                   pure converters from gcl-core structs to the Slint structs in types.slint
+  src/models/settings.rs        the settings view: one editor row per catalog key, grouped and searched
   src/screens/*.rs               one module per screen; each exposes `wire(&window, &bridge, ...)`
+  src/screens/settings_editor.rs the typed game-settings editor, shared by the settings screen
+                                 (launcher preseed) and the instance Settings tab (overrides)
 ```
 
 ### State globals
@@ -185,7 +188,8 @@ crates/gcl-ui/
 Each screen sits behind `if App.screen == Screen.x: XScreen { }` in `app.slint`, so Rust cannot
 reach a mounted screen's properties directly — there is no handle to call `get_x`/`set_x` on. The
 fix is a global per screen (`InstancesState`, `InstanceState`, `AccountsState`, `SettingsState`,
-declared in `ui/state.slint` and `ui/app.slint`) that both the screen and `src/screens/*.rs` can
+`SettingsEditorState`, declared in `ui/state.slint` and `ui/app.slint`) that both the screen and
+`src/screens/*.rs` can
 reach: the screen binds its layout to the global's properties, and Rust calls
 `window.global::<XState>()` to read and write them and to answer its callbacks. `Shell` is the one
 global every screen may reach directly for two cross-cutting services: `Shell.toast(text, kind)`
