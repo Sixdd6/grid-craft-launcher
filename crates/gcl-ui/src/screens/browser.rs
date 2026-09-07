@@ -319,7 +319,7 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
     {
         let bridge = bridge.clone();
         let shared = shared.clone();
-        state.on_install_pack(move |project_id| {
+        state.on_install_pack(move |project_id, title| {
             let project = project_id.trim().to_string();
             if project.is_empty() {
                 return;
@@ -327,9 +327,17 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
             let Some(window) = bridge.weak().upgrade() else {
                 return;
             };
-            shared.set_pending_pack(Some(Pack::Project(project.clone())));
+            // The pack's own title is the name a user recognises, so the prompt starts
+            // there. A pack installed by typing an id carries no title, and then the id is
+            // all there is to offer.
+            let suggested = match title.trim() {
+                "" => project.as_str(),
+                title => title,
+            }
+            .to_string();
+            shared.set_pending_pack(Some(Pack::Project(project)));
             let state = window.global::<BrowserState>();
-            state.set_name_value(project.as_str().into());
+            state.set_name_value(suggested.as_str().into());
             state.set_name_open(true);
         });
     }

@@ -125,8 +125,9 @@ export global BrowserState {
     // is what decides how it installs: the Type selector can be changed after a search, and
     // the rows on screen keep the kind they were found with.
     callback add(string /* project_id */, string /* kind */);
-    // A modpack is to be installed as a new instance. Carries the project id or slug.
-    callback install_pack(string /* project_id */);
+    // A modpack is to be installed as a new instance. Carries the project id or slug, and
+    // the row's title, which is what the name prompt prefills with when it is not empty.
+    callback install_pack(string /* project_id */, string /* title */);
     // A modpack archive on disk is to be imported as a new instance. Carries its path.
     callback install_pack_file(string /* path */);
     // The source ComboBox changed. Carries its new index.
@@ -172,9 +173,9 @@ export component BrowserScreen inherits Rectangle {
     // A result row's primary action: install a modpack, ask which world a data pack goes
     // into, and add anything else straight to the target instance. The button and the Enter
     // key both come through here, so the two can never drift apart.
-    function activate(project_id: string, kind: string) {
+    function activate(project_id: string, kind: string, title: string) {
         if (kind == "modpack") {
-            BrowserState.install_pack(project_id);
+            BrowserState.install_pack(project_id, title);
         } else if (kind == "datapack") {
             BrowserState.pick_world(project_id, kind);
         } else {
@@ -191,6 +192,7 @@ export component BrowserScreen inherits Rectangle {
             root.activate(
                 BrowserState.rows[root.selected].project_id,
                 BrowserState.rows[root.selected].kind,
+                BrowserState.rows[root.selected].title,
             );
         }
     }
@@ -384,7 +386,9 @@ export component BrowserScreen inherits Rectangle {
                         kind: "primary";
                         enabled: BrowserState.query != "" && !BrowserState.loading;
                         clicked => {
-                            BrowserState.install_pack(BrowserState.query);
+                            // Typed by hand, so there is no title: the prompt falls back
+                            // to the id.
+                            BrowserState.install_pack(BrowserState.query, "");
                         }
                     }
                 }
@@ -498,7 +502,7 @@ export component BrowserScreen inherits Rectangle {
                         kind: "primary";
                         enabled: !BrowserState.loading;
                         clicked => {
-                            BrowserState.install_pack(row.project_id);
+                            BrowserState.install_pack(row.project_id, row.title);
                         }
                     }
                 }
@@ -659,7 +663,7 @@ export component BrowserScreen inherits Rectangle {
                             clicked => {
                                 keys.focus();
                                 root.selected = i;
-                                root.activate(row.project_id, row.kind);
+                                root.activate(row.project_id, row.kind, row.title);
                             }
                         }
                     }

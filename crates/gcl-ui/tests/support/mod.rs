@@ -166,13 +166,6 @@ impl TestApp {
 
     /// [`TestApp::new`], with the extra mock hosts `mocks` names.
     pub fn with(mocks: Mocks) -> TestApp {
-        // `GCL_MSA_CLIENT_ID` wins over the config file and `just` loads a `.env`, so a real
-        // id on this machine must not decide whether sign-in is on.
-        // SAFETY: nextest runs every test binary in its own process, and this runs before
-        // any thread the flow starts.
-        unsafe {
-            std::env::remove_var("GCL_MSA_CLIENT_ID");
-        }
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -603,7 +596,19 @@ pub fn run(flow: impl Future<Output = ()> + 'static) {
 /// Initializes the Slint testing backend. One backend per process, so this runs once.
 pub fn init_backend() {
     static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(i_slint_backend_testing::init_integration_test_with_system_time);
+    ONCE.call_once(|| {
+        // Both variables win over the config file, and `just` loads a `.env`, so a real id
+        // or key on this machine must not decide whether Microsoft sign-in and CurseForge
+        // are on.
+        // SAFETY: nextest runs every test binary in its own process, and every flow calls
+        // this first, before any `TestApp` and so before any thread that could read the
+        // environment.
+        unsafe {
+            std::env::remove_var("GCL_MSA_CLIENT_ID");
+            std::env::remove_var("CURSEFORGE_API_KEY");
+        }
+        i_slint_backend_testing::init_integration_test_with_system_time();
+    });
 }
 
 /// Writes the stand-in java into `dir` and returns its path.
@@ -706,19 +711,20 @@ async fn mock_fabric(server: &MockServer) {
 /// Serves Modrinth: a content search, a modpack search, one project, and its versions.
 ///
 /// The two searches share the `/search` path, so they are told apart by the `facets` value:
-/// only a modpack search asks for `project_type:modpack`. The matchers are opposites, so the
-/// order they are mounted in cannot decide which one answers.
+/// only a modpack search asks for `project_type:modpack`, which reaches the query string
+/// percent-encoded as [`MODPACK_FACET`]. The matchers are opposites, so the order they are
+/// mounted in cannot decide which one answers.
 async fn mock_modrinth(server: &MockServer) {
     let base = server.uri();
     Mock::given(method("GET"))
         .and(path_matcher("/search"))
-        .and(|req: &wiremock::Request| !query_of(req).contains("modpack"))
+        .and(|req: &wiremock::Request| !query_of(req).contains(MODPACK_FACET))
         .respond_with(ResponseTemplate::new(200).set_body_string(MODRINTH_SEARCH))
         .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path_matcher("/search"))
-        .and(|req: &wiremock::Request| query_of(req).contains("modpack"))
+        .and(|req: &wiremock::Request| query_of(req).contains(MODPACK_FACET))
         .respond_with(ResponseTemplate::new(200).set_body_string(MODRINTH_PACKS))
         .mount(server)
         .await;
@@ -747,6 +753,13 @@ async fn mock_modrinth(server: &MockServer) {
     serve(server, PACK_FILE_PATH, pack).await;
     serve(server, PACK_MOD_PATH_URL, PACK_MOD_JAR.to_vec()).await;
 }
+
+/// The `project_type:modpack` facet as it appears in the raw query string.
+///
+/// The client percent-encodes the whole JSON `facets` value, so the colon arrives as `%3A`.
+/// Matching on this rather than on the word `modpack` keeps a pack whose name carries that
+/// word out of the decision.
+const MODPACK_FACET: &str = "project_type%3Amodpack";
 
 /// The query string of a request, without the leading `?`.
 fn query_of(req: &wiremock::Request) -> String {
