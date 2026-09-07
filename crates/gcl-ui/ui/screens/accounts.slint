@@ -1,0 +1,13 @@
+import { Theme } from "../theme.slint";
+import { AccountRow } from "../types.slint";
+import { EmptyState } from "../components/empty-state.slint";
+
+// Account list and sign-in. Filled in by task 6.
+export component AccountsScreen inherits Rectangle {
+    in property <[AccountRow]> rows;
+
+    EmptyState {
+        title: "Accounts";
+        message: "Microsoft and offline sign-in lands in task 6.";
+    }
+}

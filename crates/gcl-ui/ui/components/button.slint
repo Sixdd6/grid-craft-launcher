@@ -1,0 +1,52 @@
+import { Theme } from "../theme.slint";
+
+// Text button. `kind` picks the palette: primary, secondary, or danger.
+export component Button inherits Rectangle {
+    in property <string> text: "Button";
+    in property <string> kind: "secondary";
+    in property <bool> enabled: true;
+    callback clicked();
+
+    property <color> base: root.kind == "primary"
+        ? Theme.accent
+        : (root.kind == "danger" ? Theme.danger : Theme.surface-raised);
+    property <color> label-color: root.kind == "secondary" ? Theme.text : Theme.accent-text;
+
+    height: Theme.row-height;
+    min-width: label.preferred-width + 2 * Theme.pad;
+    horizontal-stretch: 0;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: root.kind == "secondary" ? Theme.border : root.base;
+    background: root.base;
+    opacity: root.enabled ? 1.0 : 0.5;
+
+    label := Text {
+        text: root.text;
+        color: root.label-color;
+        font-size: Theme.font-size;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+        x: Theme.pad;
+        width: root.width - 2 * Theme.pad;
+        height: root.height;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    states [
+        pressed when touch.pressed: {
+            background: root.base.darker(0.2);
+        }
+        hover when touch.has-hover: {
+            background: root.base.brighter(0.15);
+        }
+    ]
+
+    animate background { duration: 120ms; }
+}

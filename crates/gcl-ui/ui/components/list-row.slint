@@ -1,0 +1,28 @@
+import { Theme } from "../theme.slint";
+
+// One dense row in a list. Hover and selection are drawn here, content comes from children.
+export component ListRow inherits Rectangle {
+    in property <bool> selected: false;
+    callback clicked();
+
+    height: Theme.row-height;
+    border-radius: Theme.radius;
+    background: root.selected
+        ? Theme.accent.with-alpha(0.18)
+        : (touch.has-hover ? Theme.surface-hover : Colors.transparent);
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.pad;
+        padding-right: Theme.pad;
+        spacing: Theme.gap;
+        @children
+    }
+
+    animate background { duration: 100ms; }
+}

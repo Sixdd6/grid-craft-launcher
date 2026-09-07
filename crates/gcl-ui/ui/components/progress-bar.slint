@@ -1,0 +1,20 @@
+import { Theme } from "../theme.slint";
+
+// A determinate bar. `fraction` is clamped to 0..1.
+export component ProgressBar inherits Rectangle {
+    in property <float> fraction: 0.35;
+
+    property <float> clamped: max(0.0, min(1.0, root.fraction));
+
+    height: 6px;
+    border-radius: 3px;
+    background: Theme.surface-raised;
+
+    Rectangle {
+        x: 0;
+        width: root.width * root.clamped;
+        height: root.height;
+        border-radius: root.border-radius;
+        background: Theme.accent;
+    }
+}

@@ -1,0 +1,98 @@
+import { Theme } from "../theme.slint";
+import { Screen } from "../types.slint";
+
+// One rail entry: a keyboard shortcut number and a label.
+component Entry inherits Rectangle {
+    in property <string> index-text;
+    in property <string> label;
+    in property <bool> active: false;
+    callback clicked();
+
+    height: Theme.row-height;
+    border-radius: Theme.radius;
+    background: root.active
+        ? Theme.accent.with-alpha(0.18)
+        : (touch.has-hover ? Theme.surface-hover : Colors.transparent);
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.gap;
+        padding-right: Theme.gap;
+        spacing: Theme.gap;
+
+        Text {
+            text: root.index-text;
+            color: Theme.text-muted;
+            font-size: Theme.font-size-small;
+            vertical-alignment: center;
+            width: 12px;
+        }
+
+        Text {
+            text: root.label;
+            color: root.active ? Theme.text : Theme.text-muted;
+            font-size: Theme.font-size;
+            vertical-alignment: center;
+        }
+    }
+
+    animate background { duration: 100ms; }
+}
+
+// Left navigation rail. One entry per screen; the active entry is highlighted.
+export component Rail inherits Rectangle {
+    in property <Screen> current: Screen.instances;
+    callback navigate(Screen);
+
+    width: Theme.rail-width;
+    background: Theme.surface;
+
+    VerticalLayout {
+        padding: Theme.pad;
+        spacing: 2px;
+
+        Text {
+            text: "GRID Craft";
+            color: Theme.text;
+            font-size: Theme.font-size-title;
+            height: Theme.row-height + Theme.gap;
+            vertical-alignment: center;
+        }
+
+        Entry {
+            index-text: "1";
+            label: "Instances";
+            active: root.current == Screen.instances;
+            clicked => { root.navigate(Screen.instances); }
+        }
+        Entry {
+            index-text: "2";
+            label: "Instance";
+            active: root.current == Screen.instance;
+            clicked => { root.navigate(Screen.instance); }
+        }
+        Entry {
+            index-text: "3";
+            label: "Browse";
+            active: root.current == Screen.browser;
+            clicked => { root.navigate(Screen.browser); }
+        }
+        Entry {
+            index-text: "4";
+            label: "Accounts";
+            active: root.current == Screen.accounts;
+            clicked => { root.navigate(Screen.accounts); }
+        }
+        Entry {
+            index-text: "5";
+            label: "Settings";
+            active: root.current == Screen.settings;
+            clicked => { root.navigate(Screen.settings); }
+        }
+
+        Rectangle { }
+    }
+}

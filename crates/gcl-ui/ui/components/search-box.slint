@@ -1,0 +1,38 @@
+import { LineEdit } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Button } from "button.slint";
+
+// A search field with a clear button. `accepted` fires on Enter, `edited` on every keystroke.
+export component SearchBox inherits Rectangle {
+    in property <string> placeholder: "Search";
+    in-out property <string> text;
+    callback accepted(string);
+    callback edited(string);
+
+    height: Theme.row-height;
+    min-width: 200px;
+
+    HorizontalLayout {
+        spacing: Theme.gap;
+
+        edit := LineEdit {
+            placeholder-text: root.placeholder;
+            text <=> root.text;
+            accepted(value) => {
+                root.accepted(value);
+            }
+            edited(value) => {
+                root.edited(value);
+            }
+        }
+
+        Button {
+            text: "clear";
+            enabled: root.text != "";
+            clicked => {
+                root.text = "";
+                root.edited("");
+            }
+        }
+    }
+}

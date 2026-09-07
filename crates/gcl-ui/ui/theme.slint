@@ -1,17 +1,35 @@
-// Design tokens. Dark first. Every screen reads colors from here, never literals.
+// Design tokens. Dark first. Every screen reads colors, spacing, and font sizes from here,
+// never from literals.
 export global Theme {
+    // Surfaces, darkest to lightest.
     out property <color> bg: #121417;
     out property <color> surface: #1b1e23;
     out property <color> surface-raised: #23272e;
+    out property <color> surface-hover: #2b3038;
     out property <color> border: #2e333b;
+
+    // Text.
     out property <color> text: #e6e8eb;
     out property <color> text-muted: #9aa1ab;
+
+    // Accents and status.
     out property <color> accent: #5ac8fa;
     out property <color> accent-text: #0b1014;
     out property <color> danger: #ff5c5c;
+    out property <color> success: #5ad18a;
+    out property <color> warning: #f0b429;
+    out property <color> focus: #7fd8ff;
+
+    // Metrics.
     out property <length> radius: 6px;
     out property <length> gap: 8px;
     out property <length> pad: 12px;
+    out property <length> row-height: 34px;
+    out property <length> rail-width: 200px;
+
+    // Type scale.
     out property <length> font-size: 14px;
-    out property <length> font-size-title: 24px;
+    out property <length> font-size-small: 12px;
+    out property <length> font-size-title: 20px;
+    out property <length> font-size-h1: 24px;
 }

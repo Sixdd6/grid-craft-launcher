@@ -1,0 +1,40 @@
+import { Theme } from "../theme.slint";
+
+// A row of text tabs. `changed` carries the index the user picked.
+export component TabBar inherits Rectangle {
+    in property <[string]> tabs: ["Content", "Settings", "Logs"];
+    in-out property <int> current: 0;
+    callback changed(int);
+
+    height: Theme.row-height;
+
+    HorizontalLayout {
+        spacing: Theme.gap;
+
+        for tab[index] in root.tabs: Rectangle {
+            border-radius: Theme.radius;
+            horizontal-stretch: 0;
+            min-width: label.preferred-width + 2 * Theme.pad;
+            background: index == root.current
+                ? Theme.surface-raised
+                : (touch.has-hover ? Theme.surface-hover : Colors.transparent);
+
+            label := Text {
+                text: tab;
+                color: index == root.current ? Theme.text : Theme.text-muted;
+                font-size: Theme.font-size;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+
+            touch := TouchArea {
+                clicked => {
+                    root.current = index;
+                    root.changed(index);
+                }
+            }
+        }
+
+        Rectangle { }
+    }
+}

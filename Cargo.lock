@@ -1940,6 +1940,8 @@ dependencies = [
  "gcl-core",
  "slint",
  "slint-build",
+ "time",
+ "tokio",
 ]
 
 [[package]]

@@ -1,0 +1,27 @@
+import { Theme } from "../theme.slint";
+
+// Placeholder shown where a list has nothing in it yet.
+export component EmptyState inherits Rectangle {
+    in property <string> title: "Nothing here yet";
+    in property <string> message: "";
+
+    VerticalLayout {
+        alignment: center;
+        spacing: Theme.gap;
+
+        Text {
+            text: root.title;
+            color: Theme.text;
+            font-size: Theme.font-size-title;
+            horizontal-alignment: center;
+        }
+
+        if root.message != "": Text {
+            text: root.message;
+            color: Theme.text-muted;
+            font-size: Theme.font-size;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+}

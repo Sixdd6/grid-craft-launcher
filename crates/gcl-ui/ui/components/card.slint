@@ -1,0 +1,24 @@
+import { Theme } from "../theme.slint";
+
+// A padded surface panel with an optional title. Children stack vertically.
+export component Card inherits Rectangle {
+    in property <string> title;
+
+    background: Theme.surface;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    VerticalLayout {
+        padding: Theme.pad;
+        spacing: Theme.gap;
+
+        if root.title != "": Text {
+            text: root.title;
+            color: Theme.text;
+            font-size: Theme.font-size-title;
+        }
+
+        @children
+    }
+}

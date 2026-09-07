@@ -1,0 +1,15 @@
+import { Theme } from "../theme.slint";
+import { SettingRow, VersionRow, LoaderVersionRow } from "../types.slint";
+import { EmptyState } from "../components/empty-state.slint";
+
+// Settings. Filled in by task 7.
+export component SettingsScreen inherits Rectangle {
+    in property <[SettingRow]> rows;
+    in property <[VersionRow]> versions;
+    in property <[LoaderVersionRow]> loader-versions;
+
+    EmptyState {
+        title: "Settings";
+        message: "Settings and the task panel land in task 7.";
+    }
+}

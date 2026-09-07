@@ -24,8 +24,8 @@ ui-preview file:
 run-cli *args:
     cargo run -p gcl-cli -- {{args}}
 
-run-ui:
-    cargo run -p gcl-ui
+run-ui *args:
+    cargo run -p gcl-ui -- {{args}}
 
 # Live read-only check of a source's endpoints against our parsers
 verify-api source:

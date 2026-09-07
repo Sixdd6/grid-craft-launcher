@@ -1,0 +1,14 @@
+import { Theme } from "../theme.slint";
+import { InstanceRow } from "../types.slint";
+import { EmptyState } from "../components/empty-state.slint";
+
+// Instance list. Filled in by task 3; the shell only needs it to exist.
+export component InstancesScreen inherits Rectangle {
+    in property <[InstanceRow]> rows;
+    in property <string> selected-slug;
+
+    EmptyState {
+        title: "Instances";
+        message: "The instance list lands in task 3.";
+    }
+}

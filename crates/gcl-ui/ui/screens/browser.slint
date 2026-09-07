@@ -1,0 +1,14 @@
+import { Theme } from "../theme.slint";
+import { SearchRow } from "../types.slint";
+import { EmptyState } from "../components/empty-state.slint";
+
+// Content browser. Filled in by task 5.
+export component BrowserScreen inherits Rectangle {
+    in property <[SearchRow]> rows;
+    in property <string> query;
+
+    EmptyState {
+        title: "Browse";
+        message: "Modrinth and CurseForge search lands in task 5.";
+    }
+}

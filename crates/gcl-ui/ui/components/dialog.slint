@@ -1,0 +1,56 @@
+import { Theme } from "../theme.slint";
+import { Button } from "button.slint";
+
+// Modal overlay with a titled panel. Body content comes from children.
+export component Dialog inherits Rectangle {
+    in property <bool> open: true;
+    in property <string> title: "Title";
+    in property <string> close-text: "Close";
+    callback close();
+
+    visible: root.open;
+    background: Colors.black.with-alpha(0.55);
+
+    // Click outside the panel closes the dialog.
+    TouchArea {
+        clicked => {
+            root.close();
+        }
+    }
+
+    Rectangle {
+        width: min(root.width - 4 * Theme.pad, 520px);
+        height: panel.preferred-height;
+        background: Theme.surface;
+        border-radius: Theme.radius;
+        border-width: 1px;
+        border-color: Theme.border;
+
+        // Swallows clicks so they do not reach the overlay behind the panel.
+        TouchArea { }
+
+        panel := VerticalLayout {
+            padding: Theme.pad;
+            spacing: Theme.gap;
+
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-size: Theme.font-size-title;
+            }
+
+            @children
+
+            HorizontalLayout {
+                alignment: end;
+                Button {
+                    text: root.close-text;
+                    kind: "primary";
+                    clicked => {
+                        root.close();
+                    }
+                }
+            }
+        }
+    }
+}

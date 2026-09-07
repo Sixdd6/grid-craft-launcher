@@ -1,24 +1,163 @@
 import { Theme } from "theme.slint";
+import {
+    AccountRow, ContentRow, InstanceRow, LoaderVersionRow, LogLine, PendingRow,
+    Screen, SearchRow, SettingRow, TaskRow, VersionRow
+} from "types.slint";
+import { Rail } from "components/rail.slint";
+import { Dialog } from "components/dialog.slint";
+import { ProgressBar } from "components/progress-bar.slint";
+import { InstancesScreen } from "screens/instances.slint";
+import { InstanceScreen } from "screens/instance.slint";
+import { BrowserScreen } from "screens/browser.slint";
+import { AccountsScreen } from "screens/accounts.slint";
+import { SettingsScreen } from "screens/settings.slint";
+
+// Re-exported so the generated Rust module has every struct the screens will need.
+export {
+    AccountRow, ContentRow, InstanceRow, LoaderVersionRow, LogLine, PendingRow,
+    Screen, SearchRow, SettingRow, TaskRow, Theme, VersionRow
+}
+
+// Shell state and the callbacks Rust wires up. Screens read from here, never from each other.
+export global App {
+    in-out property <Screen> screen: Screen.instances;
+    in-out property <string> current_slug;
+    in-out property <string> status_text: "Ready";
+    in-out property <bool> busy: false;
+    in-out property <[TaskRow]> tasks;
+    in-out property <[LogLine]> app_log;
+    in-out property <string> error_title;
+    in-out property <string> error_text;
+    in-out property <bool> error_open: false;
+
+    callback navigate(Screen);
+    callback open_instance(string);
+    callback dismiss_error();
+}
 
 export component AppWindow inherits Window {
-    in property <string> version: "0.0.0";
     title: "GRID Craft Launcher";
     background: Theme.bg;
     min-width: 960px;
     min-height: 600px;
+    preferred-width: 1200px;
+    preferred-height: 760px;
 
-    VerticalLayout {
-        padding: Theme.pad;
-        spacing: Theme.gap;
-        Text {
-            text: "GRID Craft Launcher";
-            color: Theme.text;
-            font-size: Theme.font-size-title;
+    // The newest log line, shown as a toast while it is a warning.
+    property <string> toast_text: App.app_log.length > 0
+        && App.app_log[App.app_log.length - 1].level == "warning"
+        ? App.app_log[App.app_log.length - 1].text
+        : "";
+
+    HorizontalLayout {
+        Rail {
+            current: App.screen;
+            navigate(target) => {
+                App.navigate(target);
+            }
         }
+
+        VerticalLayout {
+            // Screen area. One screen is instantiated at a time.
+            Rectangle {
+                vertical-stretch: 1;
+                background: Theme.bg;
+
+                if App.screen == Screen.instances: InstancesScreen { }
+                if App.screen == Screen.instance: InstanceScreen {
+                    slug: App.current_slug;
+                }
+                if App.screen == Screen.browser: BrowserScreen { }
+                if App.screen == Screen.accounts: AccountsScreen { }
+                if App.screen == Screen.settings: SettingsScreen { }
+            }
+
+            // Bottom strip: task count, the first task, and the status line.
+            // The full task panel lands in task 7.
+            Rectangle {
+                height: Theme.row-height + Theme.gap;
+                background: Theme.surface;
+                border-width: 1px;
+                border-color: Theme.border;
+
+                HorizontalLayout {
+                    padding-left: Theme.pad;
+                    padding-right: Theme.pad;
+                    spacing: Theme.pad;
+
+                    Text {
+                        text: App.tasks.length == 0
+                            ? "No tasks"
+                            : App.tasks.length + " task(s)";
+                        color: Theme.text-muted;
+                        font-size: Theme.font-size-small;
+                        vertical-alignment: center;
+                        horizontal-stretch: 0;
+                    }
+
+                    Text {
+                        text: App.tasks.length > 0 ? App.tasks[0].label : App.status_text;
+                        color: Theme.text;
+                        font-size: Theme.font-size-small;
+                        vertical-alignment: center;
+                        horizontal-alignment: left;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
+                        ProgressBar {
+                            width: 160px;
+                            visible: App.tasks.length > 0;
+                            fraction: App.tasks.length > 0 ? App.tasks[0].fraction : 0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Toast host. Shows the newest warning until a later line replaces it.
+    toast := Rectangle {
+        visible: root.toast_text != "";
+        width: min(root.width - 4 * Theme.pad, 520px);
+        height: label.preferred-height + 2 * Theme.gap;
+        x: root.width - self.width - 2 * Theme.pad;
+        y: root.height - self.height - Theme.row-height - 3 * Theme.gap;
+        background: Theme.surface-raised;
+        border-radius: Theme.radius;
+        border-width: 1px;
+        border-color: Theme.warning;
+
+        label := Text {
+            x: Theme.pad;
+            width: parent.width - 2 * Theme.pad;
+            y: Theme.gap;
+            text: root.toast_text;
+            color: Theme.text;
+            font-size: Theme.font-size-small;
+            wrap: word-wrap;
+        }
+    }
+
+    // Error dialog. Rust sets the three error properties; dismiss_error clears them.
+    Dialog {
+        width: root.width;
+        height: root.height;
+        open: App.error_open;
+        title: App.error_title;
+        close-text: "Dismiss";
+        close => {
+            App.dismiss_error();
+        }
+
         Text {
-            text: "version " + root.version;
+            text: App.error_text;
             color: Theme.text-muted;
             font-size: Theme.font-size;
+            wrap: word-wrap;
         }
     }
 }

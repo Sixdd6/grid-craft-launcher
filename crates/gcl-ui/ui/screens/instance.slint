@@ -1,0 +1,15 @@
+import { Theme } from "../theme.slint";
+import { ContentRow, PendingRow } from "../types.slint";
+import { EmptyState } from "../components/empty-state.slint";
+
+// One instance's detail view. Filled in by task 4.
+export component InstanceScreen inherits Rectangle {
+    in property <string> slug;
+    in property <[ContentRow]> content;
+    in property <[PendingRow]> pending;
+
+    EmptyState {
+        title: "Instance";
+        message: "The instance detail view lands in task 4.";
+    }
+}

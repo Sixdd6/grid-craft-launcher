@@ -1,0 +1,99 @@
+// Data that crosses the Rust/Slint boundary. Rust builds these as VecModels in src/models/.
+
+// One instance in the instances list.
+export struct InstanceRow {
+    slug: string,
+    name: string,
+    minecraft: string,
+    loader: string,
+    loader_version: string,
+    last_launched: string,
+    installed: bool,
+    running: bool,
+}
+
+// One installed file inside an instance.
+export struct ContentRow {
+    project_id: string,
+    source: string,
+    name: string,
+    version: string,
+    kind: string,
+    enabled: bool,
+    update_available: bool,
+    file_name: string,
+}
+
+// One search hit from a content source.
+export struct SearchRow {
+    source: string,
+    project_id: string,
+    slug: string,
+    title: string,
+    description: string,
+    author: string,
+    kind: string,
+    downloads: string,
+    page_url: string,
+}
+
+// One saved account.
+export struct AccountRow {
+    id: string,
+    name: string,
+    kind: string,
+    expires: string,
+    active: bool,
+}
+
+// One tracked task. `status` is running, done, or failed.
+export struct TaskRow {
+    id: int,
+    label: string,
+    fraction: float,
+    status: string,
+    detail: string,
+}
+
+// One line in the app log.
+export struct LogLine {
+    level: string,
+    text: string,
+}
+
+// One editable setting.
+export struct SettingRow {
+    key: string,
+    value: string,
+}
+
+// One loader build offered for an instance.
+export struct LoaderVersionRow {
+    version: string,
+    stable: bool,
+    recommended: bool,
+}
+
+// One Minecraft version from the Mojang manifest.
+export struct VersionRow {
+    id: string,
+    kind: string,
+    release_time: string,
+}
+
+// One download the user still has to fetch by hand.
+export struct PendingRow {
+    project_id: string,
+    file_name: string,
+    page_url: string,
+    kind: string,
+}
+
+// Which screen the shell shows.
+export enum Screen {
+    instances,
+    instance,
+    browser,
+    accounts,
+    settings,
+}

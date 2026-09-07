@@ -16,6 +16,8 @@ path = "src/main.rs"
 [dependencies]
 gcl-core.workspace = true
 slint.workspace = true
+time.workspace = true
+tokio.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true
