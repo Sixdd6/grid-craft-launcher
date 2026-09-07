@@ -187,7 +187,11 @@ pub enum LaunchOutcome {
 /// Read access to the launcher's config, for as long as the guard lives.
 ///
 /// It derefs to [`Config`], so `launcher.config().parallel_downloads` reads as it always did.
-/// It holds a read lock, so a guard kept alive blocks [`Launcher::update_config`].
+///
+/// It holds the config's read lock. Read what you need and let it drop at the end of the
+/// statement: never hold one across another [`Launcher`] call. Most of them read the config
+/// themselves, and [`Launcher::update_config`] waits for every reader, so a guard held across
+/// one on the same thread deadlocks.
 #[derive(Debug)]
 pub struct ConfigRead<'a>(RwLockReadGuard<'a, Config>);
 
@@ -365,9 +369,9 @@ impl Launcher {
 
     /// Read access to the loaded config.
     ///
-    /// The returned guard holds the config's read lock and derefs to [`Config`], so hold it
-    /// no longer than the read needs: [`Launcher::update_config`] waits for it. Never call
-    /// `update_config` while one is alive on the same thread, which would deadlock.
+    /// The returned guard holds the config's read lock and derefs to [`Config`]. Hold it no
+    /// longer than the read needs, and never across another [`Launcher`] call: see
+    /// [`ConfigRead`].
     pub fn config(&self) -> ConfigRead<'_> {
         ConfigRead(self.read_config())
     }
@@ -376,15 +380,17 @@ impl Launcher {
     ///
     /// `f` runs under the write lock, so a whole edit lands at once. The file is saved before
     /// the lock is released, so a reader never sees a change that is not on disk. The cache
-    /// behind [`Launcher::sources`] is cleared afterwards, because an edit may have added or
-    /// removed the CurseForge API key; the next `sources` call builds the list again.
+    /// behind [`Launcher::sources`] is cleared either way, because an edit may have added or
+    /// removed the CurseForge API key: the edit stands in memory even when the save fails, so
+    /// a kept cache would disagree with the config the rest of the launcher reads.
     pub fn update_config(&self, f: impl FnOnce(&mut Config)) -> Result<(), crate::Error> {
-        {
+        let saved = {
             let mut config = self.config.write().unwrap_or_else(|err| err.into_inner());
             f(&mut config);
-            config.save(&self.root.config_file())?;
-        }
+            config.save(&self.root.config_file())
+        };
         self.clear_sources();
+        saved?;
         Ok(())
     }
 
@@ -815,8 +821,10 @@ impl Launcher {
 
     /// Spawns the prepared command and the task that waits for it.
     ///
-    /// The task records the launch in `instance.toml` and reads a crash hint out of the log
-    /// when the exit code is not zero, so both launches report the same [`LaunchOutcome`].
+    /// `last_launched` is written as soon as the process starts, so a caller that lists
+    /// instances while the game runs already sees the launch. The task writes it again when
+    /// the game exits, and reads a crash hint out of the log when the exit code is not zero,
+    /// so both launches report the same [`LaunchOutcome`].
     fn start(&self, prepared: PreparedLaunch) -> Result<RunningLaunch, crate::Error> {
         let PreparedLaunch {
             cmd,
@@ -829,8 +837,12 @@ impl Launcher {
         let pid = game.child.id();
         let slug = instance.slug.clone();
         let path = log_path.clone();
+        instance.config.last_launched = Some(now_rfc3339());
+        instance.save()?;
         let wait = self.runtime.spawn(async move {
             let code = crate::launch::wait(game).await?;
+            // Written again on exit, so the timestamp survives an edit made while the game
+            // ran and a reader can tell a finished launch from a running one by the log.
             instance.config.last_launched = Some(now_rfc3339());
             instance.save()?;
             let hint = (code != 0).then(|| crate::launch::crash_hint(&path));
@@ -857,6 +869,9 @@ impl Launcher {
     /// `None` when neither is set and a launch would find or install a runtime itself.
     pub fn instance_summary(&self, slug: &str) -> Result<InstanceSummary, crate::Error> {
         let instance = self.instances().get(slug)?;
+        // A loader instance with no `loader_version` has never been installed: the build it
+        // would resolve is not decided yet, so the id built here matches no cached file and
+        // the answer is `None` by design. That is the state the caller has to report anyway.
         let id = crate::loaders::version_id(
             instance.config.loader,
             &instance.config.minecraft,

@@ -800,6 +800,16 @@ async fn an_async_launch_runs_the_game_and_reports_how_it_exited() {
         assert_eq!(running.slug, instance.slug);
         assert!(running.pid.is_some(), "the child was started");
         let log_path = running.log_path.clone();
+        let launched_at = launcher
+            .instances()
+            .get(&instance.slug)
+            .expect("reload")
+            .config
+            .last_launched;
+        assert!(
+            launched_at.is_some(),
+            "the launch is recorded as soon as the process starts, not when it exits"
+        );
 
         let outcome = running.wait_blocking(&launcher).expect("wait");
         let LaunchOutcome::Exited {
@@ -825,7 +835,7 @@ async fn an_async_launch_runs_the_game_and_reports_how_it_exited() {
                 .config
                 .last_launched
                 .is_some(),
-            "the launch was recorded"
+            "the exit rewrote the timestamp, and did not clear it"
         );
         dir
     })
