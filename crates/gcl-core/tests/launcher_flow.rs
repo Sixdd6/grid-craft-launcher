@@ -3,6 +3,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use gcl_core::auth::secrets::{MemoryStore, SecretStoreKind};
+use gcl_core::auth::{Account, AccountKind};
 use gcl_core::content::AddRequest;
 use gcl_core::download::hash::sha1_hex;
 use gcl_core::instances::model::Loader;
@@ -34,6 +36,7 @@ fn launcher(dir: &tempfile::TempDir, mojang: Option<String>, fabric: Option<Stri
             fabric: fabric.unwrap_or_else(|| "http://fabric.invalid".to_string()),
             ..LoaderEndpoints::default()
         },
+        msa: common::dead_msa_endpoints(),
         ..Endpoints::default()
     };
     let (launcher, _rx) =
@@ -160,6 +163,7 @@ fn forge_launcher(dir: &tempfile::TempDir, uri: String, runner: Arc<FakeRunner>)
             forge_meta: uri,
             ..LoaderEndpoints::default()
         },
+        msa: common::dead_msa_endpoints(),
         ..Endpoints::default()
     };
     let (launcher, _rx) =
@@ -336,6 +340,7 @@ fn modrinth_launcher(dir: &tempfile::TempDir, uri: String) -> Launcher {
             fabric: "http://fabric.invalid".to_string(),
             ..LoaderEndpoints::default()
         },
+        msa: common::dead_msa_endpoints(),
     };
     let (launcher, _rx) =
         Launcher::open_with_endpoints(dir.path().to_path_buf(), endpoints).expect("build launcher");
@@ -474,6 +479,258 @@ async fn sources_hold_curseforge_only_when_a_key_is_configured() {
         assert_eq!(ids, vec![SourceId::Modrinth, SourceId::CurseForge]);
         assert!(keyed.source(SourceId::CurseForge).is_ok());
         (dir, with_key)
+    })
+    .await
+    .expect("blocking task");
+}
+
+/// Microsoft client id the login tests configure. Any non-empty string will do: the mock
+/// endpoints never check it.
+const MSA_CLIENT_ID: &str = "test-client";
+
+/// A Minecraft token expiry far enough ahead that no launch treats it as stale.
+const NOT_EXPIRED: &str = "2999-01-01T00:00:00Z";
+
+/// An expiry in the past, so a launch has to refresh before it builds a command line.
+const EXPIRED: &str = "2020-01-01T00:00:00Z";
+
+/// A launcher with Mojang and all six Microsoft hosts pointed at `uri`, a client id
+/// configured, and refresh tokens kept in memory.
+///
+/// `client_id` of `None` leaves Microsoft login turned off, which is what a user without a
+/// registered app has.
+fn msa_launcher(dir: &tempfile::TempDir, uri: &str, client_id: Option<&str>) -> Launcher {
+    // `GCL_MSA_CLIENT_ID` wins over the config file, and `just` loads a `.env`, so a real id
+    // on this machine must not decide the test.
+    // SAFETY: nextest runs every test in its own process, so nothing else reads the env.
+    unsafe {
+        std::env::remove_var("GCL_MSA_CLIENT_ID");
+    }
+    let endpoints = Endpoints {
+        mojang: uri.to_string(),
+        modrinth: "http://modrinth.invalid".to_string(),
+        curseforge: "http://curseforge.invalid".to_string(),
+        loaders: LoaderEndpoints {
+            fabric: "http://fabric.invalid".to_string(),
+            ..LoaderEndpoints::default()
+        },
+        msa: common::msa_endpoints(uri),
+    };
+    let (mut launcher, _rx) =
+        Launcher::open_with_endpoints(dir.path().to_path_buf(), endpoints).expect("build launcher");
+    launcher.config_mut().keys.msa_client_id = client_id.map(str::to_string);
+    launcher.with_secret_store(Box::new(MemoryStore::new()))
+}
+
+/// A signed-in Microsoft account as the accounts file stores one.
+fn stored_msa_account(expires: &str) -> Account {
+    Account {
+        id: common::MSA_ACCOUNT_ID.to_string(),
+        name: common::MSA_NAME.to_string(),
+        kind: AccountKind::Msa,
+        mc_token: Some(MC_TOKEN.to_string()),
+        mc_token_expires: Some(expires.to_string()),
+        xuid: Some(common::MSA_XUID.to_string()),
+        refresh_store: Some(SecretStoreKind::Memory),
+    }
+}
+
+/// The Minecraft token the mock services hand out, and the one a stored account carries.
+const MC_TOKEN: &str = "mc-token-1";
+
+/// An instance with a fixed java path, which keeps a launch off the Mojang runtime endpoints.
+fn launchable_instance(launcher: &Launcher) -> gcl_core::instances::Instance {
+    let mut instance = launcher
+        .instances()
+        .create("Pack", MC, Loader::None, None, &BTreeMap::new())
+        .expect("create instance");
+    instance.config.jvm.java_path = Some(std::path::PathBuf::from("/usr/bin/java"));
+    instance.save().expect("save instance");
+    instance
+}
+
+/// The value that follows `flag` in a command line.
+fn arg_after(args: &[String], flag: &str) -> String {
+    let at = args
+        .iter()
+        .position(|a| a == flag)
+        .unwrap_or_else(|| panic!("a {flag} argument in {args:?}"));
+    args[at + 1].clone()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn msa_login_saves_the_account_and_its_refresh_token() {
+    let server = MockServer::start().await;
+    common::mount_device_code(&server).await;
+    common::mount_token(&server, "refresh-1", 1).await;
+    common::mount_msa_chain(&server, MC_TOKEN).await;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let uri = server.uri();
+    let dir = tokio::task::spawn_blocking(move || {
+        let launcher = msa_launcher(&dir, &uri, Some(MSA_CLIENT_ID));
+        assert!(launcher.msa_available());
+
+        let shown = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = Arc::clone(&shown);
+        let account = launcher
+            .msa_login(&move |code: &gcl_core::auth::msa::DeviceCode| {
+                seen.lock().expect("lock").push(code.user_code.clone());
+            })
+            .expect("sign in");
+
+        assert_eq!(shown.lock().expect("lock").as_slice(), ["ABCD-EFGH"]);
+        assert_eq!(account.kind, AccountKind::Msa);
+        assert_eq!(account.id, common::MSA_ACCOUNT_ID);
+        assert_eq!(account.name, common::MSA_NAME);
+        assert_eq!(account.xuid.as_deref(), Some(common::MSA_XUID));
+        assert_eq!(account.mc_token.as_deref(), Some(MC_TOKEN));
+        assert_eq!(
+            launcher.accounts().active().expect("active"),
+            Some(account.clone()),
+            "the first account signed in becomes the active one"
+        );
+        assert_eq!(
+            launcher.secrets().get(&account.id).expect("get"),
+            Some("refresh-1".to_string()),
+            "the refresh token went to the injected store"
+        );
+        dir
+    })
+    .await
+    .expect("blocking task");
+    server.verify().await;
+    drop(dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dry_run_launch_of_a_microsoft_account_fills_in_every_placeholder() {
+    let server = MockServer::start().await;
+    common::mock_vanilla_with_arguments(&server, MC, common::ACCOUNT_ARGUMENTS).await;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let uri = server.uri();
+    tokio::task::spawn_blocking(move || {
+        let launcher = msa_launcher(&dir, &uri, Some(MSA_CLIENT_ID));
+        launcher
+            .accounts()
+            .add(stored_msa_account(NOT_EXPIRED))
+            .expect("add account");
+        let instance = launchable_instance(&launcher);
+
+        // No token endpoint is mounted, so a refresh of this fresh token would fail the launch.
+        let outcome = launcher
+            .launch_instance(&instance.slug, None, None, true)
+            .expect("dry run");
+        let LaunchOutcome::DryRun(cmd) = outcome else {
+            panic!("expected a dry run");
+        };
+        assert_eq!(arg_after(&cmd.args, "--username"), common::MSA_NAME);
+        assert_eq!(arg_after(&cmd.args, "--userType"), "msa");
+        assert_eq!(arg_after(&cmd.args, "--xuid"), common::MSA_XUID);
+        assert_eq!(arg_after(&cmd.args, "--clientId"), MSA_CLIENT_ID);
+        assert_eq!(arg_after(&cmd.args, "--accessToken"), MC_TOKEN);
+
+        let hidden = cmd.redacted();
+        assert_eq!(arg_after(&hidden.args, "--accessToken"), "<redacted>");
+        assert!(
+            !hidden.args.iter().any(|a| a.contains(MC_TOKEN)),
+            "the printed command line carries no token: {:?}",
+            hidden.args
+        );
+        dir
+    })
+    .await
+    .expect("blocking task");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_launch_with_a_stale_token_refreshes_once_before_building_the_command() {
+    let server = MockServer::start().await;
+    common::mock_vanilla_with_arguments(&server, MC, common::ACCOUNT_ARGUMENTS).await;
+    common::mount_token(&server, "refresh-2", 1).await;
+    common::mount_msa_chain(&server, "mc-token-refreshed").await;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let uri = server.uri();
+    let dir = tokio::task::spawn_blocking(move || {
+        let launcher = msa_launcher(&dir, &uri, Some(MSA_CLIENT_ID));
+        launcher
+            .accounts()
+            .add(stored_msa_account(EXPIRED))
+            .expect("add account");
+        launcher
+            .secrets()
+            .put(common::MSA_ACCOUNT_ID, "refresh-1")
+            .expect("seed the refresh token");
+        let instance = launchable_instance(&launcher);
+
+        let outcome = launcher
+            .launch_instance(&instance.slug, None, None, true)
+            .expect("dry run");
+        let LaunchOutcome::DryRun(cmd) = outcome else {
+            panic!("expected a dry run");
+        };
+        assert_eq!(
+            arg_after(&cmd.args, "--accessToken"),
+            "mc-token-refreshed",
+            "the launch used the token the refresh returned"
+        );
+        assert_eq!(
+            launcher.secrets().get(common::MSA_ACCOUNT_ID).expect("get"),
+            Some("refresh-2".to_string()),
+            "the rotated refresh token replaced the old one"
+        );
+        let saved = launcher
+            .accounts()
+            .find(common::MSA_ACCOUNT_ID)
+            .expect("find")
+            .expect("the account is still stored");
+        assert_eq!(saved.mc_token.as_deref(), Some("mc-token-refreshed"));
+        dir
+    })
+    .await
+    .expect("blocking task");
+    // `mount_token` expects exactly one request, so this proves one refresh, not two.
+    server.verify().await;
+    drop(dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn without_a_client_id_microsoft_login_is_disabled() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    tokio::task::spawn_blocking(move || {
+        let launcher = msa_launcher(&dir, "http://msa.invalid", None);
+        assert!(!launcher.msa_available());
+
+        let err = launcher
+            .msa_login(&|_code: &gcl_core::auth::msa::DeviceCode| {
+                panic!("no code is ever asked for");
+            })
+            .expect_err("no client id");
+        assert!(
+            matches!(err, gcl_core::Error::Auth(auth::Error::Disabled)),
+            "{err:?}"
+        );
+        assert_eq!(
+            err.to_string(),
+            "microsoft login: disabled (no GCL_MSA_CLIENT_ID)"
+        );
+
+        // A stale token cannot be refreshed either, so the launch says the same thing.
+        launcher
+            .accounts()
+            .add(stored_msa_account(EXPIRED))
+            .expect("add account");
+        let instance = launchable_instance(&launcher);
+        let err = launcher
+            .launch_instance(&instance.slug, None, None, true)
+            .expect_err("the token is stale and nothing can refresh it");
+        assert!(
+            matches!(err, gcl_core::Error::Auth(auth::Error::Disabled)),
+            "{err:?}"
+        );
+        dir
     })
     .await
     .expect("blocking task");

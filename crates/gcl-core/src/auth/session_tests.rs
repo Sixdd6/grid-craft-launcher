@@ -316,6 +316,49 @@ async fn refresh_rotates_the_stored_token_and_updates_the_minecraft_token() {
 }
 
 #[tokio::test]
+async fn a_chain_failure_after_the_refresh_keeps_the_rotated_token() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"access_token":"msa-access-2","refresh_token":"refresh-2"}"#),
+        )
+        .mount(&server)
+        .await;
+    // Xbox Live fails, so the chain stops after the token endpoint has already rotated.
+    Mock::given(method("POST"))
+        .and(path("/xbl"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let msa = msa(&server);
+    let secrets = MemoryStore::new();
+    secrets.put(ACCOUNT_ID, "refresh-1").expect("put");
+    let (_dir, store) = accounts();
+    let stored = msa_account(Some("2020-01-01T00:00:00Z"));
+    store.add(stored.clone()).expect("add");
+    let sink = null_sink();
+    let ctx = LoginCtx {
+        msa: &msa,
+        secrets: &secrets,
+        accounts: &store,
+        sink: &sink,
+    };
+
+    refresh_account(&ctx, &stored)
+        .await
+        .expect_err("Xbox Live is down");
+
+    assert_eq!(
+        secrets.get(ACCOUNT_ID).expect("get"),
+        Some("refresh-2".to_string()),
+        "the old token is spent: keeping the rotated one lets the next attempt work"
+    );
+}
+
+#[tokio::test]
 async fn refresh_without_a_stored_token_reports_no_refresh_token() {
     let server = MockServer::start().await;
     let msa = msa(&server);
@@ -380,8 +423,8 @@ async fn refresh_of_a_profile_for_another_account_is_a_mismatch() {
     assert!(matches!(err, Error::AccountMismatch { .. }), "got {err:?}");
     assert_eq!(
         secrets.get("someone-else").expect("get"),
-        Some("refresh-1".to_string()),
-        "a mismatch leaves the stored token alone"
+        Some("refresh-2".to_string()),
+        "the rotated token is kept: Microsoft has already invalidated refresh-1"
     );
 }
 

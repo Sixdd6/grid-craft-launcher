@@ -9,6 +9,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use gcl_core::auth::msa::MsaEndpoints;
 use gcl_core::download::hash::sha1_hex;
 use gcl_core::java::{JavaInstall, JavaSource};
 use gcl_core::loaders::ProcessRunner;
@@ -56,10 +57,27 @@ pub const LOG_CONFIG: &[u8] = b"<Configuration></Configuration>";
 /// File name the served log4j2 configuration is cached under.
 pub const LOG_CONFIG_ID: &str = "client-1.12.xml";
 
+/// The `minecraftArguments` string [`mock_vanilla`] serves: the player name only.
+pub const VANILLA_ARGUMENTS: &str = "--username ${auth_player_name}";
+
+/// Arguments that name every account placeholder, for a Microsoft launch.
+pub const ACCOUNT_ARGUMENTS: &str = concat!(
+    "--username ${auth_player_name} --accessToken ${auth_access_token} ",
+    "--userType ${user_type} --xuid ${auth_xuid} --clientId ${clientid}"
+);
+
 /// Serves the manifest, version JSON, client jar, and an empty asset index for one version id.
 ///
 /// The version has no libraries and no assets, so installing it fetches only the client jar.
 pub async fn mock_vanilla(server: &MockServer, id: &str) {
+    mock_vanilla_with_arguments(server, id, VANILLA_ARGUMENTS).await
+}
+
+/// [`mock_vanilla`] with a chosen `minecraftArguments` string.
+///
+/// A test that asserts on the account placeholders serves [`ACCOUNT_ARGUMENTS`]; the default
+/// version names the player only, which keeps the other tests' command lines short.
+pub async fn mock_vanilla_with_arguments(server: &MockServer, id: &str, minecraft_arguments: &str) {
     let base = server.uri();
     let index_body = serde_json::json!({ "objects": {} })
         .to_string()
@@ -68,7 +86,7 @@ pub async fn mock_vanilla(server: &MockServer, id: &str) {
         "id": id,
         "type": "release",
         "mainClass": "net.minecraft.client.main.Main",
-        "minecraftArguments": "--username ${auth_player_name}",
+        "minecraftArguments": minecraft_arguments,
         "libraries": [],
         "downloads": {
             "client": {
@@ -115,6 +133,96 @@ pub async fn mock_vanilla(server: &MockServer, id: &str) {
     serve(server, "/vanilla/client.jar", CLIENT_JAR.to_vec()).await;
     serve(server, "/vanilla/index.json", index_body).await;
     serve(server, "/vanilla/log4j2.xml", LOG_CONFIG.to_vec()).await;
+}
+
+/// Microsoft login endpoints that all point at one mock server, each on its own path.
+pub fn msa_endpoints(base: &str) -> MsaEndpoints {
+    MsaEndpoints {
+        device_code: format!("{base}/devicecode"),
+        token: format!("{base}/token"),
+        xbl: format!("{base}/xbl"),
+        xsts: format!("{base}/xsts"),
+        mc_login: format!("{base}/mclogin"),
+        profile: format!("{base}/profile"),
+    }
+}
+
+/// Microsoft login endpoints no request can reach, for a test that must make none.
+pub fn dead_msa_endpoints() -> MsaEndpoints {
+    msa_endpoints("http://msa.invalid")
+}
+
+/// Profile id the mock Minecraft services profile answers with, undashed.
+pub const MSA_PROFILE_ID: &str = "b50ad385829d3141a2167e7d7539ba7f";
+
+/// The same profile id as the accounts file stores it: dashed and lowercase.
+pub const MSA_ACCOUNT_ID: &str = "b50ad385-829d-3141-a216-7e7d7539ba7f";
+
+/// Player name the mock profile carries.
+pub const MSA_NAME: &str = "Notch";
+
+/// Xbox user id the mock XSTS answer carries.
+pub const MSA_XUID: &str = "2535";
+
+/// Mounts the device-code endpoint, polling with no wait between polls.
+pub async fn mount_device_code(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path_matcher("/devicecode"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"user_code":"ABCD-EFGH","device_code":"dev-secret",
+                 "verification_uri":"https://microsoft.com/link",
+                 "expires_in":900,"interval":0,"message":"Sign in."}"#,
+        ))
+        .mount(server)
+        .await;
+}
+
+/// Mounts the token endpoint, which answers both a device-code poll and a refresh.
+///
+/// `expect` is how many requests the test requires; `server.verify()` checks the count.
+pub async fn mount_token(server: &MockServer, refresh_token: &str, expect: u64) {
+    Mock::given(method("POST"))
+        .and(path_matcher("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+            r#"{{"access_token":"msa-access","refresh_token":"{refresh_token}"}}"#
+        )))
+        .expect(expect)
+        .mount(server)
+        .await;
+}
+
+/// Mounts Xbox Live, XSTS, the Minecraft login, and the profile read with fixed answers.
+///
+/// The Minecraft token lasts a day, so a freshly signed-in account never looks stale.
+pub async fn mount_msa_chain(server: &MockServer, mc_token: &str) {
+    Mock::given(method("POST"))
+        .and(path_matcher("/xbl"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"Token":"xbl-token","DisplayClaims":{"xui":[{"uhs":"user-hash"}]}}"#,
+        ))
+        .mount(server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path_matcher("/xsts"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+            r#"{{"Token":"xsts-token","DisplayClaims":{{"xui":[{{"uhs":"user-hash","xid":"{MSA_XUID}"}}]}}}}"#
+        )))
+        .mount(server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path_matcher("/mclogin"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+            r#"{{"access_token":"{mc_token}","expires_in":86400}}"#
+        )))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_matcher("/profile"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+            r#"{{"id":"{MSA_PROFILE_ID}","name":"{MSA_NAME}"}}"#
+        )))
+        .mount(server)
+        .await;
 }
 
 /// Minecraft version the synthetic Forge installer targets.

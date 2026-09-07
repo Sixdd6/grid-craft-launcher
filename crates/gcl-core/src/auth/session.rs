@@ -134,13 +134,18 @@ pub async fn complete_chain(ctx: &LoginCtx<'_>, tokens: MsaTokens) -> Result<Acc
 /// account, and with [`Error::AccountMismatch`] when the refreshed profile belongs to
 /// someone else. The rotated refresh token replaces the old one, and the refreshed account
 /// replaces the stored one.
+///
+/// The rotated token is written as soon as the token endpoint answers, before the Xbox and
+/// Minecraft steps run. Microsoft has already invalidated the old token by then, so a later
+/// failure in the chain must not throw the new one away: keeping it lets the next attempt
+/// sign in again instead of asking the user for a fresh device code.
 #[tracing::instrument(skip_all)]
 pub async fn refresh_account(ctx: &LoginCtx<'_>, account: &Account) -> Result<Account, Error> {
     let Some(refresh_token) = ctx.secrets.get(&account.id)? else {
         return Err(Error::NoRefreshToken);
     };
     let tokens = ctx.msa.refresh(&refresh_token).await?;
-    let rotated = tokens.refresh_token.clone();
+    ctx.secrets.put(&account.id, &tokens.refresh_token)?;
     let fresh = complete_chain(ctx, tokens).await?;
     if fresh.id != account.id {
         return Err(Error::AccountMismatch {
@@ -148,7 +153,6 @@ pub async fn refresh_account(ctx: &LoginCtx<'_>, account: &Account) -> Result<Ac
             actual: fresh.id,
         });
     }
-    ctx.secrets.put(&fresh.id, &rotated)?;
     ctx.accounts.add(fresh)
 }
 

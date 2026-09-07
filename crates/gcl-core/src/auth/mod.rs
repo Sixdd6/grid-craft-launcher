@@ -53,6 +53,9 @@ pub enum Error {
     /// A launch was asked for with no account named, no offline user, and none active.
     #[error("no account selected: add one, or launch with an offline user name")]
     NoAccount,
+    /// Microsoft login was asked for without a client id, so the launcher cannot sign in.
+    #[error("microsoft login: disabled (no GCL_MSA_CLIENT_ID)")]
+    Disabled,
     /// The device code was not approved before it expired.
     #[error("the login code expired before it was approved")]
     DeviceCodeExpired,
@@ -164,7 +167,10 @@ impl std::fmt::Debug for Account {
 }
 
 /// Placeholders substituted into a launch command line for the signed-in player.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// [`Debug`] is written by hand, not derived: `access_token` holds a real Microsoft token, so
+/// it is never printed. See the [`std::fmt::Debug`] implementation below.
+#[derive(Clone, PartialEq, Eq)]
 pub struct LaunchIdentity {
     /// The player's display name.
     pub name: String,
@@ -178,6 +184,28 @@ pub struct LaunchIdentity {
     pub xuid: String,
     /// Base64 of the MSA client id, empty for offline play.
     pub client_id: String,
+}
+
+impl std::fmt::Debug for LaunchIdentity {
+    /// Prints every placeholder but the token, which shows as `"0"`, `<set>`, or `<unset>`.
+    ///
+    /// The offline placeholder `"0"` is not a secret and is printed as it stands, the same way
+    /// [`crate::launch::LaunchCommand`] keeps it in a redacted command line.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let token = match self.access_token.as_str() {
+            "0" => "0",
+            "" => "<unset>",
+            _ => "<set>",
+        };
+        f.debug_struct("LaunchIdentity")
+            .field("name", &self.name)
+            .field("uuid_undashed", &self.uuid_undashed)
+            .field("access_token", &token)
+            .field("user_type", &self.user_type)
+            .field("xuid", &self.xuid)
+            .field("client_id", &self.client_id)
+            .finish()
+    }
 }
 
 impl Account {
@@ -302,6 +330,26 @@ mod tests {
             ..msa_account(None)
         };
         assert_eq!(account.launch_identity_with("id").access_token, "0");
+    }
+
+    #[test]
+    fn debug_never_prints_the_access_token() {
+        let identity = msa_account(None).launch_identity_with("client-id-base64");
+        let debug = format!("{identity:?}");
+        assert!(!debug.contains("mc-token"), "{debug}");
+        assert!(debug.contains("access_token: \"<set>\""), "{debug}");
+
+        // An offline account's `"0"` is not a secret, so it is printed as it stands.
+        let offline =
+            offline_account("b50ad385-829d-3141-a216-7e7d7539ba7f", "Notch").launch_identity();
+        assert!(format!("{offline:?}").contains("access_token: \"0\""));
+
+        // An empty token reads as unset rather than as a set one.
+        let empty = LaunchIdentity {
+            access_token: String::new(),
+            ..msa_account(None).launch_identity()
+        };
+        assert!(format!("{empty:?}").contains("access_token: \"<unset>\""));
     }
 
     #[test]

@@ -5,14 +5,23 @@
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
+use futures_util::future::BoxFuture;
+use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
 use serde::{Deserialize, Serialize};
 
+use crate::auth::msa::{Msa, MsaEndpoints};
 use crate::auth::offline::offline_account;
+use crate::auth::secrets::{SecretStore, open_default};
+use crate::auth::session::{
+    LoginCtx, OnCodeFn, REFRESH_MARGIN, SleepFn, ensure_fresh, login_device_code, refresh_account,
+};
 use crate::auth::store::Accounts;
+use crate::auth::{Account, AccountKind, token_expires_soon};
 use crate::config::Config;
 use crate::content::{AddOutcome, AddRequest, ContentCtx, ManualDownload, UpdateCandidate};
 use crate::download::{DownloadCtx, cleanup_partials};
@@ -61,6 +70,27 @@ pub const MODRINTH_BASE_URL_ENV: &str = "GCL_MODRINTH_BASE_URL";
 /// Test-only override for the CurseForge API base URL, read by [`Endpoints::from_env`].
 pub const CURSEFORGE_BASE_URL_ENV: &str = "GCL_CURSEFORGE_BASE_URL";
 
+/// Test-only override for the Microsoft device-code endpoint, read by [`Endpoints::from_env`].
+pub const MSA_DEVICE_URL_ENV: &str = "GCL_MSA_DEVICE_URL";
+
+/// Test-only override for the Microsoft OAuth token endpoint, read by [`Endpoints::from_env`].
+pub const MSA_TOKEN_URL_ENV: &str = "GCL_MSA_TOKEN_URL";
+
+/// Test-only override for the Xbox Live authentication endpoint, read by
+/// [`Endpoints::from_env`].
+pub const MSA_XBL_URL_ENV: &str = "GCL_MSA_XBL_URL";
+
+/// Test-only override for the XSTS authorization endpoint, read by [`Endpoints::from_env`].
+pub const MSA_XSTS_URL_ENV: &str = "GCL_MSA_XSTS_URL";
+
+/// Test-only override for the Minecraft services login endpoint, read by
+/// [`Endpoints::from_env`].
+pub const MSA_MC_URL_ENV: &str = "GCL_MSA_MC_URL";
+
+/// Test-only override for the Minecraft services profile endpoint, read by
+/// [`Endpoints::from_env`].
+pub const MSA_PROFILE_URL_ENV: &str = "GCL_MSA_PROFILE_URL";
+
 /// File under an instance directory that lists the downloads the user must fetch by hand.
 pub const PENDING_MANUAL_FILE: &str = "pending-manual.json";
 
@@ -71,7 +101,7 @@ const NO_CURSEFORGE_KEY: &str = "no CURSEFORGE_API_KEY";
 ///
 /// [`Launcher::new`] fills it from the test-only environment overrides;
 /// [`Launcher::open_with_endpoints`] takes one whole, and reads no environment at all.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Endpoints {
     /// Mojang metadata base URL.
     pub mojang: String,
@@ -81,6 +111,8 @@ pub struct Endpoints {
     pub curseforge: String,
     /// Loader metadata and maven hosts.
     pub loaders: LoaderEndpoints,
+    /// The six hosts of the Microsoft login chain.
+    pub msa: MsaEndpoints,
 }
 
 impl Default for Endpoints {
@@ -90,9 +122,29 @@ impl Default for Endpoints {
             modrinth: crate::sources::modrinth::BASE.to_string(),
             curseforge: crate::sources::curseforge::BASE.to_string(),
             loaders: LoaderEndpoints::default(),
+            msa: MsaEndpoints::default(),
         }
     }
 }
+
+/// Written by hand rather than derived: [`MsaEndpoints`] carries no [`PartialEq`], so its six
+/// URLs are compared one by one here.
+impl PartialEq for Endpoints {
+    fn eq(&self, other: &Self) -> bool {
+        self.mojang == other.mojang
+            && self.modrinth == other.modrinth
+            && self.curseforge == other.curseforge
+            && self.loaders == other.loaders
+            && self.msa.device_code == other.msa.device_code
+            && self.msa.token == other.msa.token
+            && self.msa.xbl == other.msa.xbl
+            && self.msa.xsts == other.msa.xsts
+            && self.msa.mc_login == other.msa.mc_login
+            && self.msa.profile == other.msa.profile
+    }
+}
+
+impl Eq for Endpoints {}
 
 impl Endpoints {
     /// Reads every test-only base URL override, falling back to the production hosts.
@@ -113,6 +165,14 @@ impl Endpoints {
                 forge_meta: env_base(FORGE_META_BASE_URL_ENV, crate::loaders::forge::META),
                 forge_maven: env_base(FORGE_MAVEN_BASE_URL_ENV, crate::loaders::forge::MAVEN),
                 neoforge: env_base(NEOFORGE_BASE_URL_ENV, crate::loaders::neoforge::MAVEN),
+            },
+            msa: MsaEndpoints {
+                device_code: env_base(MSA_DEVICE_URL_ENV, crate::auth::msa::DEVICE_CODE_URL),
+                token: env_base(MSA_TOKEN_URL_ENV, crate::auth::msa::TOKEN_URL),
+                xbl: env_base(MSA_XBL_URL_ENV, crate::auth::msa::XBL_URL),
+                xsts: env_base(MSA_XSTS_URL_ENV, crate::auth::msa::XSTS_URL),
+                mc_login: env_base(MSA_MC_URL_ENV, crate::auth::msa::MC_LOGIN_URL),
+                profile: env_base(MSA_PROFILE_URL_ENV, crate::auth::msa::PROFILE_URL),
             },
         }
     }
@@ -154,6 +214,8 @@ pub struct Launcher {
     endpoints: Endpoints,
     sources: Vec<BoxSource>,
     process_runner: Option<Arc<dyn ProcessRunner>>,
+    /// The refresh-token store, opened on first use by [`Launcher::secrets`].
+    secrets: OnceLock<Box<dyn SecretStore>>,
 }
 
 impl Launcher {
@@ -211,6 +273,7 @@ impl Launcher {
             cancel: CancellationToken::new(),
             endpoints,
             process_runner: None,
+            secrets: OnceLock::new(),
         };
         Ok((launcher, receiver))
     }
@@ -234,6 +297,17 @@ impl Launcher {
     #[must_use]
     pub fn with_process_runner(mut self, runner: Arc<dyn ProcessRunner>) -> Self {
         self.process_runner = Some(runner);
+        self
+    }
+
+    /// Test seam: keeps refresh tokens in `store` instead of the keyring or a file.
+    ///
+    /// Chain it onto [`Launcher::open_with_endpoints`] before anything asks for
+    /// [`Launcher::secrets`]. A store set after the first use is ignored, because the cell is
+    /// already filled.
+    #[must_use]
+    pub fn with_secret_store(self, store: Box<dyn SecretStore>) -> Self {
+        let _ = self.secrets.set(store);
         self
     }
 
@@ -295,6 +369,84 @@ impl Launcher {
     /// The account store over this root.
     pub fn accounts(&self) -> Accounts {
         Accounts::new(&self.root)
+    }
+
+    /// The refresh-token store, opened on first use.
+    ///
+    /// The first call opens the OS keyring, or falls back to a restricted file in the app root
+    /// and warns once on the event sink; every later call returns the same store.
+    /// [`Launcher::with_secret_store`] fills the cell instead, for tests.
+    pub fn secrets(&self) -> &dyn SecretStore {
+        self.secrets
+            .get_or_init(|| open_default(&self.root, &self.events))
+            .as_ref()
+    }
+
+    /// The six Microsoft login hosts this launcher talks to.
+    pub fn msa_endpoints(&self) -> MsaEndpoints {
+        self.endpoints.msa.clone()
+    }
+
+    /// True when a Microsoft client id is configured, so signing in is possible.
+    pub fn msa_available(&self) -> bool {
+        self.config.msa_client_id().is_some()
+    }
+
+    /// Signs in with the device-code flow and saves the account. Blocks.
+    ///
+    /// `on_code` is called once with the code and link to show the user, then the token
+    /// endpoint is polled until the sign-in is approved, waiting the interval it asks for.
+    /// Without a configured client id this is [`crate::auth::Error::Disabled`] and no request
+    /// is made.
+    #[tracing::instrument(skip_all)]
+    pub fn msa_login(&self, on_code: &OnCodeFn) -> Result<Account, crate::Error> {
+        let msa = self.msa_client()?;
+        let accounts = self.accounts();
+        let ctx = LoginCtx {
+            msa: &msa,
+            secrets: self.secrets(),
+            accounts: &accounts,
+            sink: &self.events,
+        };
+        let sleep: &SleepFn = &real_sleep;
+        Ok(self.block_on(async move { login_device_code(&ctx, on_code, sleep).await })?)
+    }
+
+    /// Signs a saved Microsoft account in again from its stored refresh token. Blocks.
+    ///
+    /// `id_or_name` names the account the same way `--account` does. An unknown one is
+    /// [`crate::auth::Error::NotFound`]; no configured client id is
+    /// [`crate::auth::Error::Disabled`].
+    #[tracing::instrument(skip(self))]
+    pub fn msa_refresh(&self, id_or_name: &str) -> Result<Account, crate::Error> {
+        let accounts = self.accounts();
+        let account = accounts
+            .find(id_or_name)?
+            .ok_or_else(|| crate::auth::Error::NotFound(id_or_name.to_string()))?;
+        let msa = self.msa_client()?;
+        let ctx = LoginCtx {
+            msa: &msa,
+            secrets: self.secrets(),
+            accounts: &accounts,
+            sink: &self.events,
+        };
+        Ok(self.block_on(async move { refresh_account(&ctx, &account).await })?)
+    }
+
+    /// A login client over this launcher's client id and endpoints.
+    ///
+    /// [`crate::auth::Error::Disabled`] when no client id is configured, so every caller
+    /// reports the same thing when Microsoft login is turned off.
+    fn msa_client(&self) -> Result<Msa, crate::Error> {
+        let client_id = self
+            .config
+            .msa_client_id()
+            .ok_or(crate::auth::Error::Disabled)?;
+        Ok(Msa::new(
+            self.http.clone(),
+            self.endpoints.msa.clone(),
+            client_id,
+        ))
     }
 
     /// The instance store over this root.
@@ -453,7 +605,11 @@ impl Launcher {
     /// The account is chosen in this order: `offline_user` creates or reuses an offline
     /// account, `account` picks a saved one by id or name without making it active, and
     /// otherwise the active account is used. With none of the three this is
-    /// [`crate::auth::Error::NoAccount`]. Blocks.
+    /// [`crate::auth::Error::NoAccount`].
+    ///
+    /// A Microsoft account's Minecraft token is refreshed first when it is about to expire.
+    /// A refresh failure is returned as [`crate::Error::Auth`]; the caller decides what to
+    /// tell the user. Blocks.
     #[tracing::instrument(skip(self))]
     pub fn launch_instance(
         &self,
@@ -471,6 +627,8 @@ impl Launcher {
                 .ok_or_else(|| crate::auth::Error::NotFound(id_or_name.to_string()))?,
             (None, None) => accounts.active()?.ok_or(crate::auth::Error::NoAccount)?,
         };
+        let client_id = self.config.msa_client_id();
+        let account = self.fresh_for_launch(account, client_id.as_deref())?;
 
         let plan = self.install_instance(slug)?;
         let mut instance = self.instances().get(slug)?;
@@ -489,7 +647,7 @@ impl Launcher {
             tracing::info!(changed, "rewrote options.txt keys");
         }
 
-        let identity = account.launch_identity();
+        let identity = account.launch_identity_with(client_id.as_deref().unwrap_or_default());
         let rules = RuleContext::current();
         let jvm = JvmSettings {
             min_mib: instance
@@ -776,6 +934,38 @@ impl Launcher {
         Ok(outcome)
     }
 
+    /// Returns the account a launch should use, refreshing a stale Microsoft token first.
+    ///
+    /// An offline account is returned unchanged. A Microsoft account is refreshed when its
+    /// token is about to expire and a client id is configured. Without a client id nothing can
+    /// be refreshed: a token with time left is used as it stands, so a launch still works
+    /// while the sign-in lasts, and a stale one is [`crate::auth::Error::Disabled`].
+    fn fresh_for_launch(
+        &self,
+        account: Account,
+        client_id: Option<&str>,
+    ) -> Result<Account, crate::Error> {
+        if account.kind != AccountKind::Msa {
+            return Ok(account);
+        }
+        let now = OffsetDateTime::now_utc();
+        if client_id.is_none() {
+            if token_expires_soon(account.mc_token_expires.as_deref(), now, REFRESH_MARGIN) {
+                return Err(crate::auth::Error::Disabled.into());
+            }
+            return Ok(account);
+        }
+        let msa = self.msa_client()?;
+        let accounts = self.accounts();
+        let ctx = LoginCtx {
+            msa: &msa,
+            secrets: self.secrets(),
+            accounts: &accounts,
+            sink: &self.events,
+        };
+        Ok(self.block_on(async move { ensure_fresh(&ctx, account, now).await })?)
+    }
+
     /// A content context over this launcher's sources, root, event sink, and `dl`.
     ///
     /// [`ContentCtx`] borrows the [`DownloadCtx`], which this launcher hands out by value,
@@ -899,6 +1089,14 @@ impl std::fmt::Debug for Launcher {
             .field("config", &self.config)
             .finish_non_exhaustive()
     }
+}
+
+/// The wait between device-code polls: real time on the launcher's own runtime.
+///
+/// [`crate::auth::session::login_device_code`] takes the wait as a function, so a test drives
+/// the flow with no real sleeping; this is the launcher's production one.
+fn real_sleep(wait: Duration) -> BoxFuture<'static, ()> {
+    Box::pin(tokio::time::sleep(wait))
 }
 
 /// Builds the source list: Modrinth always, CurseForge only with an API key.
@@ -1262,6 +1460,14 @@ mod tests {
                 forge_maven: "http://forge-maven.invalid".to_string(),
                 neoforge: "http://neoforge.invalid".to_string(),
             },
+            msa: MsaEndpoints {
+                device_code: "http://msa.invalid/devicecode".to_string(),
+                token: "http://msa.invalid/token".to_string(),
+                xbl: "http://msa.invalid/xbl".to_string(),
+                xsts: "http://msa.invalid/xsts".to_string(),
+                mc_login: "http://msa.invalid/mclogin".to_string(),
+                profile: "http://msa.invalid/profile".to_string(),
+            },
         };
         let (launcher, _rx) = Launcher::open_with_endpoints(dir.path().to_path_buf(), endpoints)
             .expect("build launcher");
@@ -1544,6 +1750,70 @@ mod tests {
         }
         assert_eq!(endpoints.modrinth, "http://modrinth-from-env.invalid");
         assert_eq!(endpoints.curseforge, "http://cf-from-env.invalid");
+    }
+
+    #[test]
+    fn from_env_reads_the_microsoft_overrides() {
+        let _guard = clean_env();
+        // SAFETY: guarded by ENV_LOCK; both variables are removed before the assert.
+        unsafe {
+            std::env::set_var(MSA_DEVICE_URL_ENV, "http://device-from-env.invalid");
+            std::env::set_var(MSA_PROFILE_URL_ENV, "http://profile-from-env.invalid");
+        }
+        let endpoints = Endpoints::from_env();
+        unsafe {
+            std::env::remove_var(MSA_DEVICE_URL_ENV);
+            std::env::remove_var(MSA_PROFILE_URL_ENV);
+        }
+        assert_eq!(endpoints.msa.device_code, "http://device-from-env.invalid");
+        assert_eq!(endpoints.msa.profile, "http://profile-from-env.invalid");
+        // One override replaces one field; the rest stay production.
+        assert_eq!(endpoints.msa.token, crate::auth::msa::TOKEN_URL);
+    }
+
+    #[test]
+    fn an_injected_secret_store_is_the_one_the_launcher_uses() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher =
+            seamed(&dir).with_secret_store(Box::new(crate::auth::secrets::MemoryStore::new()));
+        assert_eq!(
+            launcher.secrets().kind(),
+            crate::auth::secrets::SecretStoreKind::Memory
+        );
+        launcher.secrets().put("id", "token").expect("put");
+        assert_eq!(
+            launcher.secrets().get("id").expect("get"),
+            Some("token".to_string()),
+            "the store is opened once and kept"
+        );
+        assert!(
+            !dir.path().join("secrets.json").exists(),
+            "nothing was written to the app root"
+        );
+    }
+
+    #[test]
+    fn microsoft_login_is_unavailable_without_a_client_id() {
+        let _guard = clean_env();
+        // SAFETY: guarded by ENV_LOCK; the config decides the answer, not this machine.
+        unsafe {
+            std::env::remove_var("GCL_MSA_CLIENT_ID");
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut launcher = seamed(&dir);
+        assert!(!launcher.msa_available());
+        launcher.config_mut().keys.msa_client_id = Some("client".to_string());
+        assert!(launcher.msa_available());
+    }
+
+    #[test]
+    fn msa_endpoints_come_from_the_launcher_endpoints() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+        assert_eq!(
+            launcher.msa_endpoints().token,
+            "http://msa.invalid/token".to_string()
+        );
     }
 
     #[test]
