@@ -20,8 +20,8 @@ import { SearchBox } from "../components/search-box.slint";
 //
 // Every default here is preview content: `just ui-preview screens/browser.slint` shows it.
 export global BrowserState {
-    // What the user typed into the search box. For the modpack kind this is the project id
-    // or slug to install, because a modpack is not searchable content.
+    // What the user typed into the search box. The modpack kind reads it twice over: Search
+    // looks it up as text, and the Install modpack button takes it as a project id or slug.
     in-out property <string> query: "sodium";
     // Sources that are enabled, in ComboBox order.
     in-out property <[string]> source_labels: ["modrinth", "curseforge"];
@@ -83,6 +83,10 @@ export global BrowserState {
             page_url: "https://modrinth.com/mod/lithium",
         },
     ];
+    // The current page of modpack hits, shown by the modpack kind only. A pack is installed
+    // as its own instance, so these rows are kept apart from `rows`: the two lists have
+    // different buttons and only one of them is ever on screen.
+    in-out property <[SearchRow]> pack_rows: [];
     // Which page is shown, counting from zero.
     in-out property <int> page: 0;
     // How many hits one page asks for.
@@ -111,6 +115,8 @@ export global BrowserState {
     callback open();
     // Run the search the filters describe, from page zero.
     callback search();
+    // Search the chosen source for modpacks, from page zero.
+    callback search_packs();
     // Show the next page of the same search.
     callback next_page();
     // Show the previous page of the same search.
@@ -152,6 +158,16 @@ export component BrowserScreen inherits Rectangle {
     // Result row the keyboard is on, or -1 while nothing is chosen. Arrow keys move it and
     // Enter runs the same action as the row's primary button.
     in-out property <int> selected: -1;
+
+    // Runs whichever search the chosen kind means: modpacks are a search of their own,
+    // because they are not content and never come back from the content search.
+    function run_search() {
+        if (root.modpack_mode) {
+            BrowserState.search_packs();
+        } else {
+            BrowserState.search();
+        }
+    }
 
     // A result row's primary action: install a modpack, ask which world a data pack goes
     // into, and add anything else straight to the target instance. The button and the Enter
@@ -211,7 +227,7 @@ export component BrowserScreen inherits Rectangle {
 
             search_box := SearchBox {
                 placeholder: root.modpack_mode
-                    ? "Modpack id or slug"
+                    ? "Search modpacks, or type an id or slug"
                     : "Search Modrinth or CurseForge";
                 text <=> BrowserState.query;
                 horizontal-stretch: 1;
@@ -219,20 +235,16 @@ export component BrowserScreen inherits Rectangle {
                     keys.focus();
                 }
                 accepted(text) => {
-                    if (root.modpack_mode) {
-                        BrowserState.install_pack(text);
-                    } else {
-                        BrowserState.search();
-                    }
+                    root.run_search();
                 }
             }
 
-            if !root.modpack_mode: search_button := Button {
+            search_button := Button {
                 text: "Search";
                 kind: "primary";
                 enabled: !BrowserState.loading;
                 clicked => {
-                    BrowserState.search();
+                    root.run_search();
                 }
             }
         }
@@ -333,9 +345,10 @@ export component BrowserScreen inherits Rectangle {
             }
         }
 
-        // Modpack install panel. Search cannot reach a modpack, so it is named by hand.
+        // Modpack install panel: the two ways to name a pack the search did not find.
+        // It gives up the spare room as soon as there are results to show under it.
         if root.modpack_mode: Rectangle {
-            vertical-stretch: 1;
+            vertical-stretch: BrowserState.pack_rows.length > 0 ? 0 : 1;
             background: Theme.surface;
             border-radius: Theme.radius;
             border-width: 1px;
@@ -355,7 +368,8 @@ export component BrowserScreen inherits Rectangle {
 
                 Text {
                     text: "A modpack becomes its own instance, so it is not added to one. "
-                        + "Type its project id or slug above, then press Install modpack.";
+                        + "Press Search to list packs, or type a project id or slug above "
+                        + "and press Install modpack.";
                     color: Theme.text-muted;
                     font-size: Theme.font-size;
                     horizontal-alignment: center;
@@ -413,6 +427,90 @@ export component BrowserScreen inherits Rectangle {
                     }
                 }
             }
+        }
+
+        // Modpack results: one row per pack, each installed as its own new instance.
+        if root.modpack_mode && BrowserState.pack_rows.length > 0: ListView {
+            vertical-stretch: 1;
+            width: 100%;
+
+            for row[i] in BrowserState.pack_rows: pack_row := ListRow {
+                title: row.title;
+                height: 3 * Theme.font-size + 3 * Theme.gap + Theme.pad;
+
+                VerticalLayout {
+                    padding-top: Theme.gap;
+                    padding-bottom: Theme.gap;
+                    spacing: Theme.gap / 2;
+                    horizontal-stretch: 1;
+
+                    HorizontalLayout {
+                        spacing: Theme.gap;
+
+                        Text {
+                            text: row.title;
+                            color: Theme.text;
+                            font-size: Theme.font-size;
+                            horizontal-stretch: 0;
+                            overflow: elide;
+                        }
+
+                        Text {
+                            text: "by " + row.author;
+                            color: Theme.text-muted;
+                            font-size: Theme.font-size-small;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+
+                        Text {
+                            text: row.downloads + " downloads";
+                            color: Theme.text-muted;
+                            font-size: Theme.font-size-small;
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                            horizontal-stretch: 0;
+                        }
+                    }
+
+                    Text {
+                        text: row.description;
+                        color: Theme.text-muted;
+                        font-size: Theme.font-size-small;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: row.page_url;
+                        color: Theme.accent;
+                        font-size: Theme.font-size-small;
+                        overflow: elide;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+
+                    pack_install_button := Button {
+                        text: "Install";
+                        kind: "primary";
+                        enabled: !BrowserState.loading;
+                        clicked => {
+                            BrowserState.install_pack(row.project_id);
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.modpack_mode && BrowserState.loading: Text {
+            text: "Searching modpacks…";
+            color: Theme.text-muted;
+            font-size: Theme.font-size;
+            height: Theme.row-height;
+            vertical-alignment: center;
         }
 
         if !root.modpack_mode && BrowserState.loading: Text {
@@ -574,7 +672,7 @@ export component BrowserScreen inherits Rectangle {
             spacing: Theme.gap;
             height: Theme.row-height;
 
-            if !root.modpack_mode: prev_button := Button {
+            prev_button := Button {
                 text: "Prev";
                 enabled: BrowserState.page > 0 && !BrowserState.loading;
                 clicked => {
@@ -582,7 +680,7 @@ export component BrowserScreen inherits Rectangle {
                 }
             }
 
-            if !root.modpack_mode: next_button := Button {
+            next_button := Button {
                 text: "Next";
                 enabled: BrowserState.has_more && !BrowserState.loading;
                 clicked => {
@@ -590,7 +688,7 @@ export component BrowserScreen inherits Rectangle {
                 }
             }
 
-            if !root.modpack_mode: Text {
+            Text {
                 text: "Page " + (BrowserState.page + 1);
                 color: Theme.text-muted;
                 font-size: Theme.font-size-small;

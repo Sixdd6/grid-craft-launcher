@@ -20,8 +20,9 @@ screen opened that dialog.
 - Dialog actions: `confirm_button`, `cancel_button` (both on `Dialog`), and `name_field` for the
   one field a prompt collects.
 - Row controls inside a repeater: `row_open`, `row_launch`, `row_delete`, `row_select`,
-  `row_refresh`, `row_toggle`, `row_install`. A repeater gives every instance the same id, so a
-  test takes the nth handle `find_by_element_id` yields, in list order.
+  `row_refresh`, `row_toggle`, `row_install`, `pack_row`, `pack_install_button`. A repeater
+  gives every instance the same id, so a test takes the nth handle `find_by_element_id`
+  yields, in list order.
 - Rail entries: `rail_instances`, `rail_instance`, `rail_browser`, `rail_accounts`,
   `rail_settings`.
 - Tab entries: `tab_entry` on `TabBar`, one per tab, in tab order.
@@ -88,6 +89,7 @@ release, so `TestApp::drag_slider` presses and releases on it rather than using
 | `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::commit` | `Timer` |
 | `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::setting_switch` | `Switch` |
 | `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::setting_combo` | `ComboBox` |
+| `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::choice_commit` | `Timer` |
 | `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::setting_field` | `LineEdit` |
 | `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::setting_reset_button` | `Button` |
 | `crates/gcl-ui/ui/components/settings-editor.slint` | `SettingsEditor::settings_search_field` | `LineEdit` |
@@ -115,6 +117,8 @@ release, so `TestApp::drag_slider` presses and releases on it rather than using
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::install_pack_button` | `Button` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_path_field` | `LineEdit` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::install_file_button` | `Button` |
+| `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_row` | `ListRow` |
+| `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_install_button` | `Button` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::keys` | `FocusScope` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::row_open` | `ListRow` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::badge` | `Text` |
@@ -177,4 +181,4 @@ release, so `TestApp::drag_slider` presses and releases on it rather than using
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::default_add_button` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::verify_button` | `Button` |
 
-Total: 122 named elements.
+Total: 125 named elements.

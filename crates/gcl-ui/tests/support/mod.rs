@@ -6,8 +6,8 @@
 //! flow ends. Every wait in a flow yields to that loop, so the bridge's worker threads post
 //! their results back exactly as they do in the running app.
 //!
-//! Only `tests/flow_instances.rs` compiles this module, so nothing here is dead code there;
-//! the allow is kept for a second flow binary that uses only part of it.
+//! Every `tests/flow_*.rs` binary compiles this module and uses part of it, so the allow is
+//! what keeps the parts one binary does not need from reading as dead code.
 #![allow(dead_code)]
 
 use std::cell::RefCell;
@@ -99,10 +99,80 @@ pub struct TestApp {
     _rt: tokio::runtime::Runtime,
 }
 
+/// Which mock hosts a [`TestApp`] mounts on top of Mojang and Fabric.
+///
+/// Everything left off is a `.invalid` name, which no resolver can answer, so a flow that
+/// reaches a host it did not ask for fails fast instead of talking to the real internet.
+#[derive(Clone, Copy, Default)]
+pub struct Mocks {
+    /// Mount Modrinth: search, modpack search, one project, its versions, and the files
+    /// those versions point at.
+    pub modrinth: bool,
+    /// Mount the six Microsoft sign-in endpoints and configure a client id, so the accounts
+    /// screen offers Microsoft sign-in.
+    pub msa: bool,
+    /// Make the mock token endpoint answer `authorization_pending` for good, so a sign-in
+    /// waits until something cancels it. Only read when `msa` is set.
+    pub msa_pending: bool,
+    /// Add an offline account before the window is built.
+    ///
+    /// Every flow that launches the game needs one; the accounts flow starts from an empty
+    /// store, because adding the first account is what it tests.
+    pub player: bool,
+}
+
+impl Mocks {
+    /// What the instances flows want: Mojang, Fabric, and a player to launch as.
+    pub fn plain() -> Mocks {
+        Mocks {
+            player: true,
+            ..Mocks::default()
+        }
+    }
+
+    /// What the content and modpack flows want: the above, with Modrinth mounted.
+    pub fn modrinth() -> Mocks {
+        Mocks {
+            modrinth: true,
+            player: true,
+            ..Mocks::default()
+        }
+    }
+
+    /// What the Microsoft half of the accounts flow wants: no account, sign-in on.
+    pub fn msa() -> Mocks {
+        Mocks {
+            msa: true,
+            ..Mocks::default()
+        }
+    }
+
+    /// The same, with a sign-in that never finishes on its own, so Cancel is testable.
+    pub fn msa_pending() -> Mocks {
+        Mocks {
+            msa: true,
+            msa_pending: true,
+            ..Mocks::default()
+        }
+    }
+}
+
 impl TestApp {
     /// Builds a launcher over a fresh root, points it at a mock Mojang and Fabric, and builds
     /// the same window the binary builds.
     pub fn new() -> TestApp {
+        TestApp::with(Mocks::plain())
+    }
+
+    /// [`TestApp::new`], with the extra mock hosts `mocks` names.
+    pub fn with(mocks: Mocks) -> TestApp {
+        // `GCL_MSA_CLIENT_ID` wins over the config file and `just` loads a `.env`, so a real
+        // id on this machine must not decide whether sign-in is on.
+        // SAFETY: nextest runs every test binary in its own process, and this runs before
+        // any thread the flow starts.
+        unsafe {
+            std::env::remove_var("GCL_MSA_CLIENT_ID");
+        }
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -112,18 +182,24 @@ impl TestApp {
             let server = MockServer::start().await;
             mock_vanilla(&server, MC).await;
             mock_fabric(&server).await;
+            if mocks.modrinth {
+                mock_modrinth(&server).await;
+            }
+            if mocks.msa {
+                mock_msa(&server, mocks.msa_pending).await;
+            }
             server
         });
         let dir = tempfile::tempdir().expect("tempdir");
         let uri = server.uri();
 
-        // Only Mojang and Fabric are mocked. Every other host is a `.invalid` name, which no
-        // resolver can answer, so a flow that reaches one fails fast instead of talking to
-        // the real internet. A later task mocks Modrinth; until then a browser flow that
-        // searches gets a connection error, which is the wanted answer for now.
         let endpoints = Endpoints {
             mojang: uri.clone(),
-            modrinth: "http://modrinth.invalid".to_string(),
+            modrinth: if mocks.modrinth {
+                uri.clone()
+            } else {
+                "http://modrinth.invalid".to_string()
+            },
             curseforge: "http://curseforge.invalid".to_string(),
             loaders: LoaderEndpoints {
                 fabric: uri.clone(),
@@ -132,20 +208,35 @@ impl TestApp {
                 forge_maven: "http://forge-maven.invalid".to_string(),
                 neoforge: "http://neoforge.invalid".to_string(),
             },
-            msa: dead_msa_endpoints(),
+            msa: if mocks.msa {
+                msa_endpoints(&uri)
+            } else {
+                dead_msa_endpoints()
+            },
         };
         let (launcher, rx) = Launcher::open_with_endpoints(dir.path().to_path_buf(), endpoints)
             .expect("build launcher");
-        let launcher = launcher.with_secret_store(Box::new(MemoryStore::new()));
+        let launcher = launcher
+            .with_secret_store(Box::new(MemoryStore::new()))
+            // A modpack may only fetch its files from the hosts the mrpack specification
+            // names, and the mock server is not one of them.
+            .with_pack_hosts(vec!["127.0.0.1".to_string(), "localhost".to_string()]);
 
         let java = write_fake_java(dir.path());
         launcher
-            .update_config(|config| config.jvm.java_path = Some(java))
-            .expect("point the config at the stand-in java");
-        launcher
-            .accounts()
-            .add(gcl_core::auth::offline::offline_account(PLAYER))
-            .expect("add the offline account");
+            .update_config(|config| {
+                config.jvm.java_path = Some(java);
+                if mocks.msa {
+                    config.keys.msa_client_id = Some(MSA_CLIENT_ID.to_string());
+                }
+            })
+            .expect("write the test config");
+        if mocks.player {
+            launcher
+                .accounts()
+                .add(gcl_core::auth::offline::offline_account(PLAYER))
+                .expect("add the offline account");
+        }
 
         let launcher = Arc::new(launcher);
         let window = gcl_ui::app::build(Arc::clone(&launcher), rx).expect("build the window");
@@ -170,6 +261,25 @@ impl TestApp {
              SLINT_EMIT_DEBUG_INFO=1 to force them on."
         );
         app
+    }
+
+    /// Puts this window back on screen after a [`TestApp::hide`].
+    pub fn show(&self) {
+        self.window.show().expect("show the window");
+        pump();
+    }
+
+    /// Takes this window off screen, so a flow can carry on over a second [`TestApp`].
+    ///
+    /// One process holds one Slint backend but may hold several windows. Every lookup is
+    /// scoped to one window, so the old one only has to stop being drawn.
+    pub fn hide(&self) {
+        self.window.hide().expect("hide the window");
+    }
+
+    /// The base URL of the mock host, for a flow that builds a file pointing back at it.
+    pub fn server_uri(&self) -> String {
+        self._server.uri()
     }
 
     /// The app root every instance and the stand-in java live under.
@@ -591,6 +701,289 @@ async fn mock_fabric(server: &MockServer) {
         FABRIC_PROFILE.as_bytes().to_vec(),
     )
     .await;
+}
+
+/// Serves Modrinth: a content search, a modpack search, one project, and its versions.
+///
+/// The two searches share the `/search` path, so they are told apart by the `facets` value:
+/// only a modpack search asks for `project_type:modpack`. The matchers are opposites, so the
+/// order they are mounted in cannot decide which one answers.
+async fn mock_modrinth(server: &MockServer) {
+    let base = server.uri();
+    Mock::given(method("GET"))
+        .and(path_matcher("/search"))
+        .and(|req: &wiremock::Request| !query_of(req).contains("modpack"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(MODRINTH_SEARCH))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_matcher("/search"))
+        .and(|req: &wiremock::Request| query_of(req).contains("modpack"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(MODRINTH_PACKS))
+        .mount(server)
+        .await;
+
+    serve(
+        server,
+        &format!("/project/{MOD_PROJECT}"),
+        MODRINTH_PROJECT.as_bytes().to_vec(),
+    )
+    .await;
+    serve(
+        server,
+        &format!("/project/{MOD_PROJECT}/version"),
+        mod_versions(&base).into_bytes(),
+    )
+    .await;
+    serve(server, MOD_FILE_PATH, MOD_JAR.to_vec()).await;
+
+    let pack = mrpack_bytes(&base, PACK_NAME);
+    serve(
+        server,
+        &format!("/project/{PACK_PROJECT}/version"),
+        pack_versions(&base, &pack).into_bytes(),
+    )
+    .await;
+    serve(server, PACK_FILE_PATH, pack).await;
+    serve(server, PACK_MOD_PATH_URL, PACK_MOD_JAR.to_vec()).await;
+}
+
+/// The query string of a request, without the leading `?`.
+fn query_of(req: &wiremock::Request) -> String {
+    req.url.query().unwrap_or_default().to_string()
+}
+
+/// Project id of the mod every content flow installs. `project_sodium.json` names it.
+pub const MOD_PROJECT: &str = "AANobbMI";
+
+/// Title of that project, which is the row's accessible label.
+pub const MOD_TITLE: &str = "Sodium";
+
+/// Bytes the mock serves as that mod's jar.
+const MOD_JAR: &[u8] = b"synthetic sodium jar";
+
+/// Path the mock serves those bytes at.
+const MOD_FILE_PATH: &str = "/files/sodium.jar";
+
+/// File name the version fixture gives that jar, which is what lands in `mods/`.
+pub const MOD_FILE_NAME: &str = "sodium-fabric-0.5.13+mc1.20.1.jar";
+
+/// That file name without its extension, which is what the content list shows.
+pub const MOD_FILE_STEM: &str = "sodium-fabric-0.5.13+mc1.20.1";
+
+/// Project id of the modpack the browser installs. `search_packs.json` names it first.
+pub const PACK_PROJECT: &str = "1KVo5zza";
+
+/// Title of that modpack, which is its row's accessible label.
+pub const PACK_TITLE: &str = "Fabulously Optimized";
+
+/// Name inside the synthetic `.mrpack` the mock serves.
+const PACK_NAME: &str = "Fabulously Optimized";
+
+/// Path the mock serves that `.mrpack` at.
+const PACK_FILE_PATH: &str = "/files/pack.mrpack";
+
+/// Bytes of the one mod a synthetic pack installs.
+const PACK_MOD_JAR: &[u8] = b"synthetic pack mod jar";
+
+/// Path the mock serves those bytes at.
+const PACK_MOD_PATH_URL: &str = "/files/pack-mod.jar";
+
+/// Where that mod lands inside the instance a pack import creates.
+pub const PACK_MOD_PATH: &str = "mods/pack-mod.jar";
+
+const MODRINTH_SEARCH: &str =
+    include_str!("../../../../tests/fixtures/modrinth/search_sodium.json");
+const MODRINTH_PACKS: &str = include_str!("../../../../tests/fixtures/modrinth/search_packs.json");
+const MODRINTH_PROJECT: &str =
+    include_str!("../../../../tests/fixtures/modrinth/project_sodium.json");
+const MODRINTH_VERSIONS: &str =
+    include_str!("../../../../tests/fixtures/modrinth/versions_sodium_1.20.1_fabric.json");
+
+/// The recorded version list, pointed at the mock host.
+///
+/// The recorded file names Modrinth's CDN and the real jar's hash, neither of which a test
+/// can reach, so the one primary file is rewritten to the bytes this mock serves. Everything
+/// else — the version id, the Minecraft versions, the loaders — is the fixture's own.
+fn mod_versions(base: &str) -> String {
+    let mut versions: serde_json::Value =
+        serde_json::from_str(MODRINTH_VERSIONS).expect("read the recorded version list");
+    let first = versions
+        .as_array_mut()
+        .and_then(|list| {
+            list.truncate(1);
+            list.first_mut()
+        })
+        .expect("the fixture has a version");
+    first["files"] = serde_json::json!([{
+        "hashes": { "sha1": sha1_hex(MOD_JAR) },
+        "url": format!("{base}{MOD_FILE_PATH}"),
+        "filename": MOD_FILE_NAME,
+        "primary": true,
+        "size": MOD_JAR.len(),
+        "file_type": serde_json::Value::Null,
+    }]);
+    versions.to_string()
+}
+
+/// One modpack version whose primary file is the synthetic `.mrpack` the mock serves.
+fn pack_versions(base: &str, pack: &[u8]) -> String {
+    serde_json::json!([{
+        "id": "packv1",
+        "project_id": PACK_PROJECT,
+        "name": "1.0.0",
+        "version_number": "1.0.0",
+        "version_type": "release",
+        "date_published": "2026-01-01T00:00:00Z",
+        "game_versions": [MC],
+        "loaders": ["fabric"],
+        "dependencies": [],
+        "files": [{
+            "hashes": { "sha1": sha1_hex(pack) },
+            "url": format!("{base}{PACK_FILE_PATH}"),
+            "filename": "pack.mrpack",
+            "primary": true,
+            "size": pack.len(),
+            "file_type": serde_json::Value::Null,
+        }],
+    }])
+    .to_string()
+}
+
+/// Builds a `.mrpack` for [`MC`] and Fabric with one downloaded file and one override.
+///
+/// The file points back at the mock host, which is why the launcher under test is built with
+/// [`gcl_core::Launcher::with_pack_hosts`].
+pub fn mrpack_bytes(base: &str, name: &str) -> Vec<u8> {
+    let index = serde_json::json!({
+        "formatVersion": 1,
+        "game": "minecraft",
+        "name": name,
+        "versionId": "1.0.0",
+        "dependencies": { "minecraft": MC, "fabric-loader": FABRIC },
+        "files": [{
+            "path": PACK_MOD_PATH,
+            "hashes": { "sha1": sha1_hex(PACK_MOD_JAR) },
+            "env": { "client": "required", "server": "required" },
+            "downloads": [format!("{base}{PACK_MOD_PATH_URL}")],
+            "fileSize": PACK_MOD_JAR.len(),
+        }],
+    })
+    .to_string();
+    zip_bytes(&[
+        ("modrinth.index.json", index.into_bytes()),
+        ("overrides/config/pack.txt", b"from the pack\n".to_vec()),
+    ])
+}
+
+/// Writes a zip with these entries, in order.
+fn zip_bytes(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    use std::io::Write;
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut zip = zip::ZipWriter::new(&mut buf);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for (name, bytes) in entries {
+            zip.start_file(*name, options).expect("start the entry");
+            zip.write_all(bytes).expect("write the entry");
+        }
+        zip.finish().expect("finish the zip");
+    }
+    buf.into_inner()
+}
+
+/// Client id the Microsoft mock signs in with. Not a real one: nothing leaves the process.
+pub const MSA_CLIENT_ID: &str = "00000000-0000-0000-0000-000000000001";
+
+/// The code the mock device-code endpoint hands out.
+pub const MSA_USER_CODE: &str = "ABCD-EFGH";
+
+/// The page the mock tells the user to open.
+pub const MSA_URI: &str = "https://microsoft.com/link";
+
+/// Player name the mock profile carries, which is the account row's name.
+pub const MSA_NAME: &str = "Notch";
+
+/// Serves the six Microsoft sign-in endpoints with fixed answers.
+///
+/// `interval` is zero, so the token poll answers on the first try and no flow waits on a
+/// real clock. Copied from `gcl-core/tests/common`: a test binary cannot use another crate's
+/// test module.
+async fn mock_msa(server: &MockServer, pending: bool) {
+    post(
+        server,
+        "/devicecode",
+        &format!(
+            r#"{{"user_code":"{MSA_USER_CODE}","device_code":"dev-secret",
+                 "verification_uri":"{MSA_URI}","expires_in":900,"interval":0,
+                 "message":"Sign in."}}"#
+        ),
+    )
+    .await;
+    if pending {
+        // The OAuth "keep waiting" answer, which only a 400 carries. The sign-in polls until
+        // the user cancels it, which is what the Cancel sub-flow needs.
+        Mock::given(method("POST"))
+            .and(path_matcher("/token"))
+            .respond_with(
+                ResponseTemplate::new(400).set_body_string(r#"{"error":"authorization_pending"}"#),
+            )
+            .mount(server)
+            .await;
+    } else {
+        post(
+            server,
+            "/token",
+            r#"{"access_token":"msa-access","refresh_token":"refresh-1"}"#,
+        )
+        .await;
+    }
+    post(
+        server,
+        "/xbl",
+        r#"{"Token":"xbl-token","DisplayClaims":{"xui":[{"uhs":"user-hash"}]}}"#,
+    )
+    .await;
+    post(
+        server,
+        "/xsts",
+        r#"{"Token":"xsts-token","DisplayClaims":{"xui":[{"uhs":"user-hash","xid":"2535"}]}}"#,
+    )
+    .await;
+    post(
+        server,
+        "/mclogin",
+        r#"{"access_token":"mc-token","expires_in":86400}"#,
+    )
+    .await;
+    serve(
+        server,
+        "/profile",
+        format!(r#"{{"id":"069a79f444e94726a5befca90e38aaf5","name":"{MSA_NAME}"}}"#).into_bytes(),
+    )
+    .await;
+}
+
+/// Serves `body` at `at` for every POST.
+async fn post(server: &MockServer, at: &str, body: &str) {
+    Mock::given(method("POST"))
+        .and(path_matcher(at.to_string()))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body.to_string()))
+        .mount(server)
+        .await;
+}
+
+/// The six Microsoft login endpoints, all on the mock host.
+fn msa_endpoints(base: &str) -> gcl_core::auth::msa::MsaEndpoints {
+    gcl_core::auth::msa::MsaEndpoints {
+        device_code: format!("{base}/devicecode"),
+        token: format!("{base}/token"),
+        xbl: format!("{base}/xbl"),
+        xsts: format!("{base}/xsts"),
+        mc_login: format!("{base}/mclogin"),
+        profile: format!("{base}/profile"),
+    }
 }
 
 /// Microsoft endpoints no request can reach: no flow signs in.

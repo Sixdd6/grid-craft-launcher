@@ -183,10 +183,19 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
     {
         let bridge = bridge.clone();
         let shared = shared.clone();
+        state.on_search_packs(move || {
+            set_page(&bridge, 0);
+            search_packs(&bridge, &shared);
+        });
+    }
+
+    {
+        let bridge = bridge.clone();
+        let shared = shared.clone();
         state.on_next_page(move || {
             let page = page_of(&bridge);
             set_page(&bridge, page + 1);
-            search(&bridge, &shared);
+            search_this_kind(&bridge, &shared);
         });
     }
 
@@ -199,7 +208,7 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
                 return;
             }
             set_page(&bridge, page - 1);
-            search(&bridge, &shared);
+            search_this_kind(&bridge, &shared);
         });
     }
 
@@ -390,6 +399,9 @@ fn open(bridge: &Bridge, shared: &Shared) {
         },
         move |window, opened| {
             let state = window.global::<BrowserState>();
+            // The global's defaults are preview content, so the first open would otherwise
+            // show two hits nobody searched for.
+            clear_rows(&state);
             let labels: Vec<SharedString> = opened
                 .sources
                 .iter()
@@ -439,6 +451,63 @@ fn open(bridge: &Bridge, shared: &Shared) {
     );
 }
 
+/// Runs whichever search the chosen kind means, on the page the screen is already on.
+///
+/// The pager sends both kinds of search through here, so Next and Prev keep listing the same
+/// thing the last Search button press listed.
+fn search_this_kind(bridge: &Bridge, shared: &Shared) {
+    let modpack = bridge
+        .weak()
+        .upgrade()
+        .is_some_and(|window| kind_label(&window.global::<BrowserState>()) == MODPACK);
+    if modpack {
+        search_packs(bridge, shared);
+    } else {
+        search(bridge, shared);
+    }
+}
+
+/// Searches the chosen source for modpacks and shows its page.
+///
+/// A modpack is not a [`ContentKind`], so it has its own search and its own row list: every
+/// hit becomes a new instance rather than a file inside one.
+fn search_packs(bridge: &Bridge, shared: &Shared) {
+    let Some(window) = bridge.weak().upgrade() else {
+        return;
+    };
+    let state = window.global::<BrowserState>();
+    let Some(source) = shared.source_at(state.get_source_index()) else {
+        state.set_status("No content source is enabled".into());
+        return;
+    };
+    let page = state.get_page().max(0);
+    let query = SearchQuery {
+        text: state.get_query().to_string(),
+        // A pack search takes neither: `search_packs` asks for the modpack project type
+        // itself, and a pack states its loader in the pack index.
+        kind: None,
+        minecraft: some_text(state.get_minecraft().as_str()),
+        loader: None,
+        offset: (page * PAGE_SIZE) as u32,
+        limit: PAGE_SIZE as u32,
+    };
+
+    state.set_loading(true);
+    state.set_status("Searching modpacks…".into());
+    run_reporting(
+        bridge,
+        "Search modpacks",
+        move |launcher| launcher.search_packs(source, &query),
+        move |window, found| {
+            let state = window.global::<BrowserState>();
+            let rows: Vec<SearchRow> = found.hits.iter().map(search_row).collect();
+            state.set_has_more(page_bounds(page, PAGE_SIZE, rows.len(), found.total));
+            state.set_status(result_status(rows.len(), found.total).into());
+            state.set_pack_rows(ModelRc::new(VecModel::from(rows)));
+        },
+    );
+}
+
 /// Runs the search the filters describe and shows its page.
 fn search(bridge: &Bridge, shared: &Shared) {
     let Some(window) = bridge.weak().upgrade() else {
@@ -451,9 +520,8 @@ fn search(bridge: &Bridge, shared: &Shared) {
     };
     let kind_label = kind_label(&state);
     if kind_label == MODPACK {
-        // No source search returns a modpack: it is not a `ContentKind`. The screen offers
-        // an id or slug field for that kind instead.
-        state.set_status("A modpack is installed by id or slug, not searched".into());
+        // The modpack kind has a search of its own, because a pack is not content.
+        search_packs(bridge, shared);
         return;
     }
     let page = state.get_page().max(0);
@@ -636,6 +704,10 @@ fn install_pack(bridge: &Bridge, shared: &Shared, name: &str) {
             }
             state.set_status(format!("installed {} file(s)", outcome.installed).into());
             state.set_pack_path("".into());
+            // The instance list was read before this import, so it does not know about the
+            // instance the import just made. Nothing else re-reads it: the list reloads on a
+            // create and on a delete of its own, and neither happened here.
+            window.global::<crate::InstancesState>().invoke_refresh();
             // The new instance is what the user asked for, so the shell moves to it.
             let app = window.global::<App>();
             app.set_current_slug(outcome.instance.slug.as_str().into());
@@ -826,6 +898,7 @@ fn clear_rows(state: &BrowserState<'_>) {
     state.set_page(0);
     state.set_has_more(false);
     state.set_rows(ModelRc::new(VecModel::from(Vec::<SearchRow>::new())));
+    state.set_pack_rows(ModelRc::new(VecModel::from(Vec::<SearchRow>::new())));
 }
 
 /// The kind the filters name, or an empty string when the source offers none.

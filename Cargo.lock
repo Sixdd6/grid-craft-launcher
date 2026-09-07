@@ -1953,6 +1953,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "wiremock",
+ "zip",
 ]
 
 [[package]]

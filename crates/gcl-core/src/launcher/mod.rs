@@ -287,6 +287,9 @@ pub struct Launcher {
     /// The content sources, built on first use and cleared by [`Launcher::update_config`].
     sources: RwLock<Option<Vec<BoxSource>>>,
     process_runner: Option<Arc<dyn ProcessRunner>>,
+    /// Hosts a modpack may fetch its files from, on top of the ones the mrpack
+    /// specification names. Empty everywhere but in a test.
+    pack_hosts: Vec<String>,
     /// The refresh-token store, opened on first use by [`Launcher::secrets`].
     secrets: OnceLock<Box<dyn SecretStore>>,
     /// The games this launcher started that have not exited, by instance slug.
@@ -365,6 +368,7 @@ impl Launcher {
             cancel: CancellationToken::new(),
             endpoints,
             process_runner: None,
+            pack_hosts: Vec::new(),
             secrets: OnceLock::new(),
             running: Arc::new(Mutex::new(HashMap::new())),
         };
@@ -390,6 +394,19 @@ impl Launcher {
     #[must_use]
     pub fn with_process_runner(mut self, runner: Arc<dyn ProcessRunner>) -> Self {
         self.process_runner = Some(runner);
+        self
+    }
+
+    /// Test seam: lets an imported modpack fetch its files from `hosts` as well.
+    ///
+    /// A `.mrpack` may only name the download hosts the specification lists, so a pack whose
+    /// files sit on a mock server is refused with
+    /// [`crate::modpacks::Error::DisallowedHost`]. Chain this onto
+    /// [`Launcher::open_with_endpoints`] to add that server. It defaults to empty, so a
+    /// shipped launcher still accepts the specification's hosts and nothing else.
+    #[must_use]
+    pub fn with_pack_hosts(mut self, hosts: Vec<String>) -> Self {
+        self.pack_hosts = hosts;
         self
     }
 
@@ -1422,8 +1439,9 @@ impl Launcher {
             keep_partial: false,
             pack_source,
             // The launcher only ever fetches a pack's files from the hosts the mrpack
-            // specification names. `extra_hosts` exists for tests that serve them locally.
-            extra_hosts: Vec::new(),
+            // specification names. [`Launcher::with_pack_hosts`] adds to that list, and only
+            // a test calls it.
+            extra_hosts: self.pack_hosts.clone(),
         };
         let target = req.zip.clone();
         let hosts = req.extra_hosts.clone();
