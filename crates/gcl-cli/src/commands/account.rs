@@ -182,31 +182,47 @@ fn report_one(format: Format, row: &AccountRow) -> Result<()> {
     }
 }
 
-/// Prints the device code the user has to enter, in the format the command was asked for.
+/// Shows the device code the user has to enter, then reports it to the terminal at once.
 ///
-/// Text prints the link and the code on one line, then Microsoft's own instruction text.
-/// JSON prints one object, so it is the first of the two lines `--json` writes.
+/// A print failure would leave the user waiting with no code, so it is reported on stderr
+/// rather than ending the sign-in. Writing goes through [`write_code`], which flushes: the
+/// poll loop blocks right after this, and a buffered stdout, which is what a pipe gives,
+/// would otherwise hold the code until the sign-in finished.
 fn show_code(format: Format, code: &DeviceCode) {
+    let mut out = std::io::stdout().lock();
+    if let Err(err) = write_code(&mut out, format, code) {
+        eprintln!("error: could not print the login code: {err}");
+    }
+}
+
+/// Writes the device code to `out` and flushes it.
+///
+/// Text writes the link and the code on one line, then Microsoft's own instruction text.
+/// JSON writes one object, so it is the first of the two lines `--json` prints.
+fn write_code(
+    out: &mut dyn std::io::Write,
+    format: Format,
+    code: &DeviceCode,
+) -> std::io::Result<()> {
     match format {
         Format::Json => {
             let row = DeviceCodeRow {
                 user_code: &code.user_code,
                 verification_uri: &code.verification_uri,
             };
-            // A print failure would leave the user with no code, so it is reported here
-            // rather than ending the sign-in the user is already waiting on.
-            if let Err(err) = print_json_line(&row) {
-                eprintln!("error: could not print the login code: {err}");
-            }
+            let line = serde_json::to_string(&row)?;
+            writeln!(out, "{line}")?;
         }
         Format::Text => {
-            println!(
+            writeln!(
+                out,
                 "Open {} and enter code {}",
                 code.verification_uri, code.user_code
-            );
-            println!("{}", code.message);
+            )?;
+            writeln!(out, "{}", code.message)?;
         }
     }
+    out.flush()
 }
 
 /// The `EXPIRES` cell of a row: the timestamp, or empty for an account with no token.
@@ -271,5 +287,64 @@ mod tests {
         let row = AccountRow::new(&account, None);
         assert_eq!(expires_cell(&row), "2026-09-06T00:00:00Z");
         assert_eq!(row.kind, "msa");
+    }
+
+    /// A writer that records what was written and how often it was flushed.
+    #[derive(Default)]
+    struct Recorder {
+        written: Vec<u8>,
+        flushes: usize,
+    }
+
+    impl std::io::Write for Recorder {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.written.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.flushes += 1;
+            Ok(())
+        }
+    }
+
+    /// A pending sign-in, with a secret device code no output may carry.
+    fn device_code() -> DeviceCode {
+        DeviceCode {
+            user_code: "ABCD-EFGH".to_string(),
+            verification_uri: "https://microsoft.com/link".to_string(),
+            message: "Sign in at the link.".to_string(),
+            interval_secs: 5,
+            expires_in_secs: 900,
+            device_code: "dev-secret".to_string(),
+        }
+    }
+
+    #[test]
+    fn the_text_code_names_the_link_and_the_code_and_is_flushed() {
+        let mut out = Recorder::default();
+        write_code(&mut out, Format::Text, &device_code()).expect("write");
+        let text = String::from_utf8(out.written).expect("utf-8");
+        assert_eq!(
+            text,
+            "Open https://microsoft.com/link and enter code ABCD-EFGH\nSign in at the link.\n"
+        );
+        assert_eq!(out.flushes, 1, "the code is flushed before the poll loop");
+    }
+
+    #[test]
+    fn the_json_code_is_one_line_without_the_secret_and_is_flushed() {
+        let mut out = Recorder::default();
+        write_code(&mut out, Format::Json, &device_code()).expect("write");
+        let text = String::from_utf8(out.written).expect("utf-8");
+        assert_eq!(text.lines().count(), 1, "one json line, got {text}");
+        assert!(
+            !text.contains("dev-secret"),
+            "the secret leaked into {text}"
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&text).expect("json");
+        assert_eq!(parsed["user_code"], "ABCD-EFGH");
+        assert_eq!(parsed["verification_uri"], "https://microsoft.com/link");
+        assert_eq!(out.flushes, 1, "the code is flushed before the poll loop");
     }
 }
