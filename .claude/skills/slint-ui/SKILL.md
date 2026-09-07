@@ -120,6 +120,12 @@ navigates to the detail screen and opens its prompt for an offline name, then ca
 `launch` with it. The instances list opens that screen before launching for the same reason —
 the prompt and the log view both belong to it.
 
+The detail screen's Stop button calls `Launcher::stop_instance(slug)` through
+`Bridge::run_with_error`, so the busy flag clears on both paths. Core asks the game to exit,
+waits `STOP_GRACE` (10 s), then kills it; the outcome comes back as `LaunchOutcome::Exited`
+with `stopped` set, which the screen shows as "Stopped" and raises no warning toast for — a
+requested exit is not a crash.
+
 `InstanceState`'s prompt is shared: `prompt_mode` is `"offline"` for that name and `"rename"`
 for the detail header's Rename button, which prefills the current name and, on accept, calls
 `instances().rename(slug, new_name)` in a job. The slug never changes, so only the header and
@@ -163,10 +169,59 @@ addresses it as `<Component>::<name>`: `ElementHandle::find_by_element_id(&app,
 `Button`, `ListRow`, the rail entry, the tab entry, and the task panel's chevron each set
 `accessible-role: button`, `accessible-label`, and `accessible-action-default`, so a test presses
 them with `invoke_accessible_default_action`. A new clickable `Rectangle` needs the same three
-lines; without them the element is found but cannot be pressed.
+lines; without them the element is found but cannot be pressed. A row that carries a value —
+a settings row, for one — also sets `accessible-value`, so a test reads the row without knowing
+where it sits in the list.
 
 `scripts/list-slint-ids.sh` prints the whole table; `docs/research/2026-09-07-ui-element-ids.md`
-holds its output. Re-run it after adding a control.
+holds its output. Re-run it after adding a control. It skips `:= Timer`: a timer never enters
+the element tree, so `find_by_element_id` can never answer with one. Name your timers anyway —
+a name is what a `restart()` call needs.
+
+## Flow tests
+
+`crates/gcl-ui/tests/support/mod.rs` builds the real `AppWindow` over a real `Launcher` on a
+temp root and clicks through it. See the `testing` skill for the harness contract. What matters
+while writing a screen:
+
+- `app.click(id)` fails when the control is disabled, which is the point. `app.type_into(id,
+  text)`, `app.drag_slider(id, fraction)`, `app.el(id)` / `el_nth(id, n)` for a repeater.
+- `app.wait_until(what, pred, timeout)` yields to the event loop until `pred` holds, so a
+  `Bridge` worker thread posts its result back exactly as it does in the app. Never assert
+  straight after a click that starts a job.
+- `app.select_combo(id, index)` opens the popup with `accessible-action-expand` and drives it
+  with arrow keys, because a `ComboBox` exposes no accessible set-value action. It presses Up
+  until `accessible_value` stops changing, then Down `index` times.
+- Only what is drawn is in the element tree. A control below the fold of a `ScrollView` needs
+  `app.scroll_to(id)` first.
+- `crates/gcl-ui/build.rs` gates element names on `PROFILE == "debug"`, not `DEBUG`: `DEBUG`
+  reports the debug-info level, so a release profile with debug info on would ship the names.
+  `SLINT_EMIT_DEBUG_INFO=1` forces them.
+
+## Debounce
+
+A control that reports every intermediate step — a `Slider` under a screen reader's increment,
+a `ComboBox` under arrow keys — must not save once per step: each save reloads the rows, which
+tears the popup down under the user. Hold the pending value in a property and restart a named
+`Timer`:
+
+```slint
+// in the control's own `changed` handler
+root.pending_choice = self.current-index;
+choice_commit.running = true;
+choice_commit.restart();
+
+choice_commit := Timer {
+    interval: root.commit_delay;   // 500ms
+    running: false;
+    triggered => { self.running = false; root.chose(root.entry.key, root.pending_choice); }
+}
+```
+
+`running = true` starts a stopped timer; `restart()` is what puts the delay back. Assigning
+`running` the value it already holds is a no-op, so `running = false; running = true` does not
+rearm anything — that bug shipped once and made the timer fire 500 ms after the *first* change
+instead of the last. Always end with `restart()`.
 
 ## Logging
 
@@ -199,40 +254,37 @@ previewing, and describe what you saw in your report — the tool has no snapsho
   `RunState`, rather than a separate "now playing" panel.
 - Every list is arrow-navigable through `Shell.move_selection`; Enter activates a selected row;
   Escape closes the open dialog. See "Keyboard" above.
-- `std-widgets` controls follow the dark shell through `Palette.color-scheme` — see "Known
-  limitations".
+- `std-widgets` controls follow the dark shell through `Palette.color-scheme =
+  ColorScheme.dark`, set in `AppWindow`'s `init` — combo boxes, text fields and spin boxes
+  render dark, not in the `fluent` style's light palette.
 
 ## Known limitations
 
 - **Widget theme**: `std-widgets.slint` controls read their colors from the style's own
   `Palette`, which no `Theme` token reaches. `AppWindow`'s `init` sets
   `Palette.color-scheme = ColorScheme.dark`, which is the one switch that makes them match the
-  dark shell. It has to be an assignment in `init`; `Palette.color-scheme: ...` in a component
-  body is a parse error. `Theme` stays the source of truth for our own components.
+  dark shell, and they now render dark. It has to be an assignment in `init`;
+  `Palette.color-scheme: ...` in a component body is a parse error. `Theme` stays the source of
+  truth for our own components.
 - **No clipboard**: Slint 1.17 has no clipboard call reachable from a button here. Anywhere a user
   might want to copy text (the error dialog's body, for one) uses a read-only, selectable
   `TextEdit` instead — Ctrl+C on a selection is the whole copy story.
-- **Modpack discovery is install-by-id or by path**: the browser installs a modpack once its
-  source and project id are known, and its "From file" row imports a `.mrpack` or CurseForge
-  zip already on disk (`import_modpack_file`). There is no in-app modpack *search* flow,
-  because `gcl-core` has no modpack search endpoint, only project lookup and install. There is
-  no file picker either: the path is typed into a `LineEdit`, the same way a hand-downloaded
-  file is named on the detail screen.
-- **`stop()` is disabled**: `InstanceState.stop` exists so the button has a place to grow into, but
-  it is a no-op that only reports why — `gcl-core` has no way to kill a running launch.
-- **A widget's own save rule decides what a test can drive**: `Slider` fires `released` on a
-  drag and on an arrow key, but a screen reader's increment only fires `changed`, so
-  `SettingRow` also keeps a 250 ms `Timer` that saves when the changes stop. That timer cannot
-  be driven from a flow test: `TestApp::pump` hands the loop no time, and the system-time
-  backend refuses `mock_elapsed_time` with a real duration. A flow test drags instead
-  (`TestApp::drag_slider`). A `ComboBox` reports every arrow step as a pick, and each pick
-  saves and reloads the rows, which tears the popup down; drive a choice by clicking, or
-  assert the conversion in a unit test.
+- **No file picker**: a modpack archive on disk is named by typing its path into a `LineEdit`,
+  the same way a hand-downloaded file is named on the detail screen. Modpack *search* works —
+  the browser's modpack kind lists packs through `Launcher::search_packs`, with an Install
+  button per row, next to the by-id and by-file panels.
+- **A debounce timer cannot be driven from a flow test**: `TestApp::pump` hands the loop no
+  time, and the system-time backend refuses `mock_elapsed_time` with a real duration. A flow
+  test drags the slider instead (`TestApp::drag_slider`), which saves on release, and asserts
+  the debounced path in a unit test on the converter.
 - **Verified by compile, not by hand**: keyboard routing is exercised through unit tests on the
   pure functions and a passing build, not a live keyboard session. The CurseForge and Microsoft
   sign-in flows in the accounts and browser screens are unverified live on this machine — they
-  compile and their pure logic is tested, but no one has clicked through a real CurseForge search
-  or a real Microsoft device-code login in the built app here.
+  compile, their pure logic is tested, and `flow_accounts` drives the device-code dialog against
+  a mock, but no one has clicked through a real CurseForge search or a real Microsoft login here.
+- **`--screenshot` needs a compositor that draws**: a Wayland session gives an unmapped or
+  occluded window no frame callback, so the `AfterRendering` notifier never fires and the run
+  hangs. Run it under `xvfb-run -a` to get a PNG every time.
 
 ## Do not
 

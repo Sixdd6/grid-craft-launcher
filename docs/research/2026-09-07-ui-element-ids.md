@@ -51,6 +51,11 @@ found until it is scrolled to, which is what `TestApp::scroll_to` is for. A `Sli
 release, so `TestApp::drag_slider` presses and releases on it rather than using
 `invoke_accessible_increment_action`, which changes the value without ending a drag.
 
+A `Timer` is not in the table. It never enters the element tree, so `find_by_element_id` can
+never answer with one; `scripts/list-slint-ids.sh` skips `:= Timer` for that reason. The
+settings row's debounce timers are named in `setting-row.slint` all the same, because a name
+is what a `restart()` call needs.
+
 ## Ids
 
 | File | Id | Element |
@@ -73,7 +78,6 @@ release, so `TestApp::drag_slider` presses and releases on it rather than using
 | `crates/gcl-ui/ui/components/empty-state.slint` | `EmptyState::empty_title` | `Text` |
 | `crates/gcl-ui/ui/components/empty-state.slint` | `EmptyState::empty_message` | `Text` |
 | `crates/gcl-ui/ui/components/list-row.slint` | `ListRow::row_touch` | `TouchArea` |
-| `crates/gcl-ui/ui/components/progress-panel.slint` | `ProgressPanel::beat` | `Timer` |
 | `crates/gcl-ui/ui/components/progress-panel.slint` | `ProgressPanel::panel_toggle` | `Rectangle` |
 | `crates/gcl-ui/ui/components/progress-panel.slint` | `ProgressPanel::chevron` | `TouchArea` |
 | `crates/gcl-ui/ui/components/prompt-dialog.slint` | `PromptDialog::name_field` | `LineEdit` |
@@ -86,10 +90,8 @@ release, so `TestApp::drag_slider` presses and releases on it rather than using
 | `crates/gcl-ui/ui/components/search-box.slint` | `SearchBox::search_field` | `LineEdit` |
 | `crates/gcl-ui/ui/components/search-box.slint` | `SearchBox::clear_button` | `Button` |
 | `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::setting_slider` | `Slider` |
-| `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::commit` | `Timer` |
 | `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::setting_switch` | `Switch` |
 | `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::setting_combo` | `ComboBox` |
-| `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::choice_commit` | `Timer` |
 | `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::setting_field` | `LineEdit` |
 | `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::setting_reset_button` | `Button` |
 | `crates/gcl-ui/ui/components/settings-editor.slint` | `SettingsEditor::settings_search_field` | `LineEdit` |
@@ -181,4 +183,4 @@ release, so `TestApp::drag_slider` presses and releases on it rather than using
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::default_add_button` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::verify_button` | `Button` |
 
-Total: 125 named elements.
+Total: 122 named elements.

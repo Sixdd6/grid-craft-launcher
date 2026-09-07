@@ -72,7 +72,7 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 - R9.1 The launcher holds a default `options.txt` preseed as key-value pairs in `config.toml`.
 - R9.2 New instances get the preseed written to `options.txt`.
 - R9.3 Each instance holds an override map of `options.txt` keys. On launch, the launcher writes those keys into the instance's `options.txt`, replacing existing lines with the same key and appending missing ones. Other lines are untouched.
-- R9.4 The user can edit the preseed and per-instance overrides in the UI and CLI.
+- R9.4 The user can edit the preseed and per-instance overrides in the UI and CLI. Delivered: a typed editor over `settings::catalog` — a slider, switch, choice box, or text field per known key, grouped and searchable, with the layer each value came from and a Reset on a value this layer holds. Layers rank override, `options.txt`, preseed, catalog default. A key the catalog does not know keeps a raw row and is never dropped. `Launcher::set_game_default` / `set_instance_override` validate every write, so `gcl settings set` rejects what the editor rejects.
 
 ## R10 JVM settings
 
@@ -86,7 +86,7 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 - R11.2 Apply settings overrides (R9.3) before starting the game.
 - R11.3 Spawn Java, stream stdout and stderr to a log file and to the UI or terminal.
 - R11.4 `--dry-run` prints the full command and environment without starting Java.
-- R11.5 Report the exit code and a crash hint when the game exits non-zero.
+- R11.5 Report the exit code and a crash hint when the game exits non-zero. A stop the user asked for is not a crash: `Launcher::stop_instance(slug)` asks the game to exit, waits `STOP_GRACE` (10 s), then kills it, and the outcome carries `stopped`, which the GUI shows as "Stopped" with no warning.
 
 ## R12 CLI
 
@@ -97,9 +97,10 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 
 - R13.1 Screens: instances list, instance detail (content, settings, JVM, logs), content browser (search across sources with type and version filters), accounts, launcher settings. All five are delivered (`crates/gcl-ui`).
 - R13.2 Progress for downloads and installs is visible per task. Delivered: `App.tasks` shows one row per active task with a fraction and status, in the bottom panel.
-- R13.3 Dark theme by default. Native window, no web view. Delivered through `winit` + `renderer-femtovg`; `std-widgets` controls (combo boxes, text fields, spin boxes) keep the `fluent` style's light palette and sit on the dark shell rather than matching it — see the `slint-ui` skill's "Known limitations".
+- R13.3 Dark theme by default. Native window, no web view. Delivered through `winit` + `renderer-femtovg`. `std-widgets` controls (combo boxes, text fields, spin boxes) follow the dark shell as well: `AppWindow`'s `init` sets `Palette.color-scheme = ColorScheme.dark`.
 - R13.4 Keyboard: every list is arrow-navigable, Enter activates a row, Escape closes the open dialog, digits 1-5 jump to a screen. Delivered and unit-tested at the pure-function level (`gcl-ui/src/keys.rs`); the `.slint` wiring is verified by compiling, not by a keyboard-driving test.
-- Known gaps: modpack discovery in the browser is install-by-id (source + project id) or by a path to an archive on disk, not a modpack search flow — `gcl-core` has no modpack search endpoint. `InstanceState.stop` is present but disabled: `gcl-core` cannot kill a running launch yet, so the button reports why instead of acting. The CurseForge search and the Microsoft device-code sign-in flows are implemented and unit-tested but unverified live on this machine.
+- R13.5 Every screen is driven end to end by a headless flow test: `crates/gcl-ui/tests/flow_{instances,settings,content,accounts}.rs` build the real `AppWindow` over a real `Launcher` on a temp root and click through create, install, launch, stop, the settings editor, content add and remove, modpack search and install, and the account flows. The GUI writes `<root>/logs/gui.log.<date>`, and `--screenshot <path>` saves a PNG of the window.
+- Known gaps: there is no file picker — a pack archive on disk is named by typing its path. The CurseForge search and a real Microsoft sign-in are unverified against the live services on this machine; both are driven against mocks by the flow tests.
 
 ## Later
 
@@ -108,7 +109,7 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 - Per-instance Java download from Adoptium.
 - Skins and capes.
 
-## MVP status (2026-09-06)
+## MVP status (2026-09-06, GUI rows updated 2026-09-07)
 
 Status values: **Done** (works in the CLI and the GUI), **Done (CLI only)** (no GUI surface),
 **Partial** (part of the requirement is missing), **Not verified live** (the code and its unit
@@ -159,7 +160,7 @@ tests are there, but no live run has exercised it here).
 | R9.1 | Done | `config.toml` holds the preseed as key-value pairs. |
 | R9.2 | Done | A new instance gets the preseed written to `options.txt`. |
 | R9.3 | Done | Launch writes the instance's overrides into `options.txt`, replacing matching keys and appending the rest. |
-| R9.4 | Done | `settings set`, `settings defaults set`, and the GUI settings tabs edit both. |
+| R9.4 | Done | A typed editor over `settings::catalog` — slider, switch, choice box, or text field per key, grouped and searchable, showing the winning layer and offering Reset. `settings set` and `settings defaults set` route through the same validating `Launcher` methods. |
 | R10.1 | Done | `config jvm --min --max` sets the launcher-wide heap bounds. |
 | R10.2 | Done | Per-instance min and max override the defaults; the JVM tab edits them. |
 | R10.3 | Done | `instance.toml` carries extra JVM arguments per instance. |
@@ -167,13 +168,14 @@ tests are there, but no live run has exercised it here).
 | R11.2 | Done | Overrides are applied before Java starts. |
 | R11.3 | Done | Java's stdout and stderr stream to `<root>/logs/<slug>-<timestamp>.log` and to events. |
 | R11.4 | Done | `--dry-run` prints the program, working directory, and every argument. |
-| R11.5 | Done | A non-zero game exit is reported with a crash hint. |
+| R11.5 | Done | A non-zero game exit is reported with a crash hint. A stop the user asked for reports "Stopped" and raises no warning. |
 | R12.1 | Done | `instance`, `version`, `loader`, `java`, `account`, `content`, `modpack`, `settings`, `launch`, `config`, and `debug` cover the requirements above. |
 | R12.2 | Done | Every command prints text by default and JSON with `--json`. |
 | R13.1 | Done | All five screens ship: instances, instance detail, browser, accounts, settings. |
 | R13.2 | Done | The bottom panel shows one row per task with a fraction and a status. |
-| R13.3 | Partial | The shell is dark and native (winit + FemtoVG). `std-widgets` controls keep the `fluent` style's light palette. |
+| R13.3 | Done | The shell is dark and native (winit + FemtoVG), and `std-widgets` controls follow it: `Palette.color-scheme = ColorScheme.dark` in `AppWindow`'s `init`. |
 | R13.4 | Done | Digits 1-5, arrows, Enter, and Escape are wired; `keys.rs` is unit-tested. The wiring is verified by compile and Slint's documented event routing, not by a live keyboard. |
+| R13.5 | Done | Four headless flow binaries drive the real window over a real launcher: instances (create, install, launch, stop, rename, delete), settings, content, accounts. The GUI logs to `<root>/logs/gui.log.<date>`; `--screenshot <path>` saves a PNG. |
 
 ### Known limitations
 
@@ -182,17 +184,18 @@ tests are there, but no live run has exercised it here).
   built from the public docs. `debug verify-source curseforge` prints SKIP.
 - **Microsoft login is unverified live.** The repo ships no `GCL_MSA_CLIENT_ID`, so the six-step
   device-code chain has run against wiremock only. `debug verify-source msa` prints SKIP.
-- **Widget palette.** `std-widgets` controls (`ComboBox`, `TextEdit`, `SpinBox`) render in the
-  `fluent` style's light palette on the dark shell. No `Theme` token reaches their colors.
 - **No clipboard.** Slint 1.17 exposes no clipboard call here. Text a user may want to copy sits
   in a read-only, selectable `TextEdit`, so Ctrl+C on a selection is the whole copy story.
-- **Modpack discovery is by id.** The browser installs a pack from a source and a project id, or
-  from a typed path to an archive. There is no modpack search, because `gcl-core` has no modpack
-  search endpoint, and no file picker.
-- **No Stop button.** `InstanceState.stop` reports why it did nothing: `gcl-core` cannot kill a
-  running launch yet.
-- **Keyboard routing is verified by compile.** The pure functions have unit tests; nobody has
-  driven the built window from a keyboard in a test.
+- **No file picker.** A pack archive already on disk is named by typing its path into a field.
+  Modpack search itself works, in the browser's modpack kind.
+- **Keyboard routing is verified by compile.** The pure functions have unit tests, and the flow
+  tests press keys to drive a `ComboBox`; nobody has driven the whole window from a keyboard.
+- **A debounce cannot be driven from a flow test.** `pump()` hands the event loop no time, and
+  the system-time backend refuses `mock_elapsed_time` with a real duration, so a flow test drags
+  a slider (which saves on release) and leaves the debounced path to a unit test.
+- **`--screenshot` needs a compositor that draws.** A Wayland session gives an unmapped or
+  occluded window no frame callback, so the `AfterRendering` notifier never fires. Run it under
+  `xvfb-run -a`.
 - **Forge before 1.13 is unsupported.** The installer format changed at 1.13; older Forge
   versions are out of scope for the MVP.
 - **NeoForge has no 1.20.1 build.** That release line shipped as `net.neoforged:forge` 47.1.x.
@@ -201,6 +204,33 @@ tests are there, but no live run has exercised it here).
 - **CurseForge pack data packs are skipped.** A pack file whose project class is a data pack is
   skipped with a warning: a data pack needs `saves/<world>/datapacks/`, and a pack manifest names
   no world.
+
+### Plan 7 status (2026-09-07)
+
+The usable-app plan closed on 2026-09-07 on the same machine. What it added or fixed:
+
+- The game settings editor is typed (R9.4): a control per catalog key, layers ranked
+  override > `options.txt` > preseed > default, and the CLI validating the same way.
+- The instance detail screen can stop a running game (R11.5).
+- The browser searches modpacks, not only installs one by id (R8.1).
+- Every screen is driven by a headless flow test (R13.5), and the GUI writes
+  `<root>/logs/gui.log.<date>`.
+- `std-widgets` controls render dark, which closes the R13.3 gap.
+
+| Command | Result | Key line |
+|---|---|---|
+| `just check` | PASS | `Summary [3.876s] 766 tests run: 766 passed, 0 skipped` |
+| `just deny` | PASS | `advisories ok, bans ok, licenses ok, sources ok` |
+| `just lint-claude` | PASS | `PASS: claude files have frontmatter` |
+| `just e2e` (Fabric, MC 1.20.1) | PASS | `PASS dry-run launch`, `PASS check classpath files exist (60 entries)` |
+| `gcl instance create demo7 --minecraft 1.20.1 --loader fabric` (real root) | PASS | `created demo7 (demo7)`, 0.21 s |
+| `gcl launch demo7 --offline-user Player --dry-run` (real root) | PASS | `program: <root>/cache/runtimes/java-runtime-gamma/linux/bin/java`, 34.52 s |
+| `grid-craft-launcher --screenshot <path>` under `xvfb-run` | PASS | a 1200 × 760 PNG of the dark shell with the instance row |
+
+The dry-run downloaded `java-runtime-gamma` rather than using this machine's OpenJDK 25, which
+is the behaviour Task 4 fixed: 1.20.1 asks for Java 17, and a higher local JVM is no longer
+accepted. The screenshot run needs `xvfb-run`: under Wayland the window gets no frame callback,
+so the `AfterRendering` notifier never fires.
 
 ### Verification record
 

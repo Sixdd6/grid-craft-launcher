@@ -43,9 +43,20 @@ just run-ui
 ## Run the app
 
 ```bash
-just run-ui              # opens the desktop UI
-just run-ui -- --smoke   # opens it, runs one synthetic task, quits — a quick sanity check
+just run-ui                              # opens the desktop UI
+just run-ui -- --smoke                   # opens it, runs one synthetic task, quits
+just run-ui -- --screenshot shot.png     # opens it, saves a PNG of the window, quits
+GCL_LOG=debug just run-ui                # the same, with logging on stderr
 ```
+
+The app writes a log of every job it runs — the label, how long it took, and the error chain
+when one fails — to `<root>/logs/gui.log.<date>`, rotated daily. The error dialog ends with that
+path. `GCL_LOG` adds the same lines on stderr and takes a filter directive: `GCL_LOG=debug`, or
+`GCL_LOG=gcl_core::download=trace` for one module.
+
+`--screenshot` needs a compositor that actually draws the window. A Wayland session gives an
+unmapped or occluded window no frame callback, so the run waits for a frame that never comes;
+`xvfb-run -a grid-craft-launcher --screenshot shot.png` always works.
 
 Screenshots: none yet. Add them here once the UI has a stable enough look to be worth capturing.
 
@@ -56,10 +67,17 @@ Keyboard shortcuts:
 - `Enter`: open or activate the selected row.
 - `Escape`: close the open dialog.
 
-The launcher's own controls (buttons, rows, panels) follow a dark theme. Standard form controls
-— combo boxes, text fields, spin boxes — come from Slint's `fluent` widget style and keep its
-light palette, so they look lighter than the rest of the window. This is a known limitation, not
-a bug; see the `slint-ui` skill for detail.
+The whole window is dark, standard form controls included — combo boxes, text fields and spin
+boxes follow the shell through Slint's `Palette.color-scheme`.
+
+Game settings are a typed editor rather than a key-value table: a slider, switch, choice box, or
+text field per `options.txt` key, grouped and searchable. Each row says which layer its value
+came from — an instance override, the file the game wrote, the launcher preseed, or the game's
+own default — and a row this screen's layer holds offers Reset. A key the launcher does not know
+keeps a raw row and is never dropped.
+
+The instance detail screen has a Stop button. It asks the game to exit, waits ten seconds, then
+kills it; a stop you asked for is reported as "Stopped", not as a crash.
 
 ## Try it
 

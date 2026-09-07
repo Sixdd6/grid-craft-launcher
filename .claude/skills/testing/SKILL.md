@@ -316,12 +316,41 @@ clicks through it. `tests/support/mod.rs` is the harness:
   worker threads post their results back exactly as they do in the app.
 - `support::run(flow)` starts the event loop, runs the flow, quits, and re-raises any panic.
 
-Rules: one Slint backend per process, so one test binary drives one window and runs its flows in
-order. `i-slint-backend-testing` needs element names in the generated code, which
-`crates/gcl-ui/build.rs` emits for a debug build (or with `SLINT_EMIT_DEBUG_INFO=1`). A
-`ComboBox` has no accessible set-value action, so `select_combo` opens the popup with
-`accessible-action-expand` and drives it with arrow keys. Nothing in a flow test reaches the
-network or the keyring.
+Run them with `cargo nextest run -p gcl-ui`, or one at a time with `just test
+'binary(flow_settings)'`. `just check` runs them with everything else.
+
+Rules:
+
+- **One Slint backend per process.** `support::init_backend()` calls
+  `i_slint_backend_testing::init_integration_test_with_system_time` behind a `Once`, and no
+  other backend may be set in that process. So each flow group is its own test binary with one
+  `#[test]` inside it, running its sub-flows in order over one window. Four binaries today:
+  `flow_instances`, `flow_settings`, `flow_content`, `flow_accounts`. Adding a second `#[test]`
+  to one of them is the failure mode to watch for.
+- **System time, not mock time.** The mock-time backend deadlocked the timer yield
+  `wait_until` runs on. `support::pump()` therefore calls `mock_elapsed_time(Duration::ZERO)`,
+  which drives one loop turn and hands the loop no time at all. A control that only saves after
+  a debounce interval cannot be driven from a flow test; drag the slider (which saves on
+  release) and unit-test the debounced path instead.
+- **The stand-in Java is a `sh` script.** `TestApp` writes one at `<root>/fake-java` and points
+  `config.jvm.java_path` at it. It records its whole argument list to a file the test reads back
+  (`app.java_args()`), then waits for `<root>/stop` so a flow can press Stop while it is still
+  up (`app.ask_java_to_stop()`). Nothing downloads a real JVM and nothing starts Minecraft.
+- **Every endpoint is mocked or unreachable.** The harness mounts wiremock for Mojang, Fabric,
+  Modrinth and the six Microsoft steps, and points every endpoint it does not mock at a
+  `.invalid` host, so a request the test did not plan for fails at DNS rather than reaching the
+  real service. The secret store is `MemoryStore`, so no keyring is touched.
+- **Element names must be in the generated code.** `crates/gcl-ui/build.rs` emits them when
+  `PROFILE` is `debug` — the test profile's `PROFILE` is `debug`, so nextest gets them — or with
+  `SLINT_EMIT_DEBUG_INFO=1`. `TestApp::new` asserts the id list is not empty, so a build that
+  lost them fails loudly instead of reporting "element not found" for everything.
+- **A `ComboBox` has no accessible set-value action.** `select_combo` opens the popup with
+  `accessible-action-expand`, presses Up until `accessible_value` stops changing, then presses
+  Down `index` times.
+- **A flow that waits forever must not hang the run.** `.config/nextest.toml` gives every
+  `flow_*` binary a slow timeout of five 60-second periods, after which nextest terminates the
+  binary and reports the test as timed out.
+- No flow test opens a display, reaches the network, or touches the keyring.
 
 ## What not to do
 

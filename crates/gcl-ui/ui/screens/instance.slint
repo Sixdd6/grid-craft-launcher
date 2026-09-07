@@ -416,6 +416,15 @@ export component InstanceScreen inherits Rectangle {
                         }
                     }
 
+                    // Before the first run there is no file to read back. Say why the list
+                    // is missing, rather than leaving a gap where it would be.
+                    if !InstanceState.has_options: Text {
+                        text: "No options.txt yet. The game writes it on first run.";
+                        color: Theme.text-muted;
+                        font-size: Theme.font-size-small;
+                        wrap: word-wrap;
+                    }
+
                     // What the game itself last wrote. Read-only, and only shown once the
                     // file exists.
                     if InstanceState.has_options: options_toggle := Rectangle {

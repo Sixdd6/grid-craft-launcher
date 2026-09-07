@@ -167,8 +167,12 @@ crates/gcl-ui/
                                  its Confirm/Prompt/Choice/DeviceCode/CreateInstance variants
   ui/screens/                   instances.slint, instance.slint, browser.slint, accounts.slint,
                                  settings.slint — pure layout, no logic
-  src/main.rs                   parses args (`--smoke`, `-h`, `-V`), opens `Launcher::new`, builds
-                                 the window, runs the event loop
+  src/lib.rs                    `slint::include_modules!()` plus every module below, so an
+                                 integration test builds the same AppWindow the binary does
+  src/main.rs                   parses args (`--smoke`, `--screenshot <path>`, `-h`, `-V`), opens
+                                 `Launcher::new`, starts logging, builds the window, runs the loop
+  src/logging.rs                tracing to `<root>/logs/gui.log.<date>`, daily, at `info`, plus a
+                                 stderr layer when `GCL_LOG` is set
   src/app.rs                    builds AppWindow, wires App/Shell callbacks, starts the forwarder
                                  and the one-second ticker
   src/bridge.rs                 Bridge: runs a Launcher call off the UI thread, posts the result back
@@ -181,6 +185,10 @@ crates/gcl-ui/
   src/screens/*.rs               one module per screen; each exposes `wire(&window, &bridge, ...)`
   src/screens/settings_editor.rs the typed game-settings editor, shared by the settings screen
                                  (launcher preseed) and the instance Settings tab (overrides)
+  tests/support/mod.rs          the GUI flow harness: a TestApp on a temp root with wiremock hosts
+                                 and a stand-in java, click/type_into/select_combo, wait_until, run
+  tests/flow_*.rs               one test binary per flow group: instances, settings, content,
+                                 accounts
 ```
 
 ### State globals
@@ -242,6 +250,41 @@ the forwarder and the ticker both run at least once, then calls `slint::quit_eve
 exercises the forwarder, the models, and window creation with no test harness of its own; `just
 run-ui -- --smoke` runs it and exits 0 on success. It still needs a display — see the `testing`
 skill for what that means in CI.
+
+### `--screenshot <path>`
+
+`grid-craft-launcher --screenshot <path>` opens the real window, writes one PNG of it, and
+quits. The snapshot has to be taken inside the renderer's `AfterRendering` callback: the FemtoVG
+renderer reads the OpenGL back buffer, which holds the frame only between the draw and the
+buffer swap, so a plain timer gets a blank image. A 700 ms timer therefore raises a flag and
+asks for a redraw, and the callback takes `Window::take_snapshot` on the frame that redraw
+produces. It needs a display, and a compositor that actually draws the window: a Wayland session
+gives an unmapped or occluded window no frame callback, so the notifier never fires and the run
+hangs. `xvfb-run -a grid-craft-launcher --screenshot <path>` always draws.
+
+### Logging
+
+`logging::init(root)` builds the GUI's `tracing` subscriber: a `tracing_appender` daily file in
+`<root>/logs/`, named `gui.log.<date>` in UTC, at `info`. It returns a `LogGuard` that `main`
+holds until the event loop returns; dropping it stops the non-blocking writer's worker thread
+and loses the tail. Setting `GCL_LOG` adds a stderr layer with that value as its `EnvFilter`
+directive. `Bridge` writes one line per job — the label, the elapsed milliseconds, and the error
+chain on failure — and the error dialog ends with `Details: <root>/logs/gui.log.<date>`, which
+`logging::log_file(root)` rebuilds rather than hard-codes.
+
+### GUI flow tests
+
+`gcl-ui` is a library plus a thin binary, so `crates/gcl-ui/tests/` can build the same
+`AppWindow` `main` does and click through it. `tests/support/mod.rs` is the harness: a temp root
+under `GCL_ROOT`, wiremock hosts for Mojang, Fabric, Modrinth and Microsoft, a stand-in `java`
+shell script, `Launcher::open_with_endpoints(...)` with a `MemoryStore`, and `gcl_ui::app::build`.
+It exposes `click`, `type_into`, `select_combo`, `drag_slider`, `el`/`el_nth`, `wait_until`, and
+`run(flow)`, which starts the event loop, runs the flow, quits, and re-raises any panic. Elements
+are addressed by the `<Component>::<name>` ids in `docs/research/2026-09-07-ui-element-ids.md`;
+`crates/gcl-ui/build.rs` emits those names when `PROFILE` is `debug`, so a release binary carries
+none. One Slint backend may exist per process, so each flow group is its own test binary with one
+`#[test]` inside it, and `.config/nextest.toml` gives every `flow_*` binary a 5 × 60 s timeout.
+No flow test opens a display or reaches the network.
 
 ## App root layout
 

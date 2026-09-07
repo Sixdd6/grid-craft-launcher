@@ -94,6 +94,50 @@ directory and a `BTreeMap<String, String>`, never an `Instance`, so `instances::
   `\r\n`, so a Windows-style `options.txt` round-trips byte for byte.
 - Values are stored as strings exactly as Minecraft writes them (`true`, `12`, `"en_us"` with quotes for strings).
 
+## The settings catalog
+
+`settings::catalog` is the table of keys the launcher understands: `CATALOG: &[Setting]`, one
+`Setting { key, label, group, control, default }` per key, in the order a screen shows them.
+`Group` is `Video`, `Controls`, `Sound`, `Chat`, or `Other`. `Control` is `Slider { min, max,
+step, decimals }`, `Toggle`, `Choice(&[(token, label)])`, or `Text`. It is data, not code —
+adding a key is one row, and `docs/research/2026-09-07-options-txt-catalog.md` is where the
+ranges and tokens come from.
+
+`catalog::find(key)` looks a key up. `format_value` and `parse_value` round-trip the stored
+form Minecraft writes: `true`/`false` for a toggle, a float with its own `decimals` for a
+slider, a bare token for a choice, the string verbatim for text. `parse_value` rejects an
+out-of-range number, a non-finite one, and a token no choice holds.
+
+**A key the catalog does not know is never lost.** It has no control and no validation beyond
+`validate_key`/`validate_value`, and it survives every read and write.
+
+## Layers
+
+`settings::doc::merged(preseed, overrides, current)` builds the row list a settings
+screen renders: one `Row { key, value, source, setting }` per catalog key in catalog order,
+then every unknown key from any layer, alphabetically. `source` names the layer that won:
+
+**Override > File > Preseed > Default.**
+
+The file outranks the preseed because `apply_preseed` writes only when `options.txt` is absent.
+Once the game has written the file, a line in it is what the game reads, so showing the preseed
+value there would be a lie. An instance override still outranks the file, because launch writes
+it back into the file every time.
+
+`settings::doc::validate(setting, value)` checks one value against its catalog entry.
+
+## Validation reaches both front ends
+
+`Launcher::set_instance_override` / `unset_instance_override` edit one instance's override map;
+`set_game_default` / `unset_game_default` do the same for the preseed in `config.toml`. All four
+validate the key and value, and range- and choice-check a known catalog key. `gcl settings set`
+and `gcl settings defaults set` route through those methods rather than writing the map
+themselves, so the CLI rejects exactly what the GUI rejects — an out-of-range slider value or a
+bad choice token fails at the command line too.
+
+`Launcher::settings_rows_for_defaults()` and `settings_rows_for_instance(slug)` return the
+merged rows for the two layers a screen can edit.
+
 ## accounts.json
 
 ```json

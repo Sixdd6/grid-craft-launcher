@@ -22,7 +22,12 @@ find "$dir" -name '*.slint' | sort | while read -r file; do
         name="$(printf '%s\n' "$line" \
             | sed -nE 's/^[[:space:]]*(if[[:space:]].*:[[:space:]]*|for[[:space:]].*:[[:space:]]*)?([a-z][a-z0-9_]*)[[:space:]]*:=[[:space:]]*([A-Za-z0-9_-]+).*/\2 \3/p')"
         if [ -n "$name" ]; then
-            printf '%s\t%s::%s\n' "$file" "${component:-?}" "$name"
+            kind="${name##* }"
+            # A Timer is not an element: it never enters the element tree, so
+            # `find_by_element_id` can never answer with one. Keep it out of the table.
+            if [ "$kind" != "Timer" ]; then
+                printf '%s\t%s::%s\n' "$file" "${component:-?}" "$name"
+            fi
         fi
     done < "$file"
 done
