@@ -17,6 +17,13 @@ export component Dialog inherits Rectangle {
     in property <bool> confirm-enabled: true;
     // Paints the affirming button in the danger color, for a destructive action.
     in property <bool> danger: false;
+    // Set this when the body starts with a text field the user should be typing in.
+    //
+    // Slint gives no way to reach into `@children` and focus the first field from here, so the
+    // caller focuses its own field and this only says "do not take the focus away from it".
+    // Escape still closes the dialog: the scope below is that field's ancestor, so a key the
+    // field rejects bubbles up to it.
+    in property <bool> focus-first-field: false;
     callback close();
     callback confirm();
 
@@ -24,9 +31,10 @@ export component Dialog inherits Rectangle {
     background: Colors.black.with-alpha(0.55);
     forward-focus: keys;
 
-    // A closed dialog stays mounted but must never hold the keyboard.
+    // A closed dialog stays mounted but must never hold the keyboard. A dialog whose body
+    // starts with a field leaves the focus to that field instead.
     changed open => {
-        if (root.open) {
+        if (root.open && !root.focus-first-field) {
             keys.focus();
         }
     }

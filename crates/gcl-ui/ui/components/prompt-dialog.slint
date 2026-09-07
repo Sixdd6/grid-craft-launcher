@@ -25,10 +25,19 @@ export component PromptDialog inherits Rectangle {
     // The user cancelled, or clicked outside the panel.
     callback cancel();
 
+    // Opening the prompt puts the keyboard straight in the field: the whole modal exists to
+    // collect one line of text.
+    changed open => {
+        if (root.open) {
+            field.focus();
+        }
+    }
+
     Dialog {
         width: root.width;
         height: root.height;
         open: root.open;
+        focus-first-field: true;
         title: root.title;
         close-text: "Cancel";
         confirm-text: root.accept_label;
@@ -50,7 +59,7 @@ export component PromptDialog inherits Rectangle {
                 font-size: Theme.font-size-small;
             }
 
-            LineEdit {
+            field := LineEdit {
                 placeholder-text: root.placeholder;
                 text <=> root.value;
                 accepted(typed) => {

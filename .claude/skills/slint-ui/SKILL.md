@@ -88,9 +88,13 @@ goes through this one function.
 the first event, sleeps 50 ms collecting the rest of the batch, then posts one closure that folds
 the whole batch into `App.tasks` and `App.app_log` in a single redraw (`events::apply` is the pure
 fold; test it directly, no window needed). A finished or failed row is stamped with its end time in
-a `thread_local!` map and pruned by the one-second `Timer` in `src/app.rs` once `KEEP_DONE` (5 s)
-has passed — not by the batch that ended it, so it stays visible briefly. `toasts.rs` follows the
-same push/prune split, `TTL` 6 s, `MAX` 3 live at once. `RunState` (`src/state.rs`) is the one
+a `thread_local!` map and pruned by the one-second `Timer` in `src/app.rs` once its own life has
+passed — `KEEP_DONE` (5 s) for a clean end, `FAILED_TTL` (30 s) for a failure — not by the batch
+that ended it, so it stays visible. A failure is also said two other ways: `apply` appends an
+`error` log line worded `"<label> failed: <detail>"` and reports it in `Applied::failures`, which
+`push` shows as an `error` toast and uses to set `App.panel_expanded`, so the panel opens on the
+row that carries it. `toasts.rs` follows the same push/prune split, `TTL` 6 s, `MAX` 3 live at
+once. `RunState` (`src/state.rs`) is the one
 piece of shared state that lives outside a `*State` global: an `Arc<Mutex<HashSet<String>>>` of
 running slugs, so the instances list and the detail screen agree on "Running" regardless of which
 one started the launch.
@@ -104,6 +108,15 @@ len)` is the pure function behind every arrow-navigable list: clamps to `[0, len
 wrapping, so holding an arrow stops at an end; `-1` means no selection and a first press lands on
 the near end. Both are ordinary Rust, unit-tested with no Slint instance. The `.slint` wiring that
 calls them is checked by compiling the crate, not by a test that drives real key events.
+
+No list scope ever calls `focus()` on `init`. A conditional element is rebuilt whenever its
+condition changes, and an `init` handler that grabs focus would pull the keyboard out of a field
+mid-typing. The keyboard reaches a list two ways instead: a click on a row, and `SearchBox.moved_down`,
+which the field raises on Down so the owner can call `list.focus()`. That means a list scope has to
+be mounted even while its list is empty — give it `vertical-stretch: 0` there and keep the `if` on
+the `ListView` inside it. A `Dialog` takes focus when it opens, unless `focus-first-field` says the
+caller focuses its own text field instead; Escape bubbles from that field to the dialog's scope
+either way.
 
 ## Preview
 

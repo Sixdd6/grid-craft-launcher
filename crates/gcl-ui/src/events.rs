@@ -6,8 +6,8 @@
 //!
 //! Finished rows are not dropped by the batch that finished them: each one is stamped in
 //! [`AGES`] and the one-second timer in `src/app.rs` removes it [`KEEP_DONE`] after its own
-//! end. That map is a `thread_local!` because both writers, this module's `push` and that
-//! timer, already run on the UI thread.
+//! end, or [`FAILED_TTL`] when it failed. That map is a `thread_local!` because both writers,
+//! this module's `push` and that timer, already run on the UI thread.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -25,14 +25,23 @@ use crate::{App, AppWindow, LogLine, TaskRow};
 /// How long events are collected before a batch is posted to the UI thread.
 const BATCH: Duration = Duration::from_millis(50);
 
-/// How long a finished task stays in the list after it ended.
+/// How long a task that finished cleanly stays in the list after it ended.
 pub const KEEP_DONE: Duration = Duration::from_secs(5);
+
+/// How long a task that failed stays in the list.
+///
+/// Six times [`KEEP_DONE`], because a failure is the one row a user has to read. The panel
+/// opens itself when a task fails, so the row is on screen for that whole time.
+pub const FAILED_TTL: Duration = Duration::from_secs(30);
 
 /// Most log lines kept in memory. Older lines are dropped from the front.
 pub const LOG_LIMIT: usize = 2000;
 
 /// Status of a task that is still running.
 const RUNNING: &str = "running";
+
+/// Status of a task that ended badly.
+const FAILED: &str = "failed";
 
 thread_local! {
     /// When each finished task ended, by row id. Rows still running are absent.
@@ -46,6 +55,8 @@ pub struct Applied {
     pub warnings: Vec<String>,
     /// Ids of the rows this batch moved to done or failed.
     pub finished: Vec<i32>,
+    /// One line per task this batch failed, already worded for a reader.
+    pub failures: Vec<String>,
 }
 
 /// Starts the forwarder thread. It ends when the channel closes or the window is gone.
@@ -89,6 +100,14 @@ fn push(window: &AppWindow, events: &[Event]) {
     for warning in &applied.warnings {
         toasts::show(window, warning, "warning");
     }
+    // A failure is the one thing the user has to read, so it is said three ways: a toast, an
+    // error line in the app log, and the panel opening itself on the row that carries it.
+    for failure in &applied.failures {
+        toasts::show(window, failure, "error");
+    }
+    if !applied.failures.is_empty() {
+        app.set_panel_expanded(true);
+    }
 }
 
 /// Ages finished rows out of the task list. Runs on the UI thread, once a second.
@@ -97,7 +116,8 @@ fn push(window: &AppWindow, events: &[Event]) {
 pub fn tick(window: &AppWindow, now: Instant) -> bool {
     let app = window.global::<App>();
     let mut rows: Vec<TaskRow> = app.get_tasks().iter().collect();
-    let changed = AGES.with_borrow_mut(|ages| prune_finished(&mut rows, ages, now, KEEP_DONE));
+    let changed =
+        AGES.with_borrow_mut(|ages| prune_finished(&mut rows, ages, now, KEEP_DONE, FAILED_TTL));
     if changed {
         app.set_busy(any_running(&rows));
         app.set_tasks(ModelRc::new(VecModel::from(rows)));
@@ -105,24 +125,31 @@ pub fn tick(window: &AppWindow, now: Instant) -> bool {
     changed
 }
 
-/// Drops every finished row that ended more than `keep` ago, and forgets its stamp.
+/// Drops every finished row that ended long enough ago, and forgets its stamp.
 ///
-/// Pure: the caller owns both the rows and the stamps. A running row is never touched, and a
-/// finished row with no stamp is kept until the next batch stamps it.
+/// A row that ended cleanly is kept for `keep`, one that failed for `failed_keep`, measured
+/// from its own end. Pure: the caller owns both the rows and the stamps. A running row is
+/// never touched, and a finished row with no stamp is kept until the next batch stamps it.
 pub fn prune_finished(
     rows: &mut Vec<TaskRow>,
     ages: &mut HashMap<i32, Instant>,
     now: Instant,
     keep: Duration,
+    failed_keep: Duration,
 ) -> bool {
     let before = rows.len();
     rows.retain(|row| {
         if row.status.as_str() == RUNNING {
             return true;
         }
+        let life = if row.status.as_str() == FAILED {
+            failed_keep
+        } else {
+            keep
+        };
         match ages.get(&row.id) {
             // `duration_since` saturates, so a stamp from the future reads as zero age.
-            Some(at) => now.duration_since(*at) < keep,
+            Some(at) => now.duration_since(*at) < life,
             None => true,
         }
     });
@@ -196,9 +223,15 @@ pub fn apply(tasks: &mut Vec<TaskRow>, log: &mut VecDeque<LogLine>, events: &[Ev
             Event::TaskFailed { id, error } => {
                 let Some(id) = row_id(*id) else { continue };
                 if let Some(row) = find(tasks, id) {
-                    row.status = "failed".into();
+                    row.status = FAILED.into();
                     row.detail = error.as_str().into();
                     applied.finished.push(id);
+                    // The row's own `detail` is easy to miss: the panel may be shut and the
+                    // row goes eventually. The same words are kept in the log and shown as a
+                    // toast, so the failure survives both.
+                    let message = format!("{} failed: {}", row.label, error);
+                    push_log(log, "error", &message);
+                    applied.failures.push(message);
                 }
             }
             Event::Log { level, message } => push_log(log, level_name(*level), message),

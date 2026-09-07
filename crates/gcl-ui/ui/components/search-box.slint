@@ -3,11 +3,16 @@ import { Theme } from "../theme.slint";
 import { Button } from "button.slint";
 
 // A search field with a clear button. `accepted` fires on Enter, `edited` on every keystroke.
+//
+// Down is not a text key, so the field hands it back: `moved_down` lets the owner send the
+// keyboard to the list under the box without the box ever taking focus by itself.
 export component SearchBox inherits Rectangle {
     in property <string> placeholder: "Search";
     in-out property <string> text;
     callback accepted(string);
     callback edited(string);
+    // The user pressed Down in the field, which means "take me to the list".
+    callback moved_down();
 
     height: Theme.row-height;
     min-width: 200px;
@@ -23,6 +28,13 @@ export component SearchBox inherits Rectangle {
             }
             edited(value) => {
                 root.edited(value);
+            }
+            key-pressed(event) => {
+                if (event.text == Key.DownArrow) {
+                    root.moved_down();
+                    return EventResult.accept;
+                }
+                return EventResult.reject;
             }
         }
 

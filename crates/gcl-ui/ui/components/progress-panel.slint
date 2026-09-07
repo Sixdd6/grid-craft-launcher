@@ -20,7 +20,7 @@ component TaskLine inherits Rectangle {
             font-size: Theme.font-size-small;
             vertical-alignment: center;
             horizontal-stretch: 1;
-            min-width: 120px;
+            min-width: Theme.label-width;
             overflow: elide;
         }
 
@@ -28,7 +28,7 @@ component TaskLine inherits Rectangle {
             alignment: center;
             horizontal-stretch: 0;
             ProgressBar {
-                width: Theme.rail-width;
+                width: Theme.bar-width;
                 fraction: root.task.fraction;
             }
         }
@@ -43,7 +43,7 @@ component TaskLine inherits Rectangle {
             vertical-alignment: center;
             horizontal-alignment: left;
             horizontal-stretch: 0;
-            width: 55px;
+            width: Theme.status-width;
         }
 
         // Byte counts while it runs, the error once it failed.
@@ -54,7 +54,7 @@ component TaskLine inherits Rectangle {
             vertical-alignment: center;
             horizontal-alignment: right;
             horizontal-stretch: 0;
-            width: Theme.rail-width;
+            width: Theme.bar-width;
             overflow: elide;
         }
     }
@@ -174,7 +174,7 @@ export component ProgressPanel inherits Rectangle {
                     alignment: center;
                     horizontal-stretch: 0;
                     ProgressBar {
-                        width: Theme.rail-width;
+                        width: Theme.bar-width;
                         visible: root.tasks.length > 0;
                         fraction: root.head.fraction;
                     }

@@ -34,6 +34,14 @@ export global Theme {
     out property <length> dialog-width: 520px;
     // Width of one toast in the stack over the shell.
     out property <length> toast-width: 360px;
+    // Smallest a name column in a dense row may get before it elides.
+    out property <length> label-width: 120px;
+    // Width of a one-word status column, wide enough for the longest of them.
+    out property <length> status-width: 56px;
+    // Width of a determinate bar sitting inside a row.
+    out property <length> bar-width: 200px;
+    // Width of the colored edge that says what kind a toast is.
+    out property <length> accent-stripe: 3px;
 
     // Type scale.
     out property <length> font-size: 14px;

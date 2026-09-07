@@ -176,12 +176,12 @@ export component InstanceScreen inherits Rectangle {
 
             // Arrow keys move the selection, Enter flips the chosen file between enabled and
             // disabled. Removing still needs the button: it deletes a file.
-            if InstanceState.content.length > 0: FocusScope {
+            //
+            // The scope never takes focus by itself: the JVM and settings tabs are full of
+            // fields, and a dialog opens over this screen, so grabbing focus on `init` would
+            // pull the keyboard out of whatever the user was typing in.
+            if InstanceState.content.length > 0: keys := FocusScope {
                 vertical-stretch: 1;
-
-                init => {
-                    self.focus();
-                }
 
                 key-pressed(event) => {
                     if (event.text == Key.UpArrow) {

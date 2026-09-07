@@ -88,6 +88,9 @@ export component InstancesScreen inherits Rectangle {
             SearchBox {
                 placeholder: "Filter instances";
                 text <=> root.filter;
+                moved_down => {
+                    keys.focus();
+                }
                 horizontal-stretch: 0;
                 width: 280px;
             }
@@ -127,12 +130,15 @@ export component InstancesScreen inherits Rectangle {
 
         // Arrow keys move the selection, Enter opens it. Anything else is rejected so the
         // shell's number shortcuts still reach the window.
-        if !root.loading && root.rows.length > 0: keys := FocusScope {
-            vertical-stretch: 1;
-
-            init => {
-                self.focus();
-            }
+        //
+        // The scope is always mounted, even while the list is empty, so the search box above
+        // can send the keyboard here by id. It never takes focus by itself: a click on a row
+        // or Down out of the search box is what puts the keyboard in the list, so a field the
+        // user is typing in is never interrupted.
+        keys := FocusScope {
+            // Nothing inside while the list is empty, so it claims no room and the empty
+            // state below is the one that stretches.
+            vertical-stretch: root.loading || root.rows.length == 0 ? 0 : 1;
 
             key-pressed(event) => {
                 if (event.text == Key.UpArrow) {
@@ -152,14 +158,15 @@ export component InstancesScreen inherits Rectangle {
                 return EventResult.reject;
             }
 
-            ListView {
-            width: 100%;
-            height: 100%;
+            if !root.loading && root.rows.length > 0: ListView {
+                width: 100%;
+                height: 100%;
 
                 for row[i] in root.rows: ListRow {
                     height: Theme.row-height + Theme.gap;
                     selected: i == root.selected;
                     clicked => {
+                        keys.focus();
                         root.selected = i;
                         root.open(row.slug);
                     }

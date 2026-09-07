@@ -206,6 +206,9 @@ export component BrowserScreen inherits Rectangle {
                     : "Search Modrinth or CurseForge";
                 text <=> BrowserState.query;
                 horizontal-stretch: 1;
+                moved_down => {
+                    keys.focus();
+                }
                 accepted(text) => {
                     if (root.modpack_mode) {
                         BrowserState.install_pack(text);
@@ -378,12 +381,16 @@ export component BrowserScreen inherits Rectangle {
 
         // Arrow keys move the selection, Enter adds the chosen row the same way its button
         // does. Everything else is rejected so the shell's number shortcuts still work.
-        if !root.modpack_mode && !BrowserState.loading && BrowserState.rows.length > 0: FocusScope {
-            vertical-stretch: 1;
-
-            init => {
-                self.focus();
-            }
+        //
+        // The scope is always mounted, even while there are no results, so the search box
+        // above can send the keyboard here by id. It never takes focus by itself: a click on
+        // a row or Down out of the search box is what puts the keyboard in the list, so a
+        // field the user is typing in is never interrupted.
+        keys := FocusScope {
+            // Nothing inside while there are no results, so it claims no room and the empty
+            // state above is the one that stretches.
+            vertical-stretch: root.modpack_mode || BrowserState.loading
+                || BrowserState.rows.length == 0 ? 0 : 1;
 
             key-pressed(event) => {
                 if (event.text == Key.UpArrow) {
@@ -403,14 +410,18 @@ export component BrowserScreen inherits Rectangle {
                 return EventResult.reject;
             }
 
-            ListView {
-            width: 100%;
-            height: 100%;
+            if !root.modpack_mode && !BrowserState.loading
+                && BrowserState.rows.length > 0: ListView {
+                width: 100%;
+                height: 100%;
 
                 for row[i] in BrowserState.rows: ListRow {
                     height: 3 * Theme.font-size + 3 * Theme.gap + Theme.pad;
                     selected: i == root.selected;
                     clicked => {
+                        // Clicking a row is also how the keyboard gets here: the scope never
+                        // grabs focus on its own, so a field the user is typing in keeps it.
+                        keys.focus();
                         root.selected = i;
                     }
 
@@ -497,6 +508,7 @@ export component BrowserScreen inherits Rectangle {
                             enabled: !BrowserState.loading
                                 && (row.kind == "modpack" || root.has_target);
                             clicked => {
+                                keys.focus();
                                 root.selected = i;
                                 root.activate(row.project_id, row.kind);
                             }

@@ -75,12 +75,12 @@ export component AccountsScreen inherits Rectangle {
 
         // Arrow keys move the selection, Enter makes that account active. Everything else is
         // rejected so the shell's number shortcuts still reach the window.
-        if AccountsState.rows.length > 0: FocusScope {
+        //
+        // The scope never takes focus by itself. This screen has no text field of its own,
+        // but a dialog opened over it does, and grabbing focus on `init` would pull the
+        // keyboard out of that field the moment the screen was rebuilt.
+        if AccountsState.rows.length > 0: keys := FocusScope {
             vertical-stretch: 1;
-
-            init => {
-                self.focus();
-            }
 
             key-pressed(event) => {
                 if (event.text == Key.UpArrow) {

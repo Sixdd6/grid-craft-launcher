@@ -83,10 +83,18 @@ export component CreateInstanceDialog inherits Rectangle {
         }
     }
 
+    // The form starts on the name, which is the only field that has no default.
+    changed open => {
+        if (root.open) {
+            name_field.focus();
+        }
+    }
+
     Dialog {
         width: root.width;
         height: root.height;
         open: root.open;
+        focus-first-field: true;
         title: "New instance";
         close-text: "Cancel";
         confirm-text: "Create";
@@ -107,7 +115,7 @@ export component CreateInstanceDialog inherits Rectangle {
                 font-size: Theme.font-size-small;
             }
 
-            LineEdit {
+            name_field := LineEdit {
                 placeholder-text: "My instance";
                 text <=> root.name;
             }

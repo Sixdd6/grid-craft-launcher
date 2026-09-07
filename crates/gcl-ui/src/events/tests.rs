@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use gcl_core::events::{Event, LogLevel};
 
-use super::{KEEP_DONE, LOG_LIMIT, any_running, apply, prune_finished};
+use super::{FAILED_TTL, KEEP_DONE, LOG_LIMIT, any_running, apply, prune_finished};
 use crate::{LogLine, TaskRow};
 
 fn started(id: u64, total: Option<u64>) -> Event {
@@ -79,6 +79,25 @@ fn failed_marks_the_row_and_keeps_the_error() {
     );
     assert_eq!(tasks[0].status.as_str(), "failed");
     assert_eq!(tasks[0].detail.as_str(), "connection reset");
+}
+
+#[test]
+fn a_failure_is_worded_once_for_the_log_and_the_toast() {
+    let mut tasks = Vec::new();
+    let mut log = VecDeque::new();
+    apply(&mut tasks, &mut log, &[started(2, Some(10))]);
+    let applied = apply(
+        &mut tasks,
+        &mut log,
+        &[Event::TaskFailed {
+            id: 2,
+            error: "connection reset".into(),
+        }],
+    );
+    assert_eq!(applied.failures, vec!["task 2 failed: connection reset"]);
+    let last = log.back().expect("a line was appended");
+    assert_eq!(last.level.as_str(), "error");
+    assert_eq!(last.text.as_str(), "task 2 failed: connection reset");
 }
 
 #[test]
@@ -200,11 +219,33 @@ fn prune_drops_a_row_five_seconds_after_its_own_end() {
     let mut ages = HashMap::from([(1, start), (2, start + Duration::from_secs(4))]);
 
     let now = start + KEEP_DONE + Duration::from_millis(1);
-    assert!(prune_finished(&mut rows, &mut ages, now, KEEP_DONE));
+    assert!(prune_finished(
+        &mut rows, &mut ages, now, KEEP_DONE, FAILED_TTL
+    ));
     assert_eq!(rows.len(), 1, "only the older row is old enough");
     assert_eq!(rows[0].id, 2);
     assert!(!ages.contains_key(&1), "its stamp went with it");
     assert!(ages.contains_key(&2));
+}
+
+#[test]
+fn prune_gives_a_failed_row_six_times_as_long_to_be_read() {
+    let start = Instant::now();
+    let mut rows = vec![row(1, "failed")];
+    let mut ages = HashMap::from([(1, start)]);
+
+    let five = start + KEEP_DONE + Duration::from_millis(1);
+    assert!(!prune_finished(
+        &mut rows, &mut ages, five, KEEP_DONE, FAILED_TTL
+    ));
+    assert_eq!(rows.len(), 1, "a done row would be gone by now");
+
+    let thirty_one = start + FAILED_TTL + Duration::from_secs(1);
+    assert!(prune_finished(
+        &mut rows, &mut ages, thirty_one, KEEP_DONE, FAILED_TTL
+    ));
+    assert!(rows.is_empty());
+    assert!(ages.is_empty(), "its stamp went with it");
 }
 
 #[test]
@@ -213,7 +254,9 @@ fn prune_never_drops_a_running_row() {
     let mut rows = vec![row(1, "running")];
     let mut ages = HashMap::new();
     let now = start + Duration::from_secs(60);
-    assert!(!prune_finished(&mut rows, &mut ages, now, KEEP_DONE));
+    assert!(!prune_finished(
+        &mut rows, &mut ages, now, KEEP_DONE, FAILED_TTL
+    ));
     assert_eq!(rows.len(), 1);
 }
 
@@ -222,7 +265,9 @@ fn prune_keeps_a_finished_row_that_has_no_stamp_yet() {
     let mut rows = vec![row(1, "failed")];
     let mut ages = HashMap::new();
     let now = Instant::now() + Duration::from_secs(60);
-    assert!(!prune_finished(&mut rows, &mut ages, now, KEEP_DONE));
+    assert!(!prune_finished(
+        &mut rows, &mut ages, now, KEEP_DONE, FAILED_TTL
+    ));
     assert_eq!(rows.len(), 1);
 }
 
@@ -231,7 +276,7 @@ fn prune_forgets_stamps_for_rows_that_are_gone() {
     let start = Instant::now();
     let mut rows: Vec<TaskRow> = Vec::new();
     let mut ages = HashMap::from([(7, start)]);
-    prune_finished(&mut rows, &mut ages, start, KEEP_DONE);
+    prune_finished(&mut rows, &mut ages, start, KEEP_DONE, FAILED_TTL);
     assert!(ages.is_empty());
 }
 

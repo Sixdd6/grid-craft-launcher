@@ -69,22 +69,27 @@ fn run() -> Result<(), String> {
 /// Sends synthetic events through the sink, so a smoke run exercises the forwarder.
 ///
 /// Three of them, one per thing the shell has to draw: a task that finishes, a task that
-/// fails so a row shows in the danger color, and a warning so the toast stack is filled.
+/// fails so a row shows in the danger color, and a warning so the toast stack is filled. The
+/// ids come from the same allocator real work uses, so a synthetic row can never land on a
+/// real task's row.
 fn smoke(launcher: &Launcher) {
     let sink = launcher.events();
+    let done = gcl_core::events::next_task_id();
     let _ = sink.send(Event::TaskStarted {
-        id: 0,
+        id: done,
         label: "smoke test".into(),
         total_bytes: Some(1024),
     });
-    let _ = sink.send(Event::TaskFinished { id: 0 });
+    let _ = sink.send(Event::TaskFinished { id: done });
+
+    let failed = gcl_core::events::next_task_id();
     let _ = sink.send(Event::TaskStarted {
-        id: 1,
+        id: failed,
         label: "smoke failure".into(),
         total_bytes: Some(2048),
     });
     let _ = sink.send(Event::TaskFailed {
-        id: 1,
+        id: failed,
         error: "synthetic failure".into(),
     });
     let _ = sink.send(Event::Warning("synthetic warning".into()));
