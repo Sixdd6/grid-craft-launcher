@@ -27,7 +27,7 @@ tool instead.
 Requires Rust stable (see `rust-toolchain.toml`) and these tools:
 
 ```bash
-cargo install just cargo-nextest cargo-deny slint-viewer --locked
+cargo install just cargo-nextest cargo-deny slint-viewer cargo-dist --locked
 ```
 
 Also requires `python3` (used by the Claude Code hook scripts).
@@ -133,7 +133,7 @@ just e2e-modpack
 just run-ui -- --smoke
 just appimage && just appimage-smoke
 just bump-version x.y.z
-git add -A
+git add Cargo.toml Cargo.lock CHANGELOG.md
 git commit -m "release: vx.y.z"
 git tag vx.y.z
 git push origin vx.y.z

@@ -21,7 +21,7 @@ All notable changes to GRID Craft Launcher are documented here. Format follows
 - `grid-craft-launcher`, a Slint desktop app covering the same features with a dark theme.
 - Linux AppImage packaging and cargo-dist archives for Windows and macOS.
 
-### Known limitations
+### Known issues
 
 - CurseForge and Microsoft account features are implemented against the public API docs but not
   yet verified against the live services.
@@ -30,3 +30,4 @@ All notable changes to GRID Craft Launcher are documented here. Format follows
 - No clipboard support in the desktop app.
 - Modpack discovery works by project id, not by search, for the source catalogs.
 - No stop button for a running instance; close the game window or process to end a launch.
+- Forge before 1.13 is unsupported.

@@ -11,7 +11,7 @@ description: How releases are built and versioned — cargo-dist config, AppImag
   --offline` so `Cargo.lock` matches, and renames `CHANGELOG.md`'s `## Unreleased` heading to
   `## x.y.z - <date>` with a fresh `## Unreleased` above it. It runs no git command; it prints the
   commit, tag, and push commands to run next.
-- After the script: `git add -A`, `git commit -m "release: vx.y.z"`, `git tag vx.y.z`,
+- After the script: `git add Cargo.toml Cargo.lock CHANGELOG.md`, `git commit -m "release: vx.y.z"`, `git tag vx.y.z`,
   `git push origin vx.y.z`.
 
 ## cargo-dist

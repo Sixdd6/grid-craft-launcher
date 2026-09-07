@@ -13,10 +13,19 @@ APPIMAGETOOL="$TOOLS/appimagetool-x86_64.AppImage"
 APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
 UPDATE_INFO="gh-releases-zsync|sixdd6|grid-craft-launcher|latest|grid-craft-launcher-*-x86_64.AppImage.zsync"
 
-# The single source of truth for the version is [workspace.package] in Cargo.toml.
-VERSION="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+# The single source of truth for the version is [workspace.package] in Cargo.toml. This awk is
+# the same one scripts/bump-version.sh uses to edit that line, kept in sync by hand.
+VERSION="$(awk '
+    /^\[workspace\.package\]/ { in_section = 1 }
+    /^\[/ && !/^\[workspace\.package\]/ { in_section = 0 }
+    in_section && /^version = / {
+        gsub(/^version = "|"$/, "")
+        print
+        exit
+    }
+' Cargo.toml)"
 if [ -z "$VERSION" ]; then
-    echo "ERROR: could not read the version from Cargo.toml" >&2
+    echo "ERROR: could not read the version from [workspace.package] in Cargo.toml" >&2
     exit 1
 fi
 echo "Version: $VERSION"
@@ -62,6 +71,7 @@ fi
 
 OUTPUT_NAME="grid-craft-launcher-${VERSION}-x86_64.AppImage"
 mkdir -p "$DIST"
+rm -f "$DIST"/grid-craft-launcher-*-x86_64.AppImage "$DIST"/grid-craft-launcher-*-x86_64.AppImage.zsync
 echo "Building AppImage..."
 "$APPIMAGETOOL" --appimage-extract-and-run -u "$UPDATE_INFO" "$APPDIR" "$DIST/$OUTPUT_NAME"
 

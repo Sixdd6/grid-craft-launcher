@@ -30,15 +30,21 @@ if [ ! -f "$CHANGELOG" ]; then
 fi
 
 echo "Setting version to $VERSION in [workspace.package]..."
-awk -v ver="$VERSION" '
+if ! awk -v ver="$VERSION" '
     /^\[workspace\.package\]/ { in_section = 1 }
     /^\[/ && !/^\[workspace\.package\]/ { in_section = 0 }
     in_section && /^version = / {
         print "version = \"" ver "\""
+        hit = 1
         next
     }
     { print }
-' "$CARGO_TOML" >"$CARGO_TOML.tmp"
+    END { if (!hit) exit 1 }
+' "$CARGO_TOML" >"$CARGO_TOML.tmp"; then
+    rm -f "$CARGO_TOML.tmp"
+    echo "ERROR: no 'version = ' line found inside [workspace.package] in $CARGO_TOML" >&2
+    exit 1
+fi
 mv "$CARGO_TOML.tmp" "$CARGO_TOML"
 
 echo "Updating Cargo.lock..."

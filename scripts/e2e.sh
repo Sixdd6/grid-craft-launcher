@@ -30,6 +30,7 @@ case "$LOADER" in
   fabric|quilt) DEFAULT_MOD=sodium ;;
   forge) DEFAULT_MOD=jei ;;
   neoforge) DEFAULT_MOD=jade ;;
+  *) echo "ERROR: unknown GCL_E2E_LOADER '$LOADER'" >&2; exit 1 ;;
 esac
 MOD="${GCL_E2E_MOD:-$DEFAULT_MOD}"
 
@@ -51,7 +52,7 @@ ADD_OUTPUT="$($GCL content add e2e --source modrinth --project "$MOD" | tee /dev
 # The content list stores the Modrinth project id, not the slug we passed in, so match either:
 # the slug (case-insensitively, since file names capitalize mod names differently) or the id
 # `content add` printed in parentheses.
-PROJECT_ID="$(printf '%s' "$ADD_OUTPUT" | grep -oE '\([A-Za-z0-9]+\)$' | tr -d '()')"
+PROJECT_ID="$(printf '%s' "$ADD_OUTPUT" | grep -oE '\([A-Za-z0-9]+\)$' | tr -d '()')" || true
 $GCL content list e2e --json > "$ROOT/content.json"
 if ! grep -qi "$MOD" "$ROOT/content.json" && { [ -z "$PROJECT_ID" ] || ! grep -q "$PROJECT_ID" "$ROOT/content.json"; }; then
   echo "FAIL: $MOD is missing from the content list"

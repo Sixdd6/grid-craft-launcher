@@ -53,7 +53,7 @@ appimage:
 
 # Run the built AppImage's UI smoke test
 appimage-smoke:
-    dist/grid-craft-launcher-*-x86_64.AppImage --appimage-extract-and-run --smoke
+    f=$(ls -t dist/grid-craft-launcher-*-x86_64.AppImage | head -1); "$f" --appimage-extract-and-run --smoke
 
 # Show what cargo-dist would build for a release
 dist-plan:
