@@ -36,12 +36,6 @@ pub enum Error {
     /// error, which additionally carries the key that rejected the value.
     #[error("not a valid options.txt value: {0:?}")]
     BadRawValue(String),
-    /// A key was validated against the catalog but is not in it.
-    #[error("{key:?} is not a known settings key")]
-    UnknownKey {
-        /// The key that was not found.
-        key: String,
-    },
     /// A slider value fell outside its setting's `[min, max]` range.
     #[error("{key:?} must be between {min} and {max}")]
     OutOfRange {

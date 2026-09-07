@@ -1,6 +1,5 @@
 ---
 source: crates/gcl-core/src/settings/doc.rs
-assertion_line: 243
 expression: summary
 ---
 [
@@ -26,8 +25,8 @@ expression: summary
   ],
   [
     "gamma",
-    "0.5",
-    "Default"
+    "0.7",
+    "File"
   ],
   [
     "guiScale",

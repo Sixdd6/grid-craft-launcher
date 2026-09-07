@@ -2,6 +2,10 @@
 //!
 //! An override is written to `instance.toml` only. It reaches `options.txt` at the next
 //! launch, so a running game never has its settings changed underneath it.
+//!
+//! `set` and `defaults set` go through [`Launcher::set_instance_override`] and
+//! [`Launcher::set_game_default`], so the CLI rejects the same out-of-range and bad-choice
+//! values as the GUI does.
 
 use std::collections::BTreeMap;
 
@@ -96,19 +100,11 @@ pub fn run(launcher: &mut Launcher, format: Format, command: SettingsCommand) ->
             }
         }
         SettingsCommand::Set { slug, key, value } => {
-            check(&key, &value)?;
-            let mut instance = launcher.instances().get(&slug)?;
-            instance
-                .config
-                .settings_overrides
-                .insert(key.clone(), value.clone());
-            instance.save()?;
+            launcher.set_instance_override(&slug, &key, &value)?;
             report_change(format, &key, Some(&value))
         }
         SettingsCommand::Unset { slug, key } => {
-            let mut instance = launcher.instances().get(&slug)?;
-            instance.config.settings_overrides.remove(&key);
-            instance.save()?;
+            launcher.unset_instance_override(&slug, &key)?;
             report_change(format, &key, None)
         }
         SettingsCommand::Defaults { command } => defaults(launcher, format, command),
@@ -129,29 +125,14 @@ fn defaults(launcher: &mut Launcher, format: Format, command: DefaultsCommand) -
             }
         }
         DefaultsCommand::Set { key, value } => {
-            check(&key, &value)?;
-            launcher.update_config(|config| {
-                config.game_defaults.insert(key.clone(), value.clone());
-            })?;
+            launcher.set_game_default(&key, &value)?;
             report_change(format, &key, Some(&value))
         }
         DefaultsCommand::Unset { key } => {
-            launcher.update_config(|config| {
-                config.game_defaults.remove(&key);
-            })?;
+            launcher.unset_game_default(&key)?;
             report_change(format, &key, None)
         }
     }
-}
-
-/// Rejects a key or value `options.txt` cannot hold, before anything is saved.
-///
-/// A key with a `:` in it would be read back as a different key, and a line break in either
-/// would split the entry into two lines.
-fn check(key: &str, value: &str) -> Result<()> {
-    gcl_core::settings::validate_key(key)?;
-    gcl_core::settings::validate_value(value)?;
-    Ok(())
 }
 
 /// Prints one `  key: value` line per entry, or a placeholder when there are none.

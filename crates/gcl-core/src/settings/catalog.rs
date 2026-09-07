@@ -407,7 +407,9 @@ pub const CATALOG: &[Setting] = &[
         key: "chatHeightUnfocused",
         label: "Chat Height (Unfocused)",
         group: Group::Chat,
-        control: slider!(0.0, 1.0, 0.01, 2),
+        // Eight decimals: Minecraft's default is 0.44366196, and the stored value must
+        // round-trip through `format_value` unchanged.
+        control: slider!(0.0, 1.0, 0.01, 8),
         default: "0.44366196",
     },
     Setting {
@@ -585,7 +587,8 @@ pub fn find(key: &str) -> Option<&'static Setting> {
 ///
 /// A `Slider` with `decimals == 0` parses as [`Value::Int`]; any other `Slider` parses as
 /// [`Value::Float`]. Both are checked against `[min, max]`, inclusive, and a value that does
-/// not parse as a number is [`Error::BadValue`]. A `Toggle` accepts exactly `true` or `false`.
+/// not parse as a finite number — including `NaN` and the infinities, which `f64::from_str`
+/// accepts — is [`Error::BadValue`]. A `Toggle` accepts exactly `true` or `false`.
 /// A `Choice` value must match one of the setting's stored tokens exactly, or
 /// [`Error::BadChoice`]. `Text` accepts anything.
 pub fn parse_value(setting: &Setting, value: &str) -> Result<Value, Error> {
@@ -615,6 +618,12 @@ pub fn parse_value(setting: &Setting, value: &str) -> Result<Value, Error> {
                 key: setting.key.to_string(),
                 value: value.to_string(),
             })?;
+            if !parsed.is_finite() {
+                return Err(Error::BadValue {
+                    key: setting.key.to_string(),
+                    value: value.to_string(),
+                });
+            }
             if parsed < min || parsed > max {
                 return Err(Error::OutOfRange {
                     key: setting.key.to_string(),
@@ -795,5 +804,42 @@ mod tests {
         let setting = find("fullscreen").expect("catalog entry");
         let err = parse_value(setting, "yes").expect_err("bad toggle");
         assert!(matches!(err, Error::BadValue { .. }));
+    }
+
+    #[test]
+    fn parse_value_rejects_a_non_finite_slider_value() {
+        let setting = find("gamma").expect("catalog entry");
+        for value in ["NaN", "inf", "-inf"] {
+            let err = parse_value(setting, value).expect_err("not finite");
+            assert!(matches!(err, Error::BadValue { .. }), "{value}: {err:?}");
+        }
+    }
+
+    #[test]
+    fn every_catalog_default_parses_and_round_trips() {
+        for setting in CATALOG {
+            let value = match parse_value(setting, setting.default) {
+                Ok(value) => value,
+                Err(err) => panic!("{} default {:?}: {err:?}", setting.key, setting.default),
+            };
+            assert_eq!(
+                format_value(setting, &value),
+                setting.default,
+                "{} does not round-trip",
+                setting.key
+            );
+            if let Control::Slider { min, max, .. } = setting.control {
+                let number = match value {
+                    Value::Int(v) => v as f64,
+                    Value::Float(v) => v,
+                    _ => panic!("{} is a slider but parsed as {value:?}", setting.key),
+                };
+                assert!(
+                    number >= min && number <= max,
+                    "{} default {number} is outside [{min}, {max}]",
+                    setting.key
+                );
+            }
+        }
     }
 }

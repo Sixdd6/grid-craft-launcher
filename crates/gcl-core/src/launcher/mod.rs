@@ -736,8 +736,11 @@ impl Launcher {
         crate::settings::doc::merged(&self.config().game_defaults, None, None)
     }
 
-    /// The merged settings view for one instance: its overrides over the launcher's preseed
-    /// over what is already in its `options.txt` over the catalog default.
+    /// The merged settings view for one instance: its overrides over what is already in its
+    /// `options.txt` over the launcher's preseed over the catalog default.
+    ///
+    /// The file outranks the preseed because the preseed writes `options.txt` only when the
+    /// file is absent, so a line already in the file is what the game reads.
     pub fn settings_rows_for_instance(
         &self,
         slug: &str,

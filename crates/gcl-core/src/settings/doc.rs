@@ -10,18 +10,22 @@ use super::catalog::{self, Setting};
 use super::{Error, OptionsFile};
 
 /// Which layer a [`Row`]'s value came from, in the order a value would win: an override beats
-/// a preseed, which beats what is already in the instance's `options.txt`, which beats the
-/// catalog's built-in default.
+/// what is already in the instance's `options.txt`, which beats the launcher's preseed, which
+/// beats the catalog's built-in default.
+///
+/// The file outranks the preseed because the preseed only writes `options.txt` when the file
+/// is absent. Once the file holds a key, the game reads that line, not the preseed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Layer {
     /// The catalog's built-in default: no layer set this key.
     Default,
-    /// `config.toml`'s `game_defaults`: the launcher's preseed for new instances.
+    /// `config.toml`'s `game_defaults`: the launcher's preseed for a new instance, used only
+    /// while the instance has no `options.txt` line for this key.
     Preseed,
+    /// The instance's `options.txt` on disk, with no override for this key.
+    File,
     /// `instance.toml`'s `settings_overrides`: rewritten into `options.txt` on every launch.
     Override,
-    /// The instance's `options.txt` on disk, with no preseed or override for this key.
-    File,
 }
 
 /// One row of the merged settings view.
@@ -41,7 +45,7 @@ pub struct Row {
 /// Builds the merged settings view.
 ///
 /// Rows for every [`catalog::CATALOG`] key come first, in catalog order. For each, the value
-/// is the first of `overrides` (if given), `preseed`, `current` (if given), or the catalog
+/// is the first of `overrides` (if given), `current` (if given), `preseed`, or the catalog
 /// default that actually holds the key, and [`Row::source`] names which one. Then one row per
 /// key that appears in any layer but not in the catalog, sorted alphabetically, with
 /// `setting: None` and the source picked by the same precedence (there is no catalog default
@@ -99,8 +103,11 @@ pub fn merged(
     rows
 }
 
-/// Finds `key`'s value and source among `overrides`, `preseed`, and `current`, in that order
+/// Finds `key`'s value and source among `overrides`, `current`, and `preseed`, in that order
 /// of precedence. `None` means no layer holds the key.
+///
+/// `current` outranks `preseed` because [`crate::settings::apply_preseed`] writes the preseed
+/// only when `options.txt` is absent. A key already in the file is the value the game reads.
 fn resolve(
     key: &str,
     preseed: &BTreeMap<String, String>,
@@ -110,11 +117,11 @@ fn resolve(
     if let Some(value) = overrides.and_then(|o| o.get(key)) {
         return Some((value.clone(), Layer::Override));
     }
-    if let Some(value) = preseed.get(key) {
-        return Some((value.clone(), Layer::Preseed));
-    }
     if let Some(value) = current.and_then(|f| f.get(key)) {
         return Some((value.to_string(), Layer::File));
+    }
+    if let Some(value) = preseed.get(key) {
+        return Some((value.clone(), Layer::Preseed));
     }
     None
 }
@@ -149,8 +156,8 @@ mod tests {
     }
 
     #[test]
-    fn merged_layers_override_over_preseed_over_file_over_default() {
-        let preseed = map(&[("renderDistance", "16"), ("fov", "90")]);
+    fn merged_layers_override_over_file_over_preseed_over_default() {
+        let preseed = map(&[("renderDistance", "16"), ("fov", "90"), ("gamma", "0.8")]);
         let overrides = map(&[("renderDistance", "8")]);
         let current = OptionsFile::parse("fov:100\nmaxFps:30\n");
 
@@ -162,20 +169,24 @@ mod tests {
         assert_eq!(render_distance.value, "8");
         assert_eq!(render_distance.source, Layer::Override);
 
-        // preseed wins over the file
+        // the file wins over the preseed
         let fov = by_key("fov");
-        assert_eq!(fov.value, "90");
-        assert_eq!(fov.source, Layer::Preseed);
+        assert_eq!(fov.value, "100");
+        assert_eq!(fov.source, Layer::File);
 
-        // file wins over the catalog default
+        // the file wins over the catalog default
         let max_fps = by_key("maxFps");
         assert_eq!(max_fps.value, "30");
         assert_eq!(max_fps.source, Layer::File);
 
-        // nothing set: catalog default
+        // the preseed wins over the catalog default
         let gamma = by_key("gamma");
-        assert_eq!(gamma.value, "0.5");
-        assert_eq!(gamma.source, Layer::Default);
+        assert_eq!(gamma.value, "0.8");
+        assert_eq!(gamma.source, Layer::Preseed);
+
+        // nothing set: catalog default
+        let sensitivity = by_key("mouseSensitivity");
+        assert_eq!(sensitivity.source, Layer::Default);
     }
 
     #[test]
@@ -231,9 +242,14 @@ mod tests {
 
     #[test]
     fn merged_snapshot_locks_row_order_and_sources() {
-        let preseed = map(&[("renderDistance", "16"), ("customPreseed", "1")]);
+        let preseed = map(&[
+            ("renderDistance", "16"),
+            ("gamma", "0.8"),
+            ("customPreseed", "1"),
+        ]);
         let overrides = map(&[("fov", "90"), ("customOverride", "2")]);
-        let current = OptionsFile::parse("maxFps:30\ncustomFile:3\n");
+        // gamma is preseeded as well: the file value wins.
+        let current = OptionsFile::parse("maxFps:30\ngamma:0.7\ncustomFile:3\n");
 
         let rows = merged(&preseed, Some(&overrides), Some(&current));
         let summary: Vec<(String, String, String)> = rows

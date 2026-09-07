@@ -387,6 +387,42 @@ fn settings_set_is_shown_as_an_override_over_the_preseeded_options() {
     assert!(parsed["overrides"].as_object().expect("a map").is_empty());
 }
 
+#[test]
+fn settings_set_rejects_a_value_outside_the_catalog_range() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    gcl(dir.path())
+        .args(["instance", "create", "Demo", "--minecraft", MC])
+        .assert()
+        .success();
+
+    gcl(dir.path())
+        .args(["settings", "set", "demo", "renderDistance", "999"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("must be between 2 and 32"));
+
+    gcl(dir.path())
+        .args(["settings", "defaults", "set", "renderDistance", "999"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("must be between 2 and 32"));
+
+    // A valid value still goes through, and the rejected one was never saved.
+    gcl(dir.path())
+        .args(["settings", "set", "demo", "renderDistance", "16"])
+        .assert()
+        .success();
+    let out = gcl(dir.path())
+        .args(["--json", "settings", "show", "demo"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("stdout is json");
+    assert_eq!(parsed["overrides"]["renderDistance"], "16", "{parsed}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn launch_dry_run_names_the_offline_user() {
     let server = MockServer::start().await;
