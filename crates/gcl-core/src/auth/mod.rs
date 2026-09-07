@@ -1,8 +1,9 @@
-//! Accounts: offline players and (later) Microsoft accounts, and launch placeholders.
+//! Accounts: offline players and Microsoft accounts, and launch placeholders.
 //!
-//! See the `msa-auth` skill, "Storage" and "Offline". This module only covers offline accounts
-//! and the account store; the Microsoft device-code chain lands in a later plan.
+//! See the `msa-auth` skill, "Storage" and "Offline". [`msa`] holds the Microsoft device-code
+//! chain, [`store`] the accounts file, and [`offline`] offline players.
 
+pub mod msa;
 pub mod offline;
 pub mod store;
 
@@ -34,6 +35,54 @@ pub enum Error {
     /// A launch was asked for with no account named, no offline user, and none active.
     #[error("no account selected: add one, or launch with an offline user name")]
     NoAccount,
+    /// The device code was not approved before it expired.
+    #[error("the login code expired before it was approved")]
+    DeviceCodeExpired,
+    /// The user declined the sign-in request.
+    #[error("the sign-in request was declined")]
+    DeviceCodeDeclined,
+    /// The OAuth endpoint reported a failure. Carries the error code only, never the
+    /// description, which can quote a token.
+    #[error("Microsoft login failed: {0}")]
+    Oauth(String),
+    /// The Xbox Live authentication step failed.
+    #[error("Xbox Live: {0}")]
+    Xbl(String),
+    /// XSTS reported that this Microsoft account has no Xbox profile.
+    #[error("this Microsoft account has no Xbox profile: create one at xbox.com, then retry")]
+    NoXboxProfile,
+    /// XSTS reported that Xbox Live is not available in this region.
+    #[error("Xbox Live is not available in this region")]
+    XboxRegionUnavailable,
+    /// XSTS reported that the account needs adult verification.
+    #[error("this account needs adult verification before it can sign in")]
+    XboxAdultVerification,
+    /// XSTS reported a child account that is not in a family group.
+    #[error("this is a child account: an adult must add it to their family group")]
+    XboxChildAccount,
+    /// XSTS failed with a code this launcher has no message for.
+    #[error("Xbox XSTS error {code}")]
+    Xsts {
+        /// The `XErr` code XSTS reported, or 0 when the body carried none.
+        code: u64,
+    },
+    /// The account is signed in but owns no Minecraft profile.
+    #[error("this account owns no Minecraft profile")]
+    NoProfile,
+    /// The Minecraft services API rejected this launcher's app registration.
+    #[error("this launcher's Microsoft app registration is not approved for Minecraft")]
+    InvalidAppRegistration,
+    /// A request in the login chain failed.
+    #[error(transparent)]
+    Http(#[from] crate::http::Error),
+    /// A response in the login chain was not the JSON shape expected.
+    #[error("could not read the {what} response: {detail}")]
+    Parse {
+        /// Which step's response failed to parse.
+        what: &'static str,
+        /// What was wrong. Never contains a token.
+        detail: String,
+    },
 }
 
 /// How an account authenticates: a local offline player, or a Microsoft account.

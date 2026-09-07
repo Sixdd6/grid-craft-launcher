@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use futures_util::StreamExt;
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sha1::{Digest, Sha1};
@@ -72,6 +73,33 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Upper bound on a server-requested backoff, so a bad header cannot stall a download.
 const MAX_SERVER_BACKOFF: Duration = Duration::from_secs(60);
 
+/// Content type for JSON request bodies.
+const JSON_CONTENT_TYPE: &str = "application/json";
+
+/// Content type OAuth token endpoints expect.
+const FORM_CONTENT_TYPE: &str = "application/x-www-form-urlencoded";
+
+/// Bytes left alone in a form field: the URL unreserved set. Everything else is escaped.
+const FORM_FIELD: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
+
+/// Encodes `form` as `application/x-www-form-urlencoded`, percent-escaping both sides.
+fn encode_form(form: &[(&str, &str)]) -> String {
+    form.iter()
+        .map(|(name, value)| {
+            format!(
+                "{}={}",
+                utf8_percent_encode(name, FORM_FIELD),
+                utf8_percent_encode(value, FORM_FIELD)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
 fn default_backoff() -> Vec<Duration> {
     vec![
         Duration::from_millis(500),
@@ -121,20 +149,24 @@ impl HttpClient {
 
     /// Sends a GET with retries and returns the response for any status below 400.
     async fn send(&self, url: &str, headers: &[(&str, &str)]) -> Result<reqwest::Response, Error> {
-        self.send_method(reqwest::Method::GET, url, headers, None)
+        self.send_method(reqwest::Method::GET, url, headers, None, false)
             .await
     }
 
     /// Sends a request with retries and returns the response for any status below 400.
     ///
-    /// `body`, when set, is sent as a JSON request body. It is kept as bytes rather than a
-    /// `reqwest::Body` so every retry can send it again.
+    /// `body`, when set, is a content type and the request body bytes. The body is kept as
+    /// bytes rather than a `reqwest::Body` so every retry can send it again.
+    ///
+    /// With `allow_client_errors`, a 4xx that is not retryable is returned to the caller
+    /// instead of becoming [`Error::Status`]. 429 and 5xx are still retried either way.
     async fn send_method(
         &self,
         method: reqwest::Method,
         url: &str,
         headers: &[(&str, &str)],
-        body: Option<&[u8]>,
+        body: Option<(&str, &[u8])>,
+        allow_client_errors: bool,
     ) -> Result<reqwest::Response, Error> {
         let attempts = self.retries.max(1);
         let mut last = String::new();
@@ -143,9 +175,9 @@ impl HttpClient {
             for (name, value) in headers {
                 req = req.header(*name, *value);
             }
-            if let Some(bytes) = body {
+            if let Some((content_type, bytes)) = body {
                 req = req
-                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .header(reqwest::header::CONTENT_TYPE, content_type)
                     .body(bytes.to_vec());
             }
             let delay = match req.send().await {
@@ -155,6 +187,9 @@ impl HttpClient {
                         return Ok(resp);
                     }
                     if !is_retryable_status(status.as_u16()) {
+                        if allow_client_errors && status.as_u16() < 500 {
+                            return Ok(resp);
+                        }
                         return Err(Error::Status {
                             url: url.to_string(),
                             status: status.as_u16(),
@@ -244,7 +279,13 @@ impl HttpClient {
             source,
         })?;
         let resp = self
-            .send_method(reqwest::Method::POST, url, headers, Some(&payload))
+            .send_method(
+                reqwest::Method::POST,
+                url,
+                headers,
+                Some((JSON_CONTENT_TYPE, &payload)),
+                false,
+            )
             .await?;
         let body = resp.bytes().await.map_err(|source| Error::Request {
             url: url.to_string(),
@@ -254,6 +295,91 @@ impl HttpClient {
             url: url.to_string(),
             source,
         })
+    }
+
+    /// POSTs `body` as JSON with extra headers and returns the status and the raw body.
+    ///
+    /// A 4xx is not an error here: the caller reads the body for the service's own error
+    /// shape, such as the XSTS `XErr` code. 429 and 5xx are still retried.
+    pub async fn post_json_raw_with_headers<B: Serialize>(
+        &self,
+        url: &str,
+        body: &B,
+        headers: &[(&str, &str)],
+    ) -> Result<(u16, bytes::Bytes), Error> {
+        let payload = serde_json::to_vec(body).map_err(|source| Error::Json {
+            url: url.to_string(),
+            source,
+        })?;
+        let resp = self
+            .send_method(
+                reqwest::Method::POST,
+                url,
+                headers,
+                Some((JSON_CONTENT_TYPE, &payload)),
+                true,
+            )
+            .await?;
+        let status = resp.status().as_u16();
+        let body = resp.bytes().await.map_err(|source| Error::Request {
+            url: url.to_string(),
+            source,
+        })?;
+        Ok((status, body))
+    }
+
+    /// POSTs `form` as `application/x-www-form-urlencoded` and parses the answer as JSON.
+    ///
+    /// Retries follow the same policy as GET: 429 and 5xx are retried, everything else fails.
+    /// OAuth reports `authorization_pending` with HTTP 400, so a caller that needs the body of
+    /// a 4xx uses [`HttpClient::post_form_raw`] instead.
+    pub async fn post_form<T: DeserializeOwned>(
+        &self,
+        url: &str,
+        form: &[(&str, &str)],
+    ) -> Result<T, Error> {
+        let (_status, body) = self.send_form(url, form, false).await?;
+        serde_json::from_slice(&body).map_err(|source| Error::Json {
+            url: url.to_string(),
+            source,
+        })
+    }
+
+    /// POSTs `form` as `application/x-www-form-urlencoded` and returns the status and body.
+    ///
+    /// A 4xx is not an error here: the caller reads the body to tell `authorization_pending`
+    /// from a real failure. 429 and 5xx are still retried.
+    pub async fn post_form_raw(
+        &self,
+        url: &str,
+        form: &[(&str, &str)],
+    ) -> Result<(u16, bytes::Bytes), Error> {
+        self.send_form(url, form, true).await
+    }
+
+    /// Shared body of [`HttpClient::post_form`] and [`HttpClient::post_form_raw`].
+    async fn send_form(
+        &self,
+        url: &str,
+        form: &[(&str, &str)],
+        allow_client_errors: bool,
+    ) -> Result<(u16, bytes::Bytes), Error> {
+        let payload = encode_form(form);
+        let resp = self
+            .send_method(
+                reqwest::Method::POST,
+                url,
+                &[],
+                Some((FORM_CONTENT_TYPE, payload.as_bytes())),
+                allow_client_errors,
+            )
+            .await?;
+        let status = resp.status().as_u16();
+        let body = resp.bytes().await.map_err(|source| Error::Request {
+            url: url.to_string(),
+            source,
+        })?;
+        Ok((status, body))
     }
 
     /// Fetches a URL and returns the whole body in memory. Not for large files.
@@ -396,7 +522,7 @@ mod tests {
     use crate::USER_AGENT;
     use sha1::Digest;
     use std::time::Duration;
-    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::matchers::{body_json, body_string, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn test_client() -> HttpClient {
@@ -606,6 +732,96 @@ mod tests {
             .await
             .expect("second attempt succeeds");
         assert_eq!(got.id, "a");
+    }
+
+    #[tokio::test]
+    async fn post_form_encodes_the_body_and_parses_the_answer() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(header("content-type", "application/x-www-form-urlencoded"))
+            .and(body_string(
+                "client_id=abc&scope=XboxLive.signin%20offline_access",
+            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(r#"{"id":"1.20.1","release":true}"#),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let got: Version = test_client()
+            .post_form(
+                &format!("{}/token", server.uri()),
+                &[
+                    ("client_id", "abc"),
+                    ("scope", "XboxLive.signin offline_access"),
+                ],
+            )
+            .await
+            .expect("request succeeds");
+        assert_eq!(got.id, "1.20.1");
+    }
+
+    #[tokio::test]
+    async fn post_form_fails_on_400() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(400).set_body_string(r#"{"error":"nope"}"#))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let err = test_client()
+            .post_form::<Version>(&format!("{}/token", server.uri()), &[("a", "b")])
+            .await
+            .expect_err("400 is fatal for post_form");
+        assert!(
+            matches!(err, Error::Status { status: 400, .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn post_form_raw_returns_the_body_of_a_400() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(400).set_body_string(r#"{"error":"authorization_pending"}"#),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let (status, body) = test_client()
+            .post_form_raw(&format!("{}/token", server.uri()), &[("a", "b")])
+            .await
+            .expect("400 is not an error");
+        assert_eq!(status, 400);
+        assert_eq!(&body[..], br#"{"error":"authorization_pending"}"#);
+    }
+
+    #[tokio::test]
+    async fn post_form_raw_still_retries_5xx() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("done"))
+            .with_priority(2)
+            .mount(&server)
+            .await;
+
+        let (status, body) = test_client()
+            .post_form_raw(&format!("{}/token", server.uri()), &[("a", "b")])
+            .await
+            .expect("second attempt succeeds");
+        assert_eq!(status, 200);
+        assert_eq!(&body[..], b"done");
     }
 
     #[tokio::test]
