@@ -417,7 +417,9 @@ fn settings_set_takes_a_bare_choice_token_and_stores_the_quoted_form() {
         .args(["settings", "set", "demo", "renderClouds", "cloudy"])
         .assert()
         .failure()
-        .stderr(predicates::str::contains("true, fast, false"));
+        .stderr(predicates::str::contains(
+            "true (On), fast (Fast), false (Off)",
+        ));
 }
 
 #[test]
@@ -428,13 +430,14 @@ fn settings_set_names_the_range_a_user_reads_for_a_scaled_slider() {
         .assert()
         .success();
 
-    // fov is stored as -1..1, so 90 is out of range, and the message names the degrees.
+    // fov is stored as -1..1, so 90 is out of range. The message names the degrees a user
+    // reads and the stored range the file holds.
     gcl(dir.path())
         .args(["settings", "set", "demo", "fov", "90"])
         .assert()
         .failure()
         .stderr(predicates::str::contains(
-            "\"fov\" must be between 30\u{b0} and 110\u{b0}",
+            "\"fov\" must be between 30\u{b0} and 110\u{b0} (stored as -1 to 1)",
         ));
 
     gcl(dir.path())

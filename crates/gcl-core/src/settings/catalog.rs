@@ -792,7 +792,7 @@ pub fn find(key: &str) -> Option<&'static Setting> {
 /// accepts — is [`Error::BadValue`]. A `Toggle` accepts exactly `true` or `false`.
 /// A `Choice` value matches one of the setting's stored tokens, either as stored (`"fast"`) or
 /// bare (`fast`), and is returned in the stored form; anything else is [`Error::BadChoice`],
-/// whose message lists the bare tokens. `Text` accepts anything.
+/// whose message lists each bare token with the label it stands for. `Text` accepts anything.
 pub fn parse_value(setting: &Setting, value: &str) -> Result<Value, Error> {
     match setting.control {
         Control::Slider {
@@ -859,31 +859,43 @@ fn bare(token: &str) -> &str {
     token.trim_matches('"')
 }
 
-/// Every token a choice accepts, bare and comma separated, for an error message.
+/// Every token a choice accepts, each with the label it stands for, for an error message.
+///
+/// The token is bare, the way a person types it, and the label follows in brackets, so
+/// `graphicsMode` reads `0 (Fast), 1 (Fancy), 2 (Fabulous)` rather than three bare numbers.
 fn allowed_tokens(values: &[(&str, &str)]) -> String {
     values
         .iter()
-        .map(|(stored, _)| bare(stored))
+        .map(|(stored, label)| format!("{} ({label})", bare(stored)))
         .collect::<Vec<_>>()
         .join(", ")
 }
 
 /// The [`Error::OutOfRange`] for a slider, with the bounds named the way a user reads them.
 ///
-/// `fov` is stored as `-1.0..1.0` and shown as `30°..110°`, so its message names degrees. A
-/// setting with no [`Display`] names its stored bounds, which are the same numbers.
+/// `fov` is stored as `-1.0..1.0` and shown as `30°..110°`, so its message names both: the
+/// degrees a user reads and, in brackets, the numbers `options.txt` holds. A setting with no
+/// [`Display`] names its stored bounds once, because the two forms are the same numbers.
 fn out_of_range(setting: &Setting, min: f64, max: f64) -> Error {
     let mut low = setting.to_display(min);
     let mut high = setting.to_display(max);
     if low > high {
         std::mem::swap(&mut low, &mut high);
     }
+    let scaled = matches!(
+        setting.control,
+        Control::Slider {
+            display: Some(_),
+            ..
+        }
+    );
     Error::OutOfRange {
         key: setting.key.to_string(),
         min,
         max,
         min_shown: shown_bound(setting, low),
         max_shown: shown_bound(setting, high),
+        scaled,
     }
 }
 
@@ -1034,16 +1046,19 @@ mod tests {
         let setting = find("renderClouds").expect("catalog entry");
         let err = parse_value(setting, "cloudy").expect_err("bad choice");
         let message = err.to_string();
-        assert!(message.contains("true, fast, false"), "{message}");
+        assert!(
+            message.contains("true (On), fast (Fast), false (Off)"),
+            "a quoted token is shown bare, with the label it stands for: {message}"
+        );
     }
 
     #[test]
-    fn an_out_of_range_slider_names_the_range_a_user_reads() {
+    fn an_out_of_range_slider_names_the_range_a_user_reads_and_the_stored_one() {
         let fov = find("fov").expect("catalog entry");
         let err = parse_value(fov, "90").expect_err("out of range");
         assert_eq!(
             err.to_string(),
-            "\"fov\" must be between 30\u{b0} and 110\u{b0}"
+            "\"fov\" must be between 30\u{b0} and 110\u{b0} (stored as -1 to 1)"
         );
         let distance = find("renderDistance").expect("catalog entry");
         let err = parse_value(distance, "999").expect_err("out of range");
@@ -1115,6 +1130,17 @@ mod tests {
         let setting = find("renderDistance").expect("catalog entry");
         let err = parse_value(setting, "nope").expect_err("not a number");
         assert!(matches!(err, Error::BadValue { .. }));
+    }
+
+    #[test]
+    fn a_bad_choice_message_pairs_each_token_with_its_label() {
+        let setting = find("graphicsMode").expect("catalog entry");
+        let err = parse_value(setting, "pretty").expect_err("bad choice");
+        assert!(
+            err.to_string()
+                .ends_with("0 (Fast), 1 (Fancy), 2 (Fabulous)"),
+            "{err}"
+        );
     }
 
     #[test]

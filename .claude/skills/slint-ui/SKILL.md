@@ -72,8 +72,10 @@ back would cycle.
 Every `*State` property starts empty: strings `""`, numbers `0`, bools `false`, arrays `[]`. What
 the app shows must be what Rust put there, and a default carrying sample data is on screen until
 the first read answers — that is how a never-launched instance came to show two lines of someone
-else's game log. The exception is a label that is a real default rather than data: `prompt_title`,
-`prompt_label`, `prompt_accept`, `layer_name`, `kind_labels`, `loader_options`, `page_size`.
+else's game log. The exception is a value that is a real default rather than data: the labels
+`prompt_title`, `prompt_label`, `prompt_accept`, `layer_name`, `kind_labels`, `loader_options`,
+`page_size`, plus `autoscroll: true`, which is how the Logs tab starts, and
+`BrowserState.target_index: -1`, which is "no target picked" and is not the same as row `0`.
 
 The other half of that rule is `open`: every `open`/`load` in `src/screens/*.rs` sets every
 property it owns, the empty case included, so a screen never shows the instance before it. After
@@ -336,8 +338,8 @@ saw in your report.
 - Do not put logic in a `.slint` screen file. If it is not layout or a direct property/callback
   binding, it belongs in `src/screens/*.rs`.
 - Do not add a color, spacing, or font literal outside `Theme`.
-- Do not give a `*State` property a non-empty default. Sample data goes in that screen's
-  `Preview<Screen>` component.
+- Do not give a `*State` property a non-empty default, outside the exception list above. Sample
+  data goes in that screen's `Preview<Screen>` component.
 
 ## Docs
 

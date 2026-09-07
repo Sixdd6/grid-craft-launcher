@@ -524,6 +524,8 @@ fn clear_view(window: &AppWindow) {
     state.set_update_count(0);
     state.set_prompt_open(false);
     state.set_prompt_value(SharedString::new());
+    // The mode says what an open prompt is for. A closed prompt is for nothing.
+    state.set_prompt_mode(SharedString::new());
 }
 
 /// Reads the instance and fills every property the screen shows.

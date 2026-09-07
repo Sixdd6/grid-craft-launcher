@@ -47,33 +47,44 @@ pub fn crash_hint(log: &Path) -> String {
 ///   holding it wins. A boot-time failure — the `401` on `/player/attributes` an offline account
 ///   always gets — cannot mask a crash that came after it.
 /// * Level. For [`LEVEL_CHECKED`] markers an INFO line is skipped, read off the plain format
-///   `[HH:MM:SS] [thread/LEVEL]: …` that [`crate::launch::log4j`] writes.
+///   `[HH:MM:SS] [thread/LEVEL]: …` that [`crate::launch::log4j`] writes. A line with no such
+///   prefix continues the last prefixed line above it — a stack trace under its event — so it
+///   is read at that line's level and an INFO event's trace is skipped whole.
 ///
 /// A run whose only marker is that boot-time `401` still gets it as the hint: it is the one
 /// failure the log names, and the level rule leaves it alone because it is logged at ERROR.
 pub fn hint_from_log(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let tail = &lines[lines.len().saturating_sub(TAIL_LINES)..];
+    let leveled = with_levels(text);
+    let tail = &leveled[leveled.len().saturating_sub(TAIL_LINES)..];
     for marker in MARKERS {
         let checked = LEVEL_CHECKED.contains(&marker);
         let found = tail
             .iter()
             .rev()
-            .map(|line| line.trim())
-            .find(|line| line.contains(marker) && !(checked && is_info(line)));
-        if let Some(line) = found {
+            .find(|(line, level)| line.contains(marker) && !(checked && *level == Some("INFO")));
+        if let Some((line, _)) = found {
             return trim_to(line, MAX_CHARS);
         }
     }
     GENERIC_HINT.to_string()
 }
 
-/// Whether a converted line reports at INFO.
+/// Every line of `text`, trimmed, paired with the level it reports at.
 ///
-/// The plain format is `[HH:MM:SS] [thread/LEVEL]: message`, so the level is the text after the
-/// last `/` of the second bracket group. A line in any other shape has no level and is kept.
-fn is_info(line: &str) -> bool {
-    plain_level(line) == Some("INFO")
+/// The scan runs top-down and remembers the last level it saw, because a stack trace is written
+/// as bare lines under the event that raised it and carries no prefix of its own. A line before
+/// any prefixed line has no level.
+fn with_levels(text: &str) -> Vec<(&str, Option<&str>)> {
+    let mut level = None;
+    text.lines()
+        .map(|line| {
+            let line = line.trim();
+            if let Some(found) = plain_level(line) {
+                level = Some(found);
+            }
+            (line, level)
+        })
+        .collect()
 }
 
 /// The level named by a converted line's `[thread/LEVEL]` group, if it has one.
@@ -97,7 +108,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_most_recent_marker_line_in_the_tail_is_quoted() {
+    fn a_higher_priority_marker_wins_over_a_later_lower_priority_one() {
         let log = "[main] INFO starting\n\
                    [main] ERROR Caused by: java.lang.NoSuchMethodError: sodium\n\
                    [main] ERROR java.lang.Exception: later\n";
@@ -225,6 +236,27 @@ mod tests {
                    [16:58:56] [main/INFO]: caught an Exception and carried on\n\
                    [16:58:57] [main/INFO]: done\n";
         assert_eq!(hint_from_log(log), GENERIC_HINT);
+    }
+
+    #[test]
+    fn a_stack_trace_under_an_info_line_is_skipped_with_it() {
+        // Mixin logs a caught failure at INFO and prints the trace as bare lines under it.
+        // The trace has no level of its own, so it takes the INFO line's and is skipped too.
+        let log = "[16:58:55] [main/INFO]: Mixin caught a failure and carried on\n\
+                   java.lang.RuntimeException: mixin apply failed\n\
+                   \tat Main.main(Main.java:1)\n";
+        assert_eq!(hint_from_log(log), GENERIC_HINT);
+    }
+
+    #[test]
+    fn a_stack_trace_under_an_error_line_keeps_that_level() {
+        let log = "[16:58:55] [main/INFO]: Mixin caught a failure and carried on\n\
+                   [16:58:56] [main/ERROR]: launch failed\n\
+                   java.lang.RuntimeException: mixin apply failed\n";
+        assert_eq!(
+            hint_from_log(log),
+            "java.lang.RuntimeException: mixin apply failed"
+        );
     }
 
     #[test]

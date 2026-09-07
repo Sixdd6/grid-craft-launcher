@@ -38,9 +38,12 @@ pub enum Error {
     BadRawValue(String),
     /// A slider value fell outside its setting's `[min, max]` range.
     ///
-    /// The message names the range a user reads, with its unit: `fov` is stored as `-1.0..1.0`
-    /// but shown as `30°` to `110°`, and the bounds are named the shown way.
-    #[error("{key:?} must be between {min_shown} and {max_shown}")]
+    /// The message names the range a user reads, with its unit, and — when the two differ —
+    /// the range as `options.txt` stores it: `fov` is stored as `-1.0..1.0` but shown as `30°`
+    /// to `110°`, so its message reads
+    /// `"fov" must be between 30° and 110° (stored as -1 to 1)`. A setting whose shown and
+    /// stored numbers are the same names one range only.
+    #[error("{key:?} must be between {min_shown} and {max_shown}{}", stored_note(*scaled, *min, *max))]
     OutOfRange {
         /// The key whose value was out of range.
         key: String,
@@ -52,6 +55,9 @@ pub enum Error {
         min_shown: String,
         /// The upper bound as a user reads it, with its unit.
         max_shown: String,
+        /// Whether the shown form differs from the stored one. Only then does the message
+        /// name both ranges.
+        scaled: bool,
     },
     /// A choice value did not match any of the setting's stored tokens.
     #[error("{value:?} is not a valid choice for {key:?}: expected one of {allowed}")]
@@ -60,7 +66,7 @@ pub enum Error {
         key: String,
         /// The value that did not match any stored token.
         value: String,
-        /// Every token the setting accepts, bare and comma separated.
+        /// Every token the setting accepts, bare, each with its label, comma separated.
         allowed: String,
     },
     /// A value could not be parsed as its setting's control kind (not a number, not
@@ -72,6 +78,16 @@ pub enum Error {
         /// The value that could not be parsed.
         value: String,
     },
+}
+
+/// The bracketed stored range an [`Error::OutOfRange`] message ends with, empty for a setting
+/// whose shown and stored numbers are the same.
+fn stored_note(scaled: bool, min: f64, max: f64) -> String {
+    if scaled {
+        format!(" (stored as {min} to {max})")
+    } else {
+        String::new()
+    }
 }
 
 /// Checks that `key` can be written as an `options.txt` key and read back unchanged.

@@ -288,6 +288,10 @@ mod tests {
             "anything"
         );
         let err = normalize("renderClouds", "cloudy").expect_err("bad choice");
-        assert!(err.to_string().contains("true, fast, false"), "{err}");
+        assert!(
+            err.to_string()
+                .contains("true (On), fast (Fast), false (Off)"),
+            "{err}"
+        );
     }
 }

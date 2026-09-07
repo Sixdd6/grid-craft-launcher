@@ -196,10 +196,13 @@ impl Pending {
 
     /// The plain lines buffered so far, leaving the event empty.
     ///
-    /// The first message line carries the `[HH:MM:SS] [thread/LEVEL]: ` prefix, once per event.
-    /// Every later message line and every throwable line is its own record at the same level,
-    /// verbatim, so a stack trace keeps its leading tabs. A throwable's CDATA usually ends on a
-    /// line of its own, and that trailing empty line is dropped.
+    /// The first line carries the `[HH:MM:SS] [thread/LEVEL]: ` prefix, once per event. Every
+    /// later line is its own record at the same level, verbatim, so a stack trace keeps its
+    /// leading tabs. The prefix goes on the first message line, or, when the event has no
+    /// message text at all — log4j writes `<log4j:Message/>` for a bare throwable — on the
+    /// first throwable line, so the event is still stamped and `crash_hint` can read its
+    /// level. A throwable's CDATA usually ends on a line of its own, and that trailing empty
+    /// line is dropped.
     fn emit(&mut self) -> Vec<LogRecord> {
         let stamp = match &self.time {
             Some(time) => format!("[{time}] "),
@@ -211,23 +214,27 @@ impl Pending {
             format!("{}/{}", self.thread, self.level_text)
         };
         let level = self.level;
-        let message = std::mem::take(&mut self.message);
+        let mut message = std::mem::take(&mut self.message);
         let mut throwable = std::mem::take(&mut self.throwable);
         if throwable.last().is_some_and(|line| line.is_empty()) {
             throwable.pop();
         }
+        // An empty message is no message: the prefix then belongs on the first throwable line.
+        if message.iter().all(|line| line.is_empty()) {
+            message.clear();
+        }
         let mut out = Vec::with_capacity(message.len() + throwable.len());
-        let mut message = message.into_iter();
+        let mut lines = message.into_iter().chain(throwable);
         if !self.emitted {
             self.emitted = true;
-            if let Some(first) = message.next() {
+            if let Some(first) = lines.next() {
                 out.push(LogRecord {
                     level,
                     text: format!("{stamp}[{source}]: {first}"),
                 });
             }
         }
-        for line in message.chain(throwable) {
+        for line in lines {
             out.push(LogRecord { level, text: line });
         }
         out
@@ -375,8 +382,15 @@ impl EventParser {
                 continue;
             };
             let Some(body) = after.strip_prefix(CDATA_OPEN) else {
-                // An element with no CDATA at all, such as an empty message.
-                return Some(after);
+                // An element written without CDATA: an empty `<log4j:Message></log4j:Message>`,
+                // or plain text between the tags. Its text is markup, not game output, so the
+                // element is skipped up to its own close tag rather than passed through. A
+                // close tag that is not on this line takes the rest of the line with it.
+                let close = match section {
+                    Section::Throwable => THROWABLE_CLOSE,
+                    _ => MESSAGE_CLOSE,
+                };
+                return after.find(close).map(|at| &after[at + close.len()..]);
             };
             if let Some(pending) = self.pending.as_mut() {
                 pending.section = section;
@@ -577,6 +591,41 @@ mod tests {
                </log4j:Event>\n",
         );
         assert!(records.is_empty(), "{records:?}");
+    }
+
+    #[test]
+    fn an_empty_message_puts_the_prefix_on_the_first_throwable_line() {
+        let records = convert(
+            "  <log4j:Event logger=\"x\" timestamp=\"1788800341884\" level=\"ERROR\" thread=\"main\">\n\
+                 <log4j:Message><![CDATA[]]></log4j:Message>\n\
+                 <log4j:Throwable><![CDATA[java.lang.RuntimeException: boom\n\
+             \tat Main.main(Main.java:1)\n\
+             ]]></log4j:Throwable>\n\
+               </log4j:Event>\n",
+        );
+        assert_eq!(
+            texts(&records),
+            vec![
+                "[16:59:01] [main/ERROR]: java.lang.RuntimeException: boom",
+                "\tat Main.main(Main.java:1)",
+            ]
+        );
+        assert!(records.iter().all(|r| r.level == LogLevel::Error));
+    }
+
+    #[test]
+    fn a_message_element_without_cdata_is_dropped_up_to_its_close_tag() {
+        let records = convert(
+            "  <log4j:Event logger=\"x\" timestamp=\"1788800341884\" level=\"ERROR\" thread=\"main\">\n\
+                 <log4j:Message>bare text</log4j:Message>\n\
+                 <log4j:Throwable><![CDATA[java.lang.RuntimeException: boom]]></log4j:Throwable>\n\
+               </log4j:Event>\n",
+        );
+        assert_eq!(
+            texts(&records),
+            vec!["[16:59:01] [main/ERROR]: java.lang.RuntimeException: boom"],
+            "the tag's own text is markup, not a log line",
+        );
     }
 
     #[test]

@@ -580,17 +580,23 @@ impl TestApp {
         // `0..=SCROLL_STEPS` so the state after the last scroll is checked too: the range
         // runs one more time than it scrolls, and the last pass only reads.
         for step in 0..=SCROLL_STEPS {
-            let direction = match self.all(id).first() {
-                Some(element) if self.fully_in_view(element) => return,
-                // Toward the element: back up when it is above the viewport, on down when
-                // it is below. A fixed direction walks away from a row that is already past
-                // the top edge and never reaches it.
-                Some(element) => self.scroll_direction(element),
-                None => -1.0,
-            };
+            let found = self.all(id);
+            let element = found.first();
+            if let Some(element) = element
+                && self.fully_in_view(element)
+            {
+                return;
+            }
             if step == SCROLL_STEPS {
                 break;
             }
+            // Toward the element: back up when it is above the viewport, on down when it is
+            // below. A fixed direction walks away from a row that is already past the top
+            // edge and never reaches it.
+            let direction = match element {
+                Some(element) => self.scroll_direction(element),
+                None => -1.0,
+            };
             self.scroll(direction * SCROLL_STEP);
         }
         panic!(
