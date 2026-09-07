@@ -4,9 +4,9 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, channel};
 
 use gcl_core::Launcher;
-use slint::{ComponentHandle, Weak};
+use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
 
-use crate::{App, AppWindow};
+use crate::{App, AppWindow, LogLine};
 
 /// Holds the launcher and a weak window handle, so any callback can start background work.
 ///
@@ -74,6 +74,17 @@ pub fn show_error(window: &AppWindow, label: &str, err: &gcl_core::Error) {
     app.set_error_title(label.into());
     app.set_error_text(error_chain(err).into());
     app.set_error_open(true);
+}
+
+/// Appends a warning to the app log, which the window shows as a toast.
+pub fn warn(window: &AppWindow, text: &str) {
+    let app = window.global::<App>();
+    let mut log: Vec<LogLine> = app.get_app_log().iter().collect();
+    log.push(LogLine {
+        level: "warning".into(),
+        text: text.into(),
+    });
+    app.set_app_log(ModelRc::new(VecModel::from(log)));
 }
 
 /// Joins an error and every source under it with `: `, the way the CLI prints `{:#}`.

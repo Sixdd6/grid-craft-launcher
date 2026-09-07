@@ -9,6 +9,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::bridge::Bridge;
 use crate::events::start_forwarder;
+use crate::state::RunState;
 use crate::{App, AppWindow, Screen};
 
 /// Creates the window, wires the shell callbacks, and starts the event forwarder.
@@ -32,21 +33,15 @@ pub fn build(
         }
     });
 
-    // Opening an instance reads its summary off the UI thread. The detail screen that uses
-    // the summary lands in task 4; for now the shell only switches to it.
-    let open_bridge = bridge.clone();
+    // Opening an instance only moves the shell: the detail screen loads itself when
+    // `App.current_slug` changes, which `app.slint` turns into `InstanceState.load`.
+    let weak = window.as_weak();
     app.on_open_instance(move |slug| {
-        let slug = slug.to_string();
-        open_bridge.run(
-            "Open instance",
-            move |launcher| launcher.instance_summary(&slug),
-            |window, summary| {
-                let app = window.global::<App>();
-                app.set_current_slug(summary.instance.slug.as_str().into());
-                app.set_screen(Screen::Instance);
-                app.set_status_text(summary.instance.config.name.as_str().into());
-            },
-        );
+        if let Some(window) = weak.upgrade() {
+            let app = window.global::<App>();
+            app.set_current_slug(slug.clone());
+            app.set_screen(Screen::Instance);
+        }
     });
 
     let weak = window.as_weak();
@@ -59,7 +54,9 @@ pub fn build(
         }
     });
 
-    crate::screens::instances::wire(&window, &bridge);
+    let run = RunState::new();
+    crate::screens::instances::wire(&window, &bridge, &run);
+    crate::screens::instance::wire(&window, &bridge, &run);
 
     start_forwarder(rx, window.as_weak());
     Ok(window)

@@ -27,7 +27,7 @@ use crate::content::{AddOutcome, AddRequest, ContentCtx, ManualDownload, UpdateC
 use crate::download::{DownloadCtx, cleanup_partials};
 use crate::events::{Event, EventSink};
 use crate::http::HttpClient;
-use crate::instances::model::{ContentEntry, ContentKind, Loader, PackSource};
+use crate::instances::model::{ContentEntry, ContentKind, InstanceJvm, Loader, PackSource};
 use crate::instances::{Instance, Instances, now_rfc3339};
 use crate::java::{
     JavaInstall, JavaSource, RUNTIME_MANIFEST, component_for_major, detect_all, install_runtime,
@@ -96,6 +96,12 @@ pub const PENDING_MANUAL_FILE: &str = "pending-manual.json";
 
 /// Why [`Launcher::source`] refuses CurseForge when no API key is configured.
 const NO_CURSEFORGE_KEY: &str = "no CURSEFORGE_API_KEY";
+
+/// Name of the settings file inside a game directory, as [`crate::settings`] writes it.
+const OPTIONS_FILE: &str = "options.txt";
+
+/// Name of the directory holding an instance's worlds, inside its game directory.
+const SAVES_DIR: &str = "saves";
 
 /// Every metadata host the launcher talks to.
 ///
@@ -620,6 +626,98 @@ impl Launcher {
             &instance.game_dir(),
             &instance.config.settings_overrides,
         )?)
+    }
+
+    /// Sets one `options.txt` override on an instance and saves `instance.toml`.
+    ///
+    /// The key and the value are checked first, by [`crate::settings::validate_key`] and
+    /// [`crate::settings::validate_value`], so a pair that could not be written back as one
+    /// `key:value` line is rejected before anything is saved. The override reaches
+    /// `options.txt` on the next launch, through [`Launcher::apply_settings_overrides`].
+    pub fn set_instance_override(
+        &self,
+        slug: &str,
+        key: &str,
+        value: &str,
+    ) -> Result<(), crate::Error> {
+        crate::settings::validate_key(key)?;
+        crate::settings::validate_value(value)?;
+        let mut instance = self.instances().get(slug)?;
+        instance
+            .config
+            .settings_overrides
+            .insert(key.to_string(), value.to_string());
+        Ok(instance.save()?)
+    }
+
+    /// Drops one `options.txt` override from an instance and saves `instance.toml`.
+    ///
+    /// Returns whether the key was set. Dropping an override does not restore the line
+    /// `options.txt` held before: it only stops the launcher rewriting that key.
+    pub fn unset_instance_override(&self, slug: &str, key: &str) -> Result<bool, crate::Error> {
+        let mut instance = self.instances().get(slug)?;
+        let removed = instance.config.settings_overrides.remove(key).is_some();
+        if removed {
+            instance.save()?;
+        }
+        Ok(removed)
+    }
+
+    /// Replaces an instance's JVM overrides and saves `instance.toml`.
+    ///
+    /// A minimum heap larger than the maximum is rejected, because the JVM would refuse to
+    /// start. Either bound may be `None`, which falls back to `config.toml` at launch time.
+    pub fn set_instance_jvm(&self, slug: &str, jvm: InstanceJvm) -> Result<(), crate::Error> {
+        if let (Some(min), Some(max)) = (jvm.min_mib, jvm.max_mib)
+            && min > max
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("minimum heap {min} MiB is above the maximum {max} MiB"),
+            )
+            .into());
+        }
+        let mut instance = self.instances().get(slug)?;
+        instance.config.jvm = jvm;
+        Ok(instance.save()?)
+    }
+
+    /// Every `key:value` pair in this instance's `options.txt`, in file order.
+    ///
+    /// This is what the game last wrote, not what the overrides ask for. An instance whose
+    /// game has never run has no `options.txt`, which reads as no pairs.
+    pub fn instance_options(&self, slug: &str) -> Result<Vec<(String, String)>, crate::Error> {
+        let instance = self.instances().get(slug)?;
+        let file = crate::settings::read(&instance.game_dir().join(OPTIONS_FILE))?;
+        Ok(file
+            .pairs()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect())
+    }
+
+    /// The world folders under this instance's `saves/`, in name order.
+    ///
+    /// An instance with no `saves/` directory reads as no worlds. Entries that are not
+    /// directories, and names that are not valid UTF-8, are skipped.
+    pub fn list_worlds(&self, slug: &str) -> Result<Vec<String>, crate::Error> {
+        let instance = self.instances().get(slug)?;
+        let saves = instance.game_dir().join(SAVES_DIR);
+        let entries = match std::fs::read_dir(&saves) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => return Err(err.into()),
+        };
+        let mut names = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_type()?.is_dir()
+                && let Some(name) = entry.file_name().to_str()
+            {
+                names.push(name.to_string());
+            }
+        }
+        names.sort();
+        Ok(names)
     }
 
     /// Lists the loader builds available for one Minecraft version, newest first. Blocks.

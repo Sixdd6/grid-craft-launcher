@@ -1,0 +1,64 @@
+import { LineEdit } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Dialog } from "dialog.slint";
+
+// A one-field modal built on [`Dialog`]: a title, a label, a text field, OK and Cancel.
+//
+// It does not close itself: the owner sets `open` back to false from `accept` or `cancel`, so
+// an accept that starts background work can keep the panel up until that work is queued.
+export component PromptDialog inherits Rectangle {
+    // Whether the modal is visible.
+    in-out property <bool> open: true;
+    // Headline of the panel.
+    in property <string> title: "Play offline";
+    // Label above the field.
+    in property <string> label: "Player name";
+    // Placeholder shown while the field is empty.
+    in property <string> placeholder: "Steve";
+    // What the user typed.
+    in-out property <string> value;
+    // Label of the accepting button.
+    in property <string> accept_label: "OK";
+
+    // The user accepted. Carries the text typed.
+    callback accept(string);
+    // The user cancelled, or clicked outside the panel.
+    callback cancel();
+
+    Dialog {
+        width: root.width;
+        height: root.height;
+        open: root.open;
+        title: root.title;
+        close-text: "Cancel";
+        confirm-text: root.accept_label;
+        // An empty answer is what the caller was trying to avoid, so it cannot be sent.
+        confirm-enabled: root.value != "";
+        close => {
+            root.cancel();
+        }
+        confirm => {
+            root.accept(root.value);
+        }
+
+        VerticalLayout {
+            spacing: Theme.gap;
+
+            Text {
+                text: root.label;
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+            }
+
+            LineEdit {
+                placeholder-text: root.placeholder;
+                text <=> root.value;
+                accepted(typed) => {
+                    if (typed != "") {
+                        root.accept(typed);
+                    }
+                }
+            }
+        }
+    }
+}

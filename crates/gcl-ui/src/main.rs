@@ -9,6 +9,7 @@ mod events;
 #[allow(dead_code)]
 mod models;
 mod screens;
+mod state;
 
 use std::process::ExitCode;
 use std::sync::Arc;

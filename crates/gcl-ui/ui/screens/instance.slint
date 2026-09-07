@@ -1,15 +1,584 @@
+import { CheckBox, LineEdit, ListView, SpinBox } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
-import { ContentRow, PendingRow } from "../types.slint";
+import { InstanceState } from "../state.slint";
+import { Button } from "../components/button.slint";
 import { EmptyState } from "../components/empty-state.slint";
+import { ListRow } from "../components/list-row.slint";
+import { TabBar } from "../components/tab-bar.slint";
 
-// One instance's detail view. Filled in by task 4.
+// One instance's detail view: header, four tabs, and nothing else.
+//
+// Pure layout. Every value comes from the [`InstanceState`] global and every action is
+// reported through it, so `src/screens/instance.rs` is the only place that knows what any of
+// this means.
 export component InstanceScreen inherits Rectangle {
-    in property <string> slug;
-    in property <[ContentRow]> content;
-    in property <[PendingRow]> pending;
+    // Smallest heap the JVM tab offers, in MiB.
+    property <int> heap_min: 512;
+    // Largest heap the JVM tab offers, in MiB.
+    property <int> heap_max: 65536;
+    // Key typed into the override editor.
+    property <string> override_key;
+    // Value typed into the override editor.
+    property <string> override_value;
 
-    EmptyState {
-        title: "Instance";
-        message: "The instance detail view lands in task 4.";
+    background: Theme.bg;
+
+    VerticalLayout {
+        padding: Theme.pad;
+        spacing: Theme.gap;
+
+        // Header: who this is, what it runs, and the launch actions.
+        HorizontalLayout {
+            spacing: Theme.gap;
+
+            Button {
+                text: "Back";
+                clicked => {
+                    InstanceState.back();
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+
+                Text {
+                    text: InstanceState.name;
+                    color: Theme.text;
+                    font-size: Theme.font-size-h1;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: InstanceState.minecraft + " · " + InstanceState.loader_label
+                        + (InstanceState.installed ? "" : " · not installed yet");
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    overflow: elide;
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Text {
+                    text: InstanceState.status_text;
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    horizontal-alignment: right;
+                    max-width: 320px;
+                    overflow: elide;
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Button {
+                    text: "Install";
+                    enabled: !InstanceState.running;
+                    clicked => {
+                        InstanceState.install();
+                    }
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Button {
+                    // A launch installs whatever is missing, so an instance that was never
+                    // installed can still be started.
+                    text: InstanceState.running ? "Running" : "Launch";
+                    kind: "primary";
+                    enabled: !InstanceState.running;
+                    clicked => {
+                        InstanceState.launch();
+                    }
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Button {
+                    // Stopping the game is not in the MVP: core has no kill. The button is
+                    // here, and disabled, so the shape of the screen does not change later.
+                    text: "Stop";
+                    enabled: false;
+                    clicked => {
+                        InstanceState.stop();
+                    }
+                }
+            }
+        }
+
+        TabBar {
+            tabs: ["Content", "Settings", "JVM", "Logs"];
+            current <=> InstanceState.tab;
+            changed(index) => {
+                InstanceState.set_tab(index);
+            }
+        }
+
+        // Content tab: what is installed, what needs updating, what needs a hand download.
+        if InstanceState.tab == 0: VerticalLayout {
+            spacing: Theme.gap;
+            vertical-stretch: 1;
+
+            HorizontalLayout {
+                spacing: Theme.gap;
+                height: Theme.row-height;
+
+                Button {
+                    text: "Check updates";
+                    clicked => {
+                        InstanceState.check_updates();
+                    }
+                }
+
+                Button {
+                    text: "Apply updates";
+                    kind: "primary";
+                    enabled: InstanceState.update_count > 0;
+                    clicked => {
+                        InstanceState.apply_updates();
+                    }
+                }
+
+                Button {
+                    text: "Add content";
+                    clicked => {
+                        InstanceState.add_content();
+                    }
+                }
+
+                Text {
+                    text: InstanceState.update_count > 0
+                        ? InstanceState.update_count + " update(s) waiting"
+                        : "";
+                    color: Theme.warning;
+                    font-size: Theme.font-size-small;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+            }
+
+            if InstanceState.content.length == 0: EmptyState {
+                vertical-stretch: 1;
+                title: "Nothing installed";
+                message: "Add a mod, a resource pack, or a world from the browser.";
+            }
+
+            if InstanceState.content.length > 0: ListView {
+                vertical-stretch: 1;
+
+                for row in InstanceState.content: ListRow {
+                    height: Theme.row-height + Theme.gap;
+
+                    Text {
+                        text: row.name;
+                        color: row.enabled ? Theme.text : Theme.text-muted;
+                        font-size: Theme.font-size;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        min-width: 120px;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: row.kind;
+                        color: Theme.text-muted;
+                        font-size: Theme.font-size-small;
+                        vertical-alignment: center;
+                        horizontal-stretch: 0;
+                        width: 90px;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: row.source;
+                        color: Theme.text-muted;
+                        font-size: Theme.font-size-small;
+                        vertical-alignment: center;
+                        horizontal-stretch: 0;
+                        width: 80px;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: row.update_available ? "update" : "";
+                        color: Theme.warning;
+                        font-size: Theme.font-size-small;
+                        vertical-alignment: center;
+                        horizontal-alignment: right;
+                        horizontal-stretch: 0;
+                        width: 60px;
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
+                        Button {
+                            text: row.enabled ? "Disable" : "Enable";
+                            clicked => {
+                                InstanceState.content_toggle(row.project_id, !row.enabled);
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
+                        Button {
+                            text: "Remove";
+                            kind: "danger";
+                            clicked => {
+                                InstanceState.content_remove(row.project_id);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Manual downloads. One block per file, each with its own path field.
+            if InstanceState.pending.length > 0: VerticalLayout {
+                spacing: Theme.gap;
+                vertical-stretch: 0;
+
+                Text {
+                    text: "Downloads to fetch by hand";
+                    color: Theme.text;
+                    font-size: Theme.font-size;
+                }
+
+                for item in InstanceState.pending: entry := Rectangle {
+                    property <string> path;
+
+                    height: block.preferred-height;
+                    background: Theme.surface;
+                    border-radius: Theme.radius;
+                    border-width: 1px;
+                    border-color: Theme.border;
+
+                    block := VerticalLayout {
+                        padding: Theme.pad;
+                        spacing: Theme.gap;
+
+                        Text {
+                            text: item.file_name + " (" + item.kind + ")";
+                            color: Theme.text;
+                            font-size: Theme.font-size;
+                            overflow: elide;
+                        }
+
+                        Text {
+                            text: item.page_url;
+                            color: Theme.accent;
+                            font-size: Theme.font-size-small;
+                            overflow: elide;
+                        }
+
+                        HorizontalLayout {
+                            spacing: Theme.gap;
+
+                            LineEdit {
+                                placeholder-text: "Path to the file you downloaded";
+                                text <=> entry.path;
+                                horizontal-stretch: 1;
+                            }
+
+                            Button {
+                                text: "Import";
+                                kind: "primary";
+                                enabled: entry.path != "";
+                                clicked => {
+                                    InstanceState.import_manual(item.project_id, entry.path);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Settings tab: the overrides this instance rewrites, and what the file holds now.
+        if InstanceState.tab == 1: VerticalLayout {
+            spacing: Theme.gap;
+            vertical-stretch: 1;
+
+            Text {
+                text: "options.txt overrides, rewritten on every launch";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+            }
+
+            HorizontalLayout {
+                spacing: Theme.gap;
+                height: Theme.row-height;
+
+                LineEdit {
+                    placeholder-text: "key";
+                    text <=> root.override_key;
+                    horizontal-stretch: 1;
+                }
+
+                LineEdit {
+                    placeholder-text: "value";
+                    text <=> root.override_value;
+                    horizontal-stretch: 1;
+                }
+
+                Button {
+                    text: "Set";
+                    kind: "primary";
+                    enabled: root.override_key != "";
+                    clicked => {
+                        InstanceState.override_set(root.override_key, root.override_value);
+                        root.override_key = "";
+                        root.override_value = "";
+                    }
+                }
+            }
+
+            if InstanceState.overrides.length == 0: Text {
+                text: "No overrides. The game keeps whatever it wrote.";
+                color: Theme.text-muted;
+                font-size: Theme.font-size;
+                height: Theme.row-height;
+                vertical-alignment: center;
+            }
+
+            if InstanceState.overrides.length > 0: ListView {
+                vertical-stretch: 1;
+
+                for row in InstanceState.overrides: ListRow {
+                    height: Theme.row-height + Theme.gap;
+
+                    Text {
+                        text: row.key;
+                        color: Theme.text;
+                        font-size: Theme.font-size;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: row.value;
+                        color: Theme.text-muted;
+                        font-size: Theme.font-size;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
+                        Button {
+                            text: "Unset";
+                            clicked => {
+                                InstanceState.override_unset(row.key);
+                            }
+                        }
+                    }
+                }
+            }
+
+            Text {
+                text: "Current options.txt";
+                color: Theme.text;
+                font-size: Theme.font-size;
+            }
+
+            if InstanceState.options.length == 0: Text {
+                text: "No options.txt yet. The game writes it on its first run.";
+                color: Theme.text-muted;
+                font-size: Theme.font-size;
+                height: Theme.row-height;
+                vertical-alignment: center;
+            }
+
+            if InstanceState.options.length > 0: ListView {
+                vertical-stretch: 1;
+
+                for row in InstanceState.options: ListRow {
+                    Text {
+                        text: row.key;
+                        color: Theme.text-muted;
+                        font-size: Theme.font-size-small;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: row.value;
+                        color: Theme.text-muted;
+                        font-size: Theme.font-size-small;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+
+        // JVM tab: heap, extra arguments, and which java to run.
+        if InstanceState.tab == 2: VerticalLayout {
+            spacing: Theme.gap;
+            vertical-stretch: 1;
+
+            Text {
+                text: "Minimum heap (MiB)";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+            }
+
+            SpinBox {
+                minimum: root.heap_min;
+                maximum: root.heap_max;
+                step-size: 256;
+                value <=> InstanceState.jvm_min;
+            }
+
+            Text {
+                text: "Maximum heap (MiB)";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+            }
+
+            SpinBox {
+                minimum: root.heap_min;
+                maximum: root.heap_max;
+                step-size: 256;
+                value <=> InstanceState.jvm_max;
+            }
+
+            Text {
+                text: "Extra JVM arguments";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+            }
+
+            LineEdit {
+                placeholder-text: "-XX:+UseG1GC";
+                text <=> InstanceState.jvm_extra;
+            }
+
+            Text {
+                text: "Java path";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+            }
+
+            LineEdit {
+                placeholder-text: "leave empty to let the launcher choose";
+                text <=> InstanceState.java_path;
+            }
+
+            HorizontalLayout {
+                spacing: Theme.gap;
+                height: Theme.row-height;
+
+                Text {
+                    text: InstanceState.jvm_min > InstanceState.jvm_max
+                        ? "The minimum heap is above the maximum."
+                        : "";
+                    color: Theme.danger;
+                    font-size: Theme.font-size-small;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                Button {
+                    text: "Save";
+                    kind: "primary";
+                    enabled: InstanceState.jvm_min <= InstanceState.jvm_max;
+                    clicked => {
+                        InstanceState.jvm_save(
+                            InstanceState.jvm_min,
+                            InstanceState.jvm_max,
+                            InstanceState.jvm_extra,
+                            InstanceState.java_path,
+                        );
+                    }
+                }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+            }
+        }
+
+        // Logs tab: what the game printed, newest at the bottom.
+        if InstanceState.tab == 3: Rectangle {
+            // Where the log view sits when it is following the newest line.
+            property <length> follow: min(0px, log.visible-height - log.viewport-height);
+
+            // Following is done on a change, not as a binding, so a user who scrolls away
+            // with autoscroll off is left alone.
+            changed follow => {
+                if (InstanceState.autoscroll) {
+                    log.viewport-y = self.follow;
+                }
+            }
+
+            VerticalLayout {
+                spacing: Theme.gap;
+
+                HorizontalLayout {
+                    spacing: Theme.gap;
+                    height: Theme.row-height;
+
+                    CheckBox {
+                        text: "Auto-scroll";
+                        checked <=> InstanceState.autoscroll;
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    Button {
+                        text: "Open log folder";
+                        clicked => {
+                            InstanceState.open_log_folder();
+                        }
+                    }
+                }
+
+                log := ListView {
+                    vertical-stretch: 1;
+
+                    for line in InstanceState.game_log: Rectangle {
+                        height: line_text.preferred-height + Theme.gap;
+                        background: Colors.transparent;
+
+                        line_text := Text {
+                            x: Theme.pad;
+                            width: parent.width - 2 * Theme.pad;
+                            text: line.text;
+                            color: line.level == "error" || line.level == "warn"
+                                ? Theme.warning
+                                : Theme.text-muted;
+                            font-size: Theme.font-size-small;
+                            wrap: no-wrap;
+                            overflow: elide;
+                        }
+                    }
+                }
+
+                if InstanceState.game_log.length == 0: Text {
+                    text: "No game output yet. Launch the instance to see its log here.";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size;
+                    height: Theme.row-height;
+                    vertical-alignment: center;
+                }
+            }
+        }
     }
 }

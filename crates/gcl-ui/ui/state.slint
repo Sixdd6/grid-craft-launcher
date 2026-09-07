@@ -1,0 +1,137 @@
+import { ContentRow, LogLine, PendingRow, SettingRow } from "types.slint";
+
+// Everything the instance detail screen and its prompt read and report.
+//
+// The screen lives inside an `if` in `app.slint`, so Rust cannot reach its properties. This
+// global is the seam, the same way `InstancesState` is for the list: `src/screens/instance.rs`
+// binds it, and the screen reads it directly. It lives in its own file because the screen
+// imports it and `app.slint` imports the screen, which a global declared in `app.slint` could
+// not survive.
+//
+// Every default here is preview content: `just ui-preview screens/instance.slint` shows it.
+export global InstanceState {
+    // Display name of the instance being shown.
+    in-out property <string> name: "Fabric Performance";
+    // Its Minecraft version.
+    in-out property <string> minecraft: "1.20.1";
+    // Its loader and build, already joined for display. "vanilla" when it has no loader.
+    in-out property <string> loader_label: "fabric 0.16.9";
+    // Whether the version a launch resolves is already in the cache.
+    in-out property <bool> installed: true;
+    // Whether this instance's game is up.
+    in-out property <bool> running: false;
+    // One line about the last thing that happened here.
+    in-out property <string> status_text: "Ready";
+
+    // Which tab is shown: 0 content, 1 settings, 2 jvm, 3 logs.
+    in-out property <int> tab: 0;
+
+    // Installed content, in install order.
+    in-out property <[ContentRow]> content: [
+        {
+            project_id: "AANobbMI",
+            source: "modrinth",
+            name: "sodium-fabric-0.5.8",
+            version: "OrgTMPmO",
+            kind: "mod",
+            enabled: true,
+            update_available: true,
+            file_name: "sodium-fabric-0.5.8.jar",
+        },
+        {
+            project_id: "gvQqBUqZ",
+            source: "modrinth",
+            name: "lithium-fabric-0.11.2",
+            version: "ZSNsJrPI",
+            kind: "mod",
+            enabled: false,
+            update_available: false,
+            file_name: "lithium-fabric-0.11.2.jar.disabled",
+        },
+    ];
+    // Downloads the user still has to fetch by hand.
+    in-out property <[PendingRow]> pending: [
+        {
+            project_id: "1IjD5062",
+            file_name: "continuity-3.0.0.jar",
+            page_url: "https://www.curseforge.com/minecraft/mc-mods/continuity/files/1234",
+            kind: "mod",
+        },
+    ];
+    // `options.txt` keys this instance rewrites on every launch.
+    in-out property <[SettingRow]> overrides: [
+        { key: "fov", value: "0.5" },
+        { key: "renderDistance", value: "12" },
+    ];
+    // What `options.txt` holds right now. Read-only: the game owns this file.
+    in-out property <[SettingRow]> options: [
+        { key: "version", value: "3465" },
+        { key: "fov", value: "0.5" },
+    ];
+
+    // Minimum heap in MiB.
+    in-out property <int> jvm_min: 2048;
+    // Maximum heap in MiB.
+    in-out property <int> jvm_max: 4096;
+    // Extra JVM arguments, space separated as the user typed them.
+    in-out property <string> jvm_extra: "-XX:+UseG1GC";
+    // Path to a specific `java`, empty when the launcher may choose one.
+    in-out property <string> java_path: "";
+
+    // Output of the running or last game, oldest first.
+    in-out property <[LogLine]> game_log: [
+        { level: "info", text: "[Render thread/INFO]: Setting user: Steve" },
+        { level: "info", text: "[Render thread/INFO]: Loaded 7 recipes" },
+    ];
+    // Whether the log view follows new lines.
+    in-out property <bool> autoscroll: true;
+    // How many installed files have a newer version at their source.
+    in-out property <int> update_count: 1;
+
+    // The offline-name prompt, shown when a launch found no account.
+    in-out property <bool> prompt_open: false;
+    // Headline of that prompt.
+    in-out property <string> prompt_title: "Play offline";
+    // Label above its field.
+    in-out property <string> prompt_label: "Player name";
+    // What the user typed into it.
+    in-out property <string> prompt_value: "";
+
+    // Read this slug's instance from disk and fill every property above.
+    callback load(string);
+    // Start the game.
+    callback launch();
+    // Stop the game. Disabled in the MVP: core has no kill, so this is a no-op that only
+    // reports why. Kept so the button has one place to grow into.
+    callback stop();
+    // Install everything a launch needs, without starting the game.
+    callback install();
+    // Go back to the instance list.
+    callback back();
+    // A tab was picked. Carries its index.
+    callback set_tab(int);
+    // A row's Enable/Disable button was pressed. Carries the project id and the new state.
+    callback content_toggle(string /* project_id */, bool /* enabled */);
+    // A row's Remove button was pressed. Carries the project id.
+    callback content_remove(string);
+    // Look for newer versions of everything installed.
+    callback check_updates();
+    // Install every update the last check found.
+    callback apply_updates();
+    // Open the content browser for this instance.
+    callback add_content();
+    // A hand-downloaded file was named. Carries the pending project id and the path typed.
+    callback import_manual(string /* project_id */, string /* path */);
+    // Set one `options.txt` override. Carries the key and the value.
+    callback override_set(string /* key */, string /* value */);
+    // Drop one `options.txt` override. Carries the key.
+    callback override_unset(string);
+    // Save the JVM tab. Carries min MiB, max MiB, extra arguments, and the java path.
+    callback jvm_save(int /* min */, int /* max */, string /* extra */, string /* java_path */);
+    // Report where this instance's logs are written.
+    callback open_log_folder();
+    // The offline-name prompt was accepted. Carries the name typed.
+    callback prompt_ok(string);
+    // The offline-name prompt was dismissed.
+    callback prompt_cancel();
+}

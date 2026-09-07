@@ -3,10 +3,12 @@ import {
     AccountRow, ContentRow, InstanceRow, LoaderVersionRow, LogLine, PendingRow,
     Screen, SearchRow, SettingRow, TaskRow, VersionRow
 } from "types.slint";
+import { InstanceState } from "state.slint";
 import { Rail } from "components/rail.slint";
 import { ConfirmDialog } from "components/confirm-dialog.slint";
 import { CreateInstanceDialog } from "components/create-instance-dialog.slint";
 import { Dialog } from "components/dialog.slint";
+import { PromptDialog } from "components/prompt-dialog.slint";
 import { ProgressBar } from "components/progress-bar.slint";
 import { InstancesScreen } from "screens/instances.slint";
 import { InstanceScreen } from "screens/instance.slint";
@@ -16,7 +18,7 @@ import { SettingsScreen } from "screens/settings.slint";
 
 // Re-exported so the generated Rust module has every struct the screens will need.
 export {
-    AccountRow, ContentRow, InstanceRow, LoaderVersionRow, LogLine, PendingRow,
+    AccountRow, ContentRow, InstanceRow, InstanceState, LoaderVersionRow, LogLine, PendingRow,
     Screen, SearchRow, SettingRow, TaskRow, Theme, VersionRow
 }
 
@@ -122,6 +124,17 @@ export component AppWindow inherits Window {
     preferred-width: 1200px;
     preferred-height: 760px;
 
+    // The instance the detail screen is showing, empty while another screen is up. Rust
+    // cannot watch a property, so the reload is triggered here: navigating to the screen and
+    // picking another instance both change this.
+    property <string> shown_slug: App.screen == Screen.instance ? App.current_slug : "";
+
+    changed shown_slug => {
+        if (self.shown_slug != "") {
+            InstanceState.load(self.shown_slug);
+        }
+    }
+
     // The newest log line, shown as a toast while it is a warning.
     property <string> toast_text: App.app_log.length > 0
         && App.app_log[App.app_log.length - 1].level == "warning"
@@ -165,9 +178,7 @@ export component AppWindow inherits Window {
                         InstancesState.filter_changed(self.filter);
                     }
                 }
-                if App.screen == Screen.instance: InstanceScreen {
-                    slug: App.current_slug;
-                }
+                if App.screen == Screen.instance: InstanceScreen { }
                 if App.screen == Screen.browser: BrowserScreen { }
                 if App.screen == Screen.accounts: AccountsScreen { }
                 if App.screen == Screen.settings: SettingsScreen { }
@@ -286,6 +297,23 @@ export component AppWindow inherits Window {
         }
         cancel => {
             InstancesState.confirm_no();
+        }
+    }
+
+    // Offline-name prompt, used when a launch found no account.
+    PromptDialog {
+        width: root.width;
+        height: root.height;
+        open: InstanceState.prompt_open;
+        title: InstanceState.prompt_title;
+        label: InstanceState.prompt_label;
+        value <=> InstanceState.prompt_value;
+        accept_label: "Launch";
+        accept(name) => {
+            InstanceState.prompt_ok(name);
+        }
+        cancel => {
+            InstanceState.prompt_cancel();
         }
     }
 

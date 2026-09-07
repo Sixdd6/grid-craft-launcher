@@ -4,28 +4,28 @@
 //! thread a launch owns. The screen itself is pure layout; this module owns the `InstancesState`
 //! global that feeds it.
 
-use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use gcl_core::instances::model::Loader;
 use gcl_core::launcher::LaunchOutcome;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
 
-use crate::bridge::{Bridge, show_error};
+use crate::bridge::{Bridge, show_error, warn};
 use crate::models::{instance_row, loader_version_row, version_row};
-use crate::{App, AppWindow, InstanceRow, InstancesState, LogLine, Screen};
-
-/// The set of instance slugs whose game is still running.
-type Running = Arc<Mutex<HashSet<String>>>;
+use crate::state::RunState;
+use crate::{App, AppWindow, InstanceRow, InstancesState, Screen};
 
 /// Binds the `InstancesState` global to the launcher and loads the first list.
-pub fn wire(window: &AppWindow, bridge: &Bridge) {
+///
+/// `run` is shared with the instance detail screen, so a launch started on either shows as
+/// running on both.
+pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState) {
     let state = window.global::<InstancesState>();
-    let running: Running = Arc::new(Mutex::new(HashSet::new()));
+    let running = run.clone();
 
     {
         let bridge = bridge.clone();
-        let running = Arc::clone(&running);
+        let running = running.clone();
         state.on_refresh(move || load(&bridge, &running));
     }
 
@@ -61,7 +61,7 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
 
     {
         let bridge = bridge.clone();
-        let running = Arc::clone(&running);
+        let running = running.clone();
         state.on_create_confirm(move |name, mc, loader, loader_version| {
             create_instance(
                 &bridge,
@@ -94,7 +94,7 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
 
     {
         let bridge = bridge.clone();
-        let running = Arc::clone(&running);
+        let running = running.clone();
         state.on_confirm_yes(move || confirm_delete(&bridge, &running));
     }
 
@@ -111,7 +111,7 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
 
     {
         let bridge = bridge.clone();
-        let running = Arc::clone(&running);
+        let running = running.clone();
         state.on_launch(move |slug| launch(&bridge, &running, slug.as_str()));
     }
 
@@ -119,11 +119,11 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
 }
 
 /// Reads every instance and its installed flag, then rebuilds the list.
-fn load(bridge: &Bridge, running: &Running) {
+fn load(bridge: &Bridge, running: &RunState) {
     if let Some(window) = bridge.weak().upgrade() {
         window.global::<InstancesState>().set_loading(true);
     }
-    let running = Arc::clone(running);
+    let running = running.clone();
     bridge.run(
         "Load instances",
         |launcher| {
@@ -143,7 +143,7 @@ fn load(bridge: &Bridge, running: &Running) {
             Ok(rows)
         },
         move |window, instances| {
-            let live = snapshot(&running);
+            let live = running.snapshot();
             let rows: Vec<InstanceRow> = instances
                 .iter()
                 .map(|(instance, installed)| {
@@ -296,7 +296,7 @@ fn load_loader_versions(bridge: &Bridge, mc: &str, loader: &str) {
 /// Creates the instance, installs its loader, and reloads the list.
 fn create_instance(
     bridge: &Bridge,
-    running: &Running,
+    running: &RunState,
     name: &str,
     mc: &str,
     loader: &str,
@@ -314,7 +314,7 @@ fn create_instance(
     let (name, mc) = (name.to_string(), mc.to_string());
     let loader_version = (!loader_version.is_empty()).then(|| loader_version.to_string());
     let after = bridge.clone();
-    let running = Arc::clone(running);
+    let running = running.clone();
     bridge.run(
         "Create instance",
         move |launcher| {
@@ -355,7 +355,7 @@ fn ask_delete(window: &AppWindow, slug: &str) {
 }
 
 /// Deletes the instance the modal is asking about, then reloads the list.
-fn confirm_delete(bridge: &Bridge, running: &Running) {
+fn confirm_delete(bridge: &Bridge, running: &RunState) {
     let Some(window) = bridge.weak().upgrade() else {
         return;
     };
@@ -368,7 +368,7 @@ fn confirm_delete(bridge: &Bridge, running: &Running) {
     }
 
     let after = bridge.clone();
-    let running = Arc::clone(running);
+    let running = running.clone();
     bridge.run(
         "Delete instance",
         move |launcher| Ok(launcher.instances().delete(&slug)?),
@@ -380,7 +380,7 @@ fn confirm_delete(bridge: &Bridge, running: &Running) {
 ///
 /// The launch runs on a thread of its own: `launch_instance_async` returns once the process
 /// is up, and the same thread then blocks on the game and posts the outcome back.
-fn launch(bridge: &Bridge, running: &Running, slug: &str) {
+fn launch(bridge: &Bridge, running: &RunState, slug: &str) {
     let Some(window) = bridge.weak().upgrade() else {
         return;
     };
@@ -390,11 +390,7 @@ fn launch(bridge: &Bridge, running: &Running, slug: &str) {
 
     // A slug already in the set has a game up; the button is disabled, but a stale row could
     // still send this.
-    let fresh = match running.lock() {
-        Ok(mut set) => set.insert(slug.to_string()),
-        Err(_) => false,
-    };
-    if !fresh {
+    if !running.start(slug) {
         return;
     }
     mark_running(&window, running);
@@ -403,7 +399,7 @@ fn launch(bridge: &Bridge, running: &Running, slug: &str) {
     let launcher = Arc::clone(bridge.launcher());
     let weak = bridge.weak().clone();
     let bridge = bridge.clone();
-    let running = Arc::clone(running);
+    let running = running.clone();
     std::thread::spawn(move || {
         let started = launcher.launch_instance_async(&slug, None, None);
         let outcome = match started {
@@ -418,15 +414,13 @@ fn launch(bridge: &Bridge, running: &Running, slug: &str) {
 fn finish_launch(
     weak: &Weak<AppWindow>,
     bridge: &Bridge,
-    running: &Running,
+    running: &RunState,
     slug: &str,
     outcome: Result<LaunchOutcome, gcl_core::Error>,
 ) {
-    if let Ok(mut set) = running.lock() {
-        set.remove(slug);
-    }
+    running.finish(slug);
     let bridge = bridge.clone();
-    let running = Arc::clone(running);
+    let running = running.clone();
     let _ = weak.upgrade_in_event_loop(move |window| {
         match outcome {
             Ok(LaunchOutcome::Exited { code, hint, .. }) if code != 0 => {
@@ -460,8 +454,8 @@ fn is_no_account(err: &gcl_core::Error) -> bool {
 }
 
 /// Rewrites the `running` flag on every row from the live set.
-fn mark_running(window: &AppWindow, running: &Running) {
-    let live = snapshot(running);
+fn mark_running(window: &AppWindow, running: &RunState) {
+    let live = running.snapshot();
     let state = window.global::<InstancesState>();
     let rows: Vec<InstanceRow> = state
         .get_all_rows()
@@ -473,22 +467,6 @@ fn mark_running(window: &AppWindow, running: &Running) {
         .collect();
     state.set_all_rows(ModelRc::new(VecModel::from(rows)));
     apply_filter(window);
-}
-
-/// A copy of the running set. An empty set stands in for a poisoned lock.
-fn snapshot(running: &Running) -> HashSet<String> {
-    running.lock().map(|set| set.clone()).unwrap_or_default()
-}
-
-/// Appends a warning to the app log, which the window shows as a toast.
-fn warn(window: &AppWindow, text: &str) {
-    let app = window.global::<App>();
-    let mut log: Vec<LogLine> = app.get_app_log().iter().collect();
-    log.push(LogLine {
-        level: "warning".into(),
-        text: text.into(),
-    });
-    app.set_app_log(ModelRc::new(VecModel::from(log)));
 }
 
 #[cfg(test)]

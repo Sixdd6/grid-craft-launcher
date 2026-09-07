@@ -7,7 +7,7 @@ use gcl_core::auth::secrets::{MemoryStore, SecretStoreKind};
 use gcl_core::auth::{Account, AccountKind};
 use gcl_core::content::AddRequest;
 use gcl_core::download::hash::sha1_hex;
-use gcl_core::instances::model::Loader;
+use gcl_core::instances::model::{InstanceJvm, Loader};
 use gcl_core::launcher::{Endpoints, LaunchOutcome};
 use gcl_core::loaders::LoaderEndpoints;
 use gcl_core::sources::SourceId;
@@ -836,6 +836,216 @@ async fn an_async_launch_runs_the_game_and_reports_how_it_exited() {
                 .last_launched
                 .is_some(),
             "the exit rewrote the timestamp, and did not clear it"
+        );
+        dir
+    })
+    .await
+    .expect("blocking task");
+}
+
+/// A launcher over a fresh root with one vanilla instance, for the per-instance editors.
+fn instance_launcher(dir: &tempfile::TempDir) -> (Launcher, String) {
+    let launcher = launcher(dir, None, None);
+    let slug = launcher
+        .instances()
+        .create("Pack", MC, Loader::None, None, &BTreeMap::new())
+        .expect("create instance")
+        .slug;
+    (launcher, slug)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn instance_overrides_are_set_and_unset_through_the_launcher() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    tokio::task::spawn_blocking(move || {
+        let (launcher, slug) = instance_launcher(&dir);
+
+        launcher
+            .set_instance_override(&slug, "fov", "90")
+            .expect("set the override");
+        let saved = launcher.instances().get(&slug).expect("reload");
+        assert_eq!(
+            saved
+                .config
+                .settings_overrides
+                .get("fov")
+                .map(String::as_str),
+            Some("90")
+        );
+
+        assert!(
+            launcher
+                .unset_instance_override(&slug, "fov")
+                .expect("unset the override"),
+            "the key was set, so unsetting it reports a change"
+        );
+        assert!(
+            !launcher
+                .unset_instance_override(&slug, "fov")
+                .expect("unset again"),
+            "unsetting a key that is not there reports no change"
+        );
+        assert!(
+            launcher
+                .instances()
+                .get(&slug)
+                .expect("reload")
+                .config
+                .settings_overrides
+                .is_empty()
+        );
+        dir
+    })
+    .await
+    .expect("blocking task");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_override_with_a_bad_key_or_value_is_rejected_and_saves_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    tokio::task::spawn_blocking(move || {
+        let (launcher, slug) = instance_launcher(&dir);
+
+        let err = launcher
+            .set_instance_override(&slug, "has:colon", "1")
+            .expect_err("a key with a colon is not writable");
+        assert!(
+            matches!(
+                err,
+                gcl_core::Error::Settings(gcl_core::settings::Error::BadKey(_))
+            ),
+            "{err:?}"
+        );
+        let err = launcher
+            .set_instance_override(&slug, "fov", "two\nlines")
+            .expect_err("a value with a newline is not writable");
+        assert!(
+            matches!(
+                err,
+                gcl_core::Error::Settings(gcl_core::settings::Error::BadValue(_))
+            ),
+            "{err:?}"
+        );
+        assert!(
+            launcher
+                .instances()
+                .get(&slug)
+                .expect("reload")
+                .config
+                .settings_overrides
+                .is_empty(),
+            "a rejected override writes nothing"
+        );
+        dir
+    })
+    .await
+    .expect("blocking task");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn instance_jvm_is_saved_and_a_min_above_the_max_is_rejected() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    tokio::task::spawn_blocking(move || {
+        let (launcher, slug) = instance_launcher(&dir);
+
+        launcher
+            .set_instance_jvm(
+                &slug,
+                InstanceJvm {
+                    min_mib: Some(1024),
+                    max_mib: Some(4096),
+                    java_path: Some(std::path::PathBuf::from("/usr/bin/java")),
+                    extra_args: vec!["-XX:+UseG1GC".to_string()],
+                },
+            )
+            .expect("save the jvm settings");
+        let saved = launcher.instances().get(&slug).expect("reload").config.jvm;
+        assert_eq!(saved.min_mib, Some(1024));
+        assert_eq!(saved.max_mib, Some(4096));
+        assert_eq!(saved.extra_args, vec!["-XX:+UseG1GC".to_string()]);
+
+        launcher
+            .set_instance_jvm(
+                &slug,
+                InstanceJvm {
+                    min_mib: Some(8192),
+                    max_mib: Some(2048),
+                    ..InstanceJvm::default()
+                },
+            )
+            .expect_err("a minimum above the maximum is rejected");
+        assert_eq!(
+            launcher.instances().get(&slug).expect("reload").config.jvm,
+            saved,
+            "the rejected edit left the saved settings alone"
+        );
+        dir
+    })
+    .await
+    .expect("blocking task");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn instance_options_reads_the_pairs_the_game_wrote() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    tokio::task::spawn_blocking(move || {
+        let (launcher, slug) = instance_launcher(&dir);
+        let instance = launcher.instances().get(&slug).expect("read instance");
+
+        assert!(
+            launcher
+                .instance_options(&slug)
+                .expect("read options")
+                .is_empty(),
+            "an instance whose game never ran has no options.txt"
+        );
+
+        std::fs::write(
+            instance.game_dir().join("options.txt"),
+            "version:3465\nfov:0.5\nnot a pair\n",
+        )
+        .expect("write options.txt");
+        assert_eq!(
+            launcher.instance_options(&slug).expect("read options"),
+            vec![
+                ("version".to_string(), "3465".to_string()),
+                ("fov".to_string(), "0.5".to_string()),
+            ],
+            "the pairs come back in file order, and a line with no colon is skipped"
+        );
+        dir
+    })
+    .await
+    .expect("blocking task");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn list_worlds_reads_the_folders_under_saves() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    tokio::task::spawn_blocking(move || {
+        let (launcher, slug) = instance_launcher(&dir);
+        let saves = launcher
+            .instances()
+            .get(&slug)
+            .expect("read instance")
+            .game_dir()
+            .join("saves");
+
+        assert!(launcher.list_worlds(&slug).expect("list worlds").is_empty());
+
+        std::fs::create_dir_all(saves.join("New World")).expect("world folder");
+        std::fs::create_dir_all(saves.join("Amplified")).expect("world folder");
+        std::fs::write(saves.join("stray.txt"), b"not a world").expect("stray file");
+        assert_eq!(
+            launcher.list_worlds(&slug).expect("list worlds"),
+            vec!["Amplified".to_string(), "New World".to_string()],
+            "folders only, in name order"
+        );
+
+        std::fs::remove_dir_all(&saves).expect("drop saves");
+        assert!(
+            launcher.list_worlds(&slug).expect("list worlds").is_empty(),
+            "an instance with no saves directory has no worlds"
         );
         dir
     })
