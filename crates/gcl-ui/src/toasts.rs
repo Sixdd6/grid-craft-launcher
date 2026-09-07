@@ -3,7 +3,7 @@
 //! A toast is a copy of something that is already in the app log, shown for [`TTL`] so the
 //! user notices it without opening the log. The queue lives on the UI thread in a
 //! `thread_local!`, because every writer is already there: warnings arrive in the forwarder's
-//! model-mutating closure, screens push through `Shell.toast`, and the one-second timer in
+//! model-mutating closure, screens push through `bridge::warn`, and the one-second timer in
 //! `src/app.rs` ages entries out. Nothing here locks, and nothing here is `Send`.
 
 use std::cell::RefCell;

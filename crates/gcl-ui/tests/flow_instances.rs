@@ -2,7 +2,7 @@
 //!
 //! One process may hold one Slint backend, so every flow runs inside a single `#[test]`, in
 //! order, over one window: an empty list, a vanilla create, a Fabric create, a launch and a
-//! stop, then a rename and a delete.
+//! stop, a launch that fails and shows the error dialog, then a rename and a delete.
 
 #![cfg(unix)]
 
@@ -32,6 +32,7 @@ fn the_instances_screen_creates_launches_and_removes_an_instance() {
         creating_a_vanilla_instance_adds_a_row(app).await;
         creating_a_fabric_instance_installs_the_loader(app).await;
         launching_a_row_runs_the_game_until_stop(app).await;
+        a_launch_that_cannot_start_opens_the_error_dialog(app).await;
         renaming_and_deleting_an_instance(app).await;
     });
 }
@@ -253,6 +254,59 @@ async fn launching_a_row_runs_the_game_until_stop(app: &TestApp) {
         "a stop the user asked for raises no warning, so nothing reaches the app log"
     );
     assert!(app.launcher.running_slugs().is_empty());
+}
+
+/// (d2) A launch the launcher cannot start opens the shared error dialog, and Dismiss shuts it.
+///
+/// The stand-in java is made unreadable and unexecutable for the length of this sub-flow, so
+/// the launch fails at the one step nothing can recover from. The dialog has to name the GUI
+/// log, because that is where the whole error chain was written.
+async fn a_launch_that_cannot_start_opens_the_error_dialog(app: &TestApp) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let java = app.root().join("fake-java");
+    std::fs::set_permissions(&java, std::fs::Permissions::from_mode(0o000))
+        .expect("take the stand-in java away");
+
+    app.click("InstanceScreen::launch_button");
+    app.wait_until(
+        "the error dialog to open",
+        |window| window.global::<App>().get_error_open(),
+        LAUNCH,
+    )
+    .await;
+
+    let text = app.window.global::<App>().get_error_text().to_string();
+    assert!(
+        text.contains("gui.log"),
+        "the dialog points at the GUI log. It says:
+{text}"
+    );
+    assert!(
+        app.has("AppWindow::error_dialog") && app.has("AppWindow::error_text"),
+        "the dialog and its body are in the element tree. Showing: {:?}",
+        app.ids()
+    );
+    assert_eq!(
+        app.el("AppWindow::error_text").accessible_value(),
+        Some(text.as_str().into()),
+        "the body shows the same text the property holds"
+    );
+
+    app.click("Dialog::cancel_button");
+    app.wait_until(
+        "the error dialog to close",
+        |window| !window.global::<App>().get_error_open(),
+        QUICK,
+    )
+    .await;
+    assert!(
+        !app.has("AppWindow::error_text"),
+        "a dismissed dialog leaves the element tree"
+    );
+
+    std::fs::set_permissions(&java, std::fs::Permissions::from_mode(0o755))
+        .expect("give the stand-in java back");
 }
 
 /// (e) Rename from the detail screen, then delete from the list.

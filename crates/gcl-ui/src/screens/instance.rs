@@ -97,7 +97,7 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState, editor: &Editor
         let bridge = bridge.clone();
         let run = run.clone();
         let shared = shared.clone();
-        state.on_load(move |slug| load(&bridge, &run, &shared, slug.as_str()));
+        state.on_load(move |slug| open(&bridge, &run, &shared, slug.as_str()));
     }
 
     {
@@ -463,13 +463,26 @@ struct Loaded {
     options: Vec<(String, String)>,
 }
 
-/// Reads the instance and fills every property the screen shows.
-fn load(bridge: &Bridge, run: &RunState, shared: &Shared, slug: &str) {
-    // The Settings tab shows this instance's layer, so the shared editor is pointed at it
-    // every time the instance is read: a save, a rename, and the first open all land here.
+/// The screen's entry point: points the shared editor at this instance, then reads it.
+///
+/// This is the only place that retargets the editor. `app.slint` calls it when the shell
+/// navigates here or the shown slug changes; every refresh below goes through [`load`]
+/// instead, so a job that lands after the user walked back to the settings screen cannot
+/// drag the editor onto an instance layer, and a refresh cannot wipe the search box.
+fn open(bridge: &Bridge, run: &RunState, shared: &Shared, slug: &str) {
     shared
         .editor
         .open(bridge, EditTarget::Instance(slug.to_string()));
+    load(bridge, run, shared, slug);
+}
+
+/// Reads the instance and fills every property the screen shows.
+fn load(bridge: &Bridge, run: &RunState, shared: &Shared, slug: &str) {
+    // The Settings tab shows this instance's layer. Re-read its rows only while the shared
+    // editor is still on this instance: another screen may own it by now.
+    if shared.editor.target() == EditTarget::Instance(slug.to_string()) {
+        shared.editor.reload(bridge);
+    }
     let (job_slug, run, shared) = (slug.to_string(), run.clone(), shared.clone());
     let slug = slug.to_string();
     bridge.run(

@@ -173,14 +173,18 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Args>, String
     };
     let mut want_path = false;
     for arg in args {
+        // `just run-ui -- --smoke` passes the separator through; ignore it. This runs before
+        // the path branch on purpose: `--screenshot -- shot.png` must take `shot.png` as the
+        // path, not the separator.
+        if arg == "--" {
+            continue;
+        }
         if want_path {
             parsed.screenshot = Some(PathBuf::from(arg));
             want_path = false;
             continue;
         }
         match arg.as_str() {
-            // `just run-ui -- --smoke` passes the separator through; ignore it.
-            "--" => continue,
             "--smoke" => parsed.smoke = true,
             "--screenshot" => want_path = true,
             "-h" | "--help" => {
@@ -250,6 +254,31 @@ mod tests {
             args.screenshot.as_deref(),
             Some(std::path::Path::new("/tmp/a.png"))
         );
+    }
+
+    #[test]
+    fn parse_args_skips_the_separator_before_a_screenshot_path() {
+        let args = parse_args(
+            [
+                "--screenshot".to_string(),
+                "--".to_string(),
+                "/tmp/a.png".to_string(),
+            ]
+            .into_iter(),
+        )
+        .expect("parses")
+        .expect("runs");
+        assert_eq!(
+            args.screenshot.as_deref(),
+            Some(std::path::Path::new("/tmp/a.png"))
+        );
+    }
+
+    #[test]
+    fn parse_args_rejects_a_screenshot_whose_only_argument_is_the_separator() {
+        let err = parse_args(["--screenshot".to_string(), "--".to_string()].into_iter())
+            .expect_err("rejected");
+        assert!(err.contains("--screenshot"));
     }
 
     #[test]

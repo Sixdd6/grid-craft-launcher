@@ -61,6 +61,8 @@ is what a `restart()` call needs.
 | File | Id | Element |
 | --- | --- | --- |
 | `crates/gcl-ui/ui/app.slint` | `AppWindow::nav` | `FocusScope` |
+| `crates/gcl-ui/ui/app.slint` | `AppWindow::error_dialog` | `Dialog` |
+| `crates/gcl-ui/ui/app.slint` | `AppWindow::error_text` | `TextEdit` |
 | `crates/gcl-ui/ui/components/button.slint` | `Button::label` | `Text` |
 | `crates/gcl-ui/ui/components/button.slint` | `Button::touch` | `TouchArea` |
 | `crates/gcl-ui/ui/components/choice-dialog.slint` | `ChoiceDialog::choice_row` | `Rectangle` |
@@ -183,4 +185,4 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::default_add_button` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::verify_button` | `Button` |
 
-Total: 122 named elements.
+Total: 124 named elements.

@@ -2402,7 +2402,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_rows_for_instance_layers_override_over_preseed_over_file() {
+    fn settings_rows_for_instance_layers_override_over_file_over_preseed() {
         let dir = tempfile::tempdir().expect("tempdir");
         let launcher = seamed(&dir);
         launcher

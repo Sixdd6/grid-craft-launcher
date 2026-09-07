@@ -76,8 +76,9 @@ pub fn setting_row(row: &Row, edited: Layer) -> SettingRowModel {
     model.label = setting.label.into();
     match setting.control {
         // A stored value the catalog's own range cannot hold is left on the text control:
-        // a slider has nowhere to put it, and silently snapping it to `min` would hide a
-        // value the file really holds.
+        // a slider has nowhere to put it, and silently snapping it to a bound would hide a
+        // value the file really holds. That covers a value that does not parse and a value
+        // that parses outside `[min, max]`.
         Control::Slider {
             min,
             max,
@@ -87,6 +88,9 @@ pub fn setting_row(row: &Row, edited: Layer) -> SettingRowModel {
             let Ok(parsed) = row.value.parse::<f64>() else {
                 return model;
             };
+            if parsed < min || parsed > max {
+                return model;
+            }
             model.control = "slider".into();
             model.minimum = min as f32;
             model.maximum = max as f32;

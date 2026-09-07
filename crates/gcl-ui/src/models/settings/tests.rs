@@ -40,15 +40,23 @@ fn a_slider_row_carries_its_bounds_step_and_decimals() {
 }
 
 #[test]
-fn a_float_slider_keeps_its_decimals_and_clamps_a_value_outside_the_range() {
+fn a_float_slider_keeps_its_decimals_and_a_value_outside_the_range_stays_a_text_row() {
     let model = setting_row(&row("gamma", "0.75", Layer::File), Layer::Override);
+    assert_eq!(model.control, "slider");
     assert_eq!(model.decimals, 2);
     assert_eq!(model.step, 0.01_f64 as f32);
     assert_eq!(model.number, 0.75);
 
-    // A file can hold anything; the slider still has to land inside its own range.
+    // A file can hold anything. A value the slider's range cannot show falls back to the
+    // text control, where the user still reads what is stored, rather than being clamped to
+    // a bound the file never held.
     let high = setting_row(&row("gamma", "9", Layer::File), Layer::Override);
-    assert_eq!(high.number, 1.0);
+    assert_eq!(high.control, "text");
+    assert_eq!(high.value, "9");
+
+    let low = setting_row(&row("gamma", "-1", Layer::File), Layer::Override);
+    assert_eq!(low.control, "text");
+    assert_eq!(low.value, "-1");
 }
 
 #[test]

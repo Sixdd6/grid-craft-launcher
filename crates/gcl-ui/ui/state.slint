@@ -1,14 +1,11 @@
 import { AccountRow, ContentRow, LogLine, PendingRow, SettingRow, SettingRowModel } from "types.slint";
 
-// The two shell services a screen may reach.
+// The shell service a screen may reach.
 //
 // `App` itself lives in `app.slint`, which imports every screen, so a screen cannot import it
-// back. These two callbacks are the ones screens genuinely need, so they live here instead
-// and `src/app.rs` binds them next to the rest of `App`.
+// back. This callback is the one screens genuinely need, so it lives here instead and
+// `src/app.rs` binds it next to the rest of `App`.
 export global Shell {
-    // Push a message onto the toast stack. Carries the text and the kind, which is warning,
-    // error, or anything else for a plain note.
-    callback toast(string /* text */, string /* kind */);
     // Where a list's selection lands after an arrow key. Carries the current index (-1 when
     // nothing is chosen), the step, and the row count, and returns the new index.
     callback move_selection(int /* current */, int /* delta */, int /* len */) -> int;

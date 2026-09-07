@@ -200,8 +200,8 @@ fix is a global per screen (`InstancesState`, `InstanceState`, `AccountsState`, 
 `src/screens/*.rs` can
 reach: the screen binds its layout to the global's properties, and Rust calls
 `window.global::<XState>()` to read and write them and to answer its callbacks. `Shell` is the one
-global every screen may reach directly for two cross-cutting services: `Shell.toast(text, kind)`
-and `Shell.move_selection(current, delta, len)`. It lives in `state.slint` rather than `app.slint`
+global every screen may reach directly, for one cross-cutting service:
+`Shell.move_selection(current, delta, len)`. It lives in `state.slint` rather than `app.slint`
 because `app.slint` imports the screens, so a screen cannot import a global declared there.
 
 Each `*State` default carries realistic preview content, so `just ui-preview screens/x.slint`

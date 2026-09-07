@@ -32,6 +32,7 @@ fn the_settings_editor_saves_defaults_and_instance_overrides() {
         the_settings_screen_shows_the_catalog(app).await;
         a_slider_saves_a_launcher_default(app).await;
         a_switch_saves_a_launcher_default(app).await;
+        a_raw_default_save_keeps_the_editor_search(app).await;
         an_instance_overrides_a_default_and_resets_it(app).await;
     });
 }
@@ -216,6 +217,54 @@ async fn a_switch_saves_a_launcher_default(app: &TestApp) {
     .await;
 }
 
+/// (c2) A save from the settings screen itself refreshes the editor without retargeting it.
+///
+/// The screen's Add row writes a raw `options.txt` default, which reloads the whole screen.
+/// That reload re-reads the editor's rows, but it must not reopen the editor: reopening
+/// empties the search box under the user.
+async fn a_raw_default_save_keeps_the_editor_search(app: &TestApp) {
+    search(app, "gamma", "gamma").await;
+
+    idle(app).await;
+    app.scroll_to("SettingsScreen::default_key_field");
+    app.type_into("SettingsScreen::default_key_field", "guiScale");
+    app.type_into("SettingsScreen::default_value_field", "2");
+    app.click("SettingsScreen::default_add_button");
+    app.wait_until(
+        "the raw default to reach config.toml",
+        |_| saved_default(app, "guiScale") == Some("2".to_string()),
+        QUICK,
+    )
+    .await;
+    // The screen's own busy flag is not the editor's: clearing it is what marks the point
+    // where the save's `done` ran and asked the editor to refresh. Only then is the editor's
+    // flag worth waiting on.
+    app.wait_until(
+        "the settings screen to finish saving",
+        |window| !window.global::<gcl_ui::SettingsState>().get_busy(),
+        QUICK,
+    )
+    .await;
+    idle(app).await;
+
+    let state = app.window.global::<SettingsEditorState>();
+    assert_eq!(
+        state.get_search().to_string(),
+        "gamma",
+        "the save reloaded the rows, it did not reopen the editor"
+    );
+    assert_eq!(
+        state.get_layer_name().to_string(),
+        "default",
+        "and the editor is still on the launcher-defaults layer"
+    );
+    assert_eq!(
+        keys(&app.window),
+        vec!["Video".to_string(), "gamma".to_string()],
+        "so the filtered list is untouched"
+    );
+}
+
 /// (d) The same key on an instance: the preseed is inherited, an override wins, Reset drops
 /// it again.
 async fn an_instance_overrides_a_default_and_resets_it(app: &TestApp) {
@@ -297,6 +346,21 @@ async fn an_instance_overrides_a_default_and_resets_it(app: &TestApp) {
         QUICK,
     )
     .await;
+    // The save reloaded the instance, which reloads this screen. The editor has to stay on
+    // the instance layer through that: a reopen here would point it back at the launcher
+    // defaults and drop the search box with it.
+    idle(app).await;
+    let state = app.window.global::<SettingsEditorState>();
+    assert_eq!(
+        state.get_layer_name().to_string(),
+        "override",
+        "the editor is still editing this instance's layer"
+    );
+    assert_eq!(
+        state.get_search().to_string(),
+        "renderDistance",
+        "and the search box survived the reload"
+    );
 
     idle(app).await;
     app.scroll_to("SettingRow::setting_reset_button");

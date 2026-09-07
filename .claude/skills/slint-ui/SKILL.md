@@ -63,8 +63,9 @@ settings screen and the instance Settings tab mount, declared in `ui/state.slint
 `ui/app.slint` — that both the
 screen and `src/screens/x.rs` reach: the screen binds its layout to the global, and `x.rs` calls
 `window.global::<XState>()` to read properties, set them, and answer callbacks. `Shell` (in
-`state.slint`) is the one global every screen may import directly, for the two services every
-screen needs: `Shell.toast(text, kind)` and `Shell.move_selection(current, delta, len)`. It cannot
+`state.slint`) is the one global every screen may import directly, for the one service every
+screen needs: `Shell.move_selection(current, delta, len)`. A toast is pushed from Rust through
+`bridge::warn`, not from a `.slint` file. It cannot
 live in `app.slint` because `app.slint` imports the screens, and a screen importing `app.slint`
 back would cycle.
 

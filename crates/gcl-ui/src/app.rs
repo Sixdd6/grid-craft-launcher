@@ -75,16 +75,9 @@ pub fn build(
 
     let shell = window.global::<Shell>();
 
-    // Both shell services a screen may reach. They live on `Shell` rather than `App` because
+    // The shell service a screen may reach. It lives on `Shell` rather than `App` because
     // `App` is declared in `app.slint`, which imports the screens and so cannot be imported
     // back by one.
-    let weak = window.as_weak();
-    shell.on_toast(move |text, kind| {
-        if let Some(window) = weak.upgrade() {
-            toasts::show(&window, text.as_str(), kind.as_str());
-        }
-    });
-
     shell.on_move_selection(move_selection);
 
     let weak = window.as_weak();

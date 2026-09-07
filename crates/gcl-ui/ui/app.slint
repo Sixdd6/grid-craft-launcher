@@ -446,7 +446,7 @@ export component AppWindow inherits Window {
     }
 
     // Error dialog. Rust sets the three error properties; dismiss_error clears them.
-    Dialog {
+    error_dialog := Dialog {
         width: root.width;
         height: root.height;
         open: App.error_open;
@@ -459,7 +459,7 @@ export component AppWindow inherits Window {
         // Read-only and selectable, so the user can take the text with Ctrl+C. There is no
         // clipboard call in the Slint API we can reach from a button, so selection is the
         // whole copy story.
-        TextEdit {
+        error_text := TextEdit {
             height: 5 * Theme.row-height;
             text: App.error_text;
             read-only: true;

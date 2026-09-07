@@ -58,7 +58,7 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, editor: &Editor) {
 
     {
         let (bridge, editor) = (bridge.clone(), editor.clone());
-        state.on_open(move || load(&bridge, &editor));
+        state.on_open(move || open(&bridge, &editor));
     }
 
     {
@@ -110,12 +110,31 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, editor: &Editor) {
         state.on_verify_sources(move || verify_sources(&bridge));
     }
 
-    load(bridge, editor);
+    open(bridge, editor);
 }
 
-/// Reads the config and the root in use, then fills the screen and the typed editor.
-fn load(bridge: &Bridge, editor: &Editor) {
+/// The screen's entry point: points the shared editor at the launcher defaults, then loads.
+///
+/// This is the only place that retargets the editor. One editor serves this screen and the
+/// instance Settings tab, so a later refresh must not pull it back here: a job that finishes
+/// after the user has navigated away would otherwise show instance rows the wrong layer, or
+/// write a preseed value the user meant as an override.
+fn open(bridge: &Bridge, editor: &Editor) {
     editor.open(bridge, EditTarget::Defaults);
+    read_config(bridge);
+}
+
+/// Reads the config and the root in use again, and re-reads the editor's rows while the
+/// editor is still on this screen's layer.
+fn load(bridge: &Bridge, editor: &Editor) {
+    if editor.target() == EditTarget::Defaults {
+        editor.reload(bridge);
+    }
+    read_config(bridge);
+}
+
+/// Reads the config and the root in use, then fills the screen.
+fn read_config(bridge: &Bridge) {
     bridge.run_with_error(
         "Read settings",
         |launcher| {
