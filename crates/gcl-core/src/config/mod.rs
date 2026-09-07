@@ -143,19 +143,25 @@ impl Config {
     }
 
     /// The CurseForge API key: `CURSEFORGE_API_KEY` env var first, then the config file.
+    ///
+    /// An empty or blank value in either place counts as unset: `CURSEFORGE_API_KEY=`
+    /// in a shell or a `.env` must turn the source off, not send a blank key.
     pub fn curseforge_api_key(&self) -> Option<String> {
-        std::env::var("CURSEFORGE_API_KEY")
-            .ok()
-            .or_else(|| self.keys.curseforge_api_key.clone())
+        non_blank(std::env::var("CURSEFORGE_API_KEY").ok())
+            .or_else(|| non_blank(self.keys.curseforge_api_key.clone()))
     }
 
     /// The Microsoft account client id: `GCL_MSA_CLIENT_ID` env var first, then the config
-    /// file.
+    /// file. An empty or blank value in either place counts as unset.
     pub fn msa_client_id(&self) -> Option<String> {
-        std::env::var("GCL_MSA_CLIENT_ID")
-            .ok()
-            .or_else(|| self.keys.msa_client_id.clone())
+        non_blank(std::env::var("GCL_MSA_CLIENT_ID").ok())
+            .or_else(|| non_blank(self.keys.msa_client_id.clone()))
     }
+}
+
+/// Drops a value that is empty or only whitespace.
+fn non_blank(value: Option<String>) -> Option<String> {
+    value.filter(|v| !v.trim().is_empty())
 }
 
 #[cfg(test)]
@@ -285,5 +291,31 @@ mod tests {
         let mut config = Config::default();
         config.keys.curseforge_api_key = Some("from-file".to_string());
         assert_eq!(config.curseforge_api_key(), Some("from-file".to_string()));
+    }
+
+    #[test]
+    fn a_blank_key_counts_as_unset_in_the_env_and_in_the_file() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let mut config = Config::default();
+        config.keys.curseforge_api_key = Some("   ".to_string());
+        config.keys.msa_client_id = Some(String::new());
+
+        // SAFETY: guarded by ENV_LOCK; both variables are restored before the asserts.
+        unsafe {
+            std::env::set_var("CURSEFORGE_API_KEY", "");
+            std::env::set_var("GCL_MSA_CLIENT_ID", "  \t ");
+        }
+        let curseforge = config.curseforge_api_key();
+        let msa = config.msa_client_id();
+        unsafe {
+            std::env::remove_var("CURSEFORGE_API_KEY");
+            std::env::remove_var("GCL_MSA_CLIENT_ID");
+        }
+        assert_eq!(curseforge, None, "a blank env var must not mask the file");
+        assert_eq!(msa, None);
+
+        // A blank file value alone is unset too.
+        assert_eq!(config.curseforge_api_key(), None);
+        assert_eq!(config.msa_client_id(), None);
     }
 }

@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 
 use crate::content::{ContentCtx, ManualDownload};
 use crate::download::link_or_copy;
+use crate::events::Event;
 use crate::instances::model::{ContentEntry, ContentKind, Loader, PackSource};
 use crate::instances::{Instance, Instances};
 use crate::loaders::{LoaderCtx, LoaderEndpoints};
@@ -32,6 +33,12 @@ const CF_MANIFEST: &str = "manifest.json";
 
 /// `manifestType` value that marks a CurseForge zip as a Minecraft modpack.
 const CF_PACK_TYPE: &str = "minecraftModpack";
+
+/// `source` recorded for a content entry that came from a file, not from a source API.
+///
+/// No [`SourceId`] parses it, which is what keeps `content::check_updates` from asking a
+/// source about an entry it has no project id for.
+const FILE_SOURCE: &str = "file";
 
 /// Largest manifest this module reads out of a pack archive, in bytes.
 ///
@@ -357,6 +364,10 @@ async fn install(
 /// Only a file under `mods/`, `resourcepacks/`, or `shaderpacks/` is recorded in
 /// `instance.toml`: those are the folders the content list manages. Everything else — a
 /// config file, a script — is placed and left unrecorded, the same as an override.
+///
+/// A recorded entry's source is [`FILE_SOURCE`], not the pack's source: the index names
+/// no project and no version at either source, so the entry cannot be updated or
+/// re-resolved.
 async fn install_mrpack_files(
     ctx: &ContentCtx<'_>,
     instance: &mut Instance,
@@ -389,11 +400,12 @@ async fn install_mrpack_files(
         placed += 1;
 
         if let Some(kind) = kind_of_path(path) {
-            // A `.mrpack` file has no project or version id: it is only a URL and a
-            // hash. The sha1 stands in for both, which keeps the entry unique and lets
-            // an update check match the file by hash later.
+            // A `.mrpack` file has no source, project id, or version id: it is only a
+            // URL and a hash. The source is recorded as `file`, which no `SourceId`
+            // parses, so `content::check_updates` leaves the entry alone. The sha1
+            // stands in for both ids, which keeps the entry unique.
             entries.push(ContentEntry {
-                source: SourceId::Modrinth.to_string(),
+                source: FILE_SOURCE.to_string(),
                 project_id: sha1.clone(),
                 version_id: sha1.clone(),
                 file_name,
@@ -418,7 +430,8 @@ async fn install_mrpack_files(
 /// The class of each file's project decides its folder, so the projects are fetched too.
 /// A file whose `downloadUrl` is null is collected as a [`ManualDownload`] and does not
 /// fail the import: the launcher never constructs a CDN URL to work around an author's
-/// opt-out.
+/// opt-out. A file whose project is a data pack is skipped with an [`Event::Warning`]: a
+/// data pack needs a world folder, and a pack manifest names none.
 async fn install_curseforge_files(
     ctx: &ContentCtx<'_>,
     instance: &mut Instance,
@@ -466,6 +479,17 @@ async fn install_curseforge_files(
         let kind = project.map_or(ContentKind::Mod, |p| p.kind);
         ctx.log(format!("files {}/{total}: {}", index + 1, file.file_name));
 
+        if kind == ContentKind::DataPack {
+            // A data pack goes under `saves/<world>/datapacks/`, and a pack manifest
+            // names no world. Placing it anywhere else would be a guess, so it is
+            // skipped and said out loud instead.
+            let _ = ctx.sink.send(Event::Warning(format!(
+                "{} is a data pack; the pack names no world, so it was not installed",
+                file.file_name
+            )));
+            continue;
+        }
+
         if file.url.is_none() {
             // A project the batch did not return still gets a page under its own id,
             // which CurseForge redirects to the real slug. `pack_page_url` would be
@@ -487,6 +511,8 @@ async fn install_curseforge_files(
                 page_url,
                 fingerprint: file.fingerprint,
                 sha1: file.sha1.clone(),
+                // A pack manifest names no world, and a data pack never reaches here.
+                world: None,
             });
             continue;
         }

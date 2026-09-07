@@ -36,7 +36,7 @@ const KEY_HEADER: &str = "x-api-key";
 
 /// Largest page CurseForge serves, and the batch size for `POST /v1/mods` and
 /// `POST /v1/mods/files`.
-const PAGE_SIZE: usize = 50;
+pub const PAGE_SIZE: usize = 50;
 
 /// Content kinds CurseForge can search and resolve.
 ///
@@ -224,7 +224,9 @@ impl CurseForge {
                     .map_err(|e| map_err(e, "project", Some(id_or_slug)))?;
                 body.data
                     .into_iter()
-                    .find(|m| m.slug == id_or_slug)
+                    // The search endpoint matches a slug loosely, so the answer can
+                    // differ in case from what the user typed.
+                    .find(|m| m.slug.eq_ignore_ascii_case(id_or_slug))
                     .ok_or_else(|| Error::NotFound {
                         source_id: ID,
                         id: id_or_slug.to_string(),
@@ -388,7 +390,9 @@ impl Source for CurseForge {
         let mut url = format!(
             "{}/v1/mods/search?gameId={GAME_ID}&sortField=2&sortOrder=desc&pageSize={}&index={}&searchFilter={}",
             self.base,
-            q.limit,
+            // CurseForge rejects a page larger than `PAGE_SIZE`, so a caller asking for
+            // more gets one full page instead of an error.
+            q.limit.min(PAGE_SIZE as u32),
             q.offset,
             encode(&q.text)
         );

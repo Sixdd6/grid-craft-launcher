@@ -148,6 +148,79 @@ fn content_add_from_curseforge_without_a_key_exits_one() {
         .stderr(predicates::str::contains("disabled"));
 }
 
+/// A CurseForge mock whose only file has a null `downloadUrl`.
+///
+/// The class list, the slug lookup, and the files list are the three calls
+/// `content add --source curseforge` makes for one project.
+async fn mock_curseforge_without_a_download_url(server: &MockServer) {
+    const CLASSES: &str =
+        include_str!("../../../tests/fixtures/curseforge/categories_classes.json");
+    const SEARCH: &str = include_str!("../../../tests/fixtures/curseforge/search_mods.json");
+    const FILES: &str = include_str!("../../../tests/fixtures/curseforge/get_mod_files.json");
+
+    let mut files: serde_json::Value = serde_json::from_str(FILES).expect("files fixture is json");
+    // The author opted out of third-party distribution, so the API sends no URL.
+    for file in files["data"].as_array_mut().expect("a data array") {
+        file["downloadUrl"] = serde_json::Value::Null;
+    }
+
+    common::serve(server, "/v1/categories", CLASSES.as_bytes().to_vec()).await;
+    common::serve(server, "/v1/mods/search", SEARCH.as_bytes().to_vec()).await;
+    common::serve(
+        server,
+        "/v1/mods/394468/files",
+        files.to_string().into_bytes(),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn content_add_of_a_file_without_a_url_exits_three_and_lists_it_as_pending() {
+    let server = MockServer::start().await;
+    mock_curseforge_without_a_download_url(&server).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().to_path_buf();
+    let uri = server.uri();
+
+    let pending = tokio::task::spawn_blocking(move || {
+        create_instance(&root, "http://modrinth.invalid", "demo");
+        let mut add = gcl(&root, "http://modrinth.invalid");
+        add.env("CURSEFORGE_API_KEY", "test");
+        add.env("GCL_CURSEFORGE_BASE_URL", &uri);
+        add.args([
+            "content",
+            "add",
+            "demo",
+            "--source",
+            "curseforge",
+            "--project",
+            "sodium",
+        ])
+        .assert()
+        .code(3)
+        .stdout(predicates::str::contains(
+            "https://www.curseforge.com/minecraft/mc-mods/sodium/files/5230381",
+        ));
+
+        let mut list = gcl(&root, "http://modrinth.invalid");
+        list.env("CURSEFORGE_API_KEY", "test");
+        list.env("GCL_CURSEFORGE_BASE_URL", &uri);
+        list.args(["--json", "content", "pending", "demo"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone()
+    })
+    .await
+    .expect("commands run");
+
+    let parsed: serde_json::Value = serde_json::from_slice(&pending).expect("stdout is json");
+    let rows = parsed.as_array().expect("an array of pending downloads");
+    assert_eq!(rows.len(), 1, "{parsed}");
+    assert_eq!(rows[0]["file_name"], "sodium-fabric-0.5.13+mc1.20.1.jar");
+}
+
 #[test]
 fn content_search_of_an_unknown_source_exits_one() {
     let dir = tempfile::tempdir().expect("tempdir");

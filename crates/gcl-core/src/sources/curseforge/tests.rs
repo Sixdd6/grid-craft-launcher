@@ -392,6 +392,57 @@ async fn project_by_slug_searches_and_takes_the_exact_match() {
 }
 
 #[tokio::test]
+async fn project_by_slug_matches_case_insensitively() {
+    let server = MockServer::start().await;
+    mount_classes(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/v1/mods/search"))
+        .and(query_param("slug", "Sodium"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(SEARCH))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // The fixture's slug is `sodium`; the user typed `Sodium`.
+    let project = source(&server).project("Sodium").await.expect("project");
+    assert_eq!(project.id, "394468");
+    assert_eq!(project.slug, "sodium");
+}
+
+#[tokio::test]
+async fn search_clamps_the_page_size_to_the_api_maximum() {
+    let server = MockServer::start().await;
+    mount_classes(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/v1/mods/search"))
+        .and(query_param("pageSize", "50"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(SEARCH))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let q = SearchQuery {
+        text: "sodium".into(),
+        limit: 100,
+        ..SearchQuery::default()
+    };
+    source(&server).search(&q).await.expect("search");
+    let requests = server.received_requests().await.unwrap_or_default();
+    let search = requests
+        .iter()
+        .find(|r| r.url.path() == "/v1/mods/search")
+        .expect("search request");
+    assert!(
+        search
+            .url
+            .query_pairs()
+            .any(|(k, v)| k == "pageSize" && v == "50"),
+        "asked for 100, the API caps at {PAGE_SIZE}: {}",
+        search.url
+    );
+}
+
+#[tokio::test]
 async fn project_by_unknown_slug_is_not_found() {
     let server = MockServer::start().await;
     mount_classes(&server).await;

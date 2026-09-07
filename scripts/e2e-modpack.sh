@@ -26,6 +26,15 @@ pass "install modpack"
 
 step "list content"
 $GCL content list e2epack --json > "$ROOT/content.json"
+# An import that placed no content is a silent failure: the instance would launch
+# vanilla. Fail here instead of at the classpath check, which would still pass.
+python3 - "$ROOT/content.json" <<'EOF'
+import json, sys
+entries = json.load(open(sys.argv[1]))
+if not entries:
+    sys.exit("content list is empty: the pack installed nothing")
+print(f"{len(entries)} content entries")
+EOF
 pass "list content"
 
 step "dry-run launch"

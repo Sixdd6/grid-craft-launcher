@@ -54,6 +54,13 @@ plus the Mojang one; set whichever ones a test's mock server needs to answer for
 `Endpoints` value and reads no environment at all, for a test that wants to build several
 launchers with different hosts side by side.
 
+**Every `GCL_*_BASE_URL` override is read in a debug build only.** `Endpoints::from_env()` is
+`#[cfg(debug_assertions)]`; a release build has a second version that returns
+`Endpoints::default()` and reads no environment, so a shipped launcher cannot be pointed at
+another host. Tests, `cargo run`, `just e2e`, and `just e2e-modpack` all run debug builds, so
+nothing that uses the overrides changes. A release binary under test needs
+`Launcher::open_with_endpoints` instead.
+
 ### FakeSource
 
 `content` and `modpacks` unit tests do not need wiremock for a content source: a `FakeSource`

@@ -88,13 +88,18 @@ passes an empty slice.
    - `.mrpack`: each `PackFile.path` is `safe_join`ed under the game directory;
      `content::fetch_object` downloads (or reuses) the object by its published sha1, then
      `link_or_copy` links it into place. A file under `mods/`, `resourcepacks/`, or
-     `shaderpacks/` gets a `ContentEntry` too — `project_id` and `version_id` are both the
-     file's own sha1, since an `.mrpack` file has no project or version id of its own. Anything
-     else (a config file, a script) is placed and left off the content list, like an override.
+     `shaderpacks/` gets a `ContentEntry` too — its `source` is `"file"`, and `project_id` and
+     `version_id` are both the file's own sha1, since an `.mrpack` file has no source, project
+     id, or version id of its own. `SourceId::parse` does not accept `"file"`, so
+     `content::check_updates` skips such an entry silently: there is no project to ask about.
+     Anything else (a config file, a script) is placed and left off the content list, like an
+     override.
    - CurseForge: `files_batch` resolves every `(project_id, file_id)` to a `Version`,
      `mods_batch` resolves the distinct project ids to their class, and each file is placed
      under the folder its project's class maps to (a project the batch dropped is treated as a
-     `Mod`). A file with no `downloadUrl` becomes a `ManualDownload`, the same as in
+     `Mod`). A file whose project's class is a data pack is skipped with an `Event::Warning`
+     naming the file: a data pack needs `saves/<world>/datapacks/`, and a pack manifest names
+     no world. A file with no `downloadUrl` becomes a `ManualDownload`, the same as in
      `content::add`, and does not fail the import. CurseForge silently drops a file id it does
      not recognize (a deleted file); the import logs which ids that was, since nothing else
      would ever say so.

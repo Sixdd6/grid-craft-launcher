@@ -60,7 +60,7 @@ extra_args = ["-XX:+UseG1GC"]
 "renderDistance" = "16"
 
 [[content]]
-source = "modrinth"             # modrinth | curseforge | file
+source = "modrinth"             # modrinth | curseforge | file (a `.mrpack` file, not updatable)
 project_id = "AANobbMI"
 version_id = "abc123"
 file_name = "sodium-fabric-0.5.8.jar"
@@ -140,9 +140,12 @@ import (`{ source, project_id, version_id }`, `source` one of `modrinth`, `curse
 
 `instances/<slug>/pending-manual.json` (`Launcher::PENDING_MANUAL_FILE`) is not part of
 `instance.toml`: it is a flat JSON array of pending hand downloads (source, project id, version
-id, file name, page URL, expected fingerprint or sha1), appended to by `content::add` and
-modpack import whenever a file has no download URL, and pruned by `import_manual_file`. A
-missing file reads as an empty list — an instance that never hit a manual download has none.
+id, file name, page URL, expected fingerprint or sha1, and the target world for a data pack),
+appended to by `content::add` and modpack import whenever a file has no download URL, and
+pruned by `import_manual_file`. A missing file reads as an empty list — an instance that never
+hit a manual download has none. `ManualDownload::world` is what `content::import_manual` puts
+in the entry, so a hand-fetched data pack lands in the world the original request named;
+`gcl content import-file --world <name>` overrides it.
 
 ## Writing files
 

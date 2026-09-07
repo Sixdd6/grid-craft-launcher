@@ -565,6 +565,128 @@ async fn add_reports_an_unknown_source() {
     );
 }
 
+/// Serves `bytes` at `/<name>` and returns the file that points at it.
+async fn served_file(server: &MockServer, name: &str, bytes: &'static [u8]) -> VersionFile {
+    Mock::given(method("GET"))
+        .and(path(format!("/{name}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes.to_vec()))
+        .mount(server)
+        .await;
+    file(Some(format!("{}/{name}", server.uri())), name, bytes)
+}
+
+/// One required dependency on `project_id`.
+fn requires(project_id: &str) -> Dependency {
+    Dependency {
+        project_id: Some(project_id.to_string()),
+        version_id: None,
+        kind: DependencyKind::Required,
+    }
+}
+
+#[tokio::test]
+async fn add_terminates_on_a_dependency_cycle_and_installs_each_project_once() {
+    let server = MockServer::start().await;
+    let (_dir, root, mut instance) = fixture();
+
+    // A requires B, and B requires A right back.
+    let mut a = version("cycle-a", "av1", "1.0");
+    a.files = vec![served_file(&server, "cycle-a.jar", b"a bytes").await];
+    a.dependencies = vec![requires("cycle-b")];
+    let mut b = version("cycle-b", "bv1", "1.0");
+    b.files = vec![served_file(&server, "cycle-b.jar", b"b bytes").await];
+    b.dependencies = vec![requires("cycle-a")];
+    let source = FakeSource::new(SourceId::Modrinth)
+        .with(project("cycle-a", ContentKind::Mod), vec![a])
+        .with(project("cycle-b", ContentKind::Mod), vec![b])
+        .boxed();
+    let h = Harness::new(root, vec![source]);
+
+    // The guard turns a hang into a failure instead of a stuck suite.
+    let out = with_ctx!(h, |ctx| tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        add(&ctx, &mut instance, request("cycle-a")),
+    )
+    .await
+    .expect("the walk terminates")
+    .expect("add"));
+
+    assert_eq!(out.installed.len(), 2, "{:?}", out.installed);
+    assert_eq!(instance.config.content.len(), 2);
+    let mods = instance.game_dir().join("mods");
+    assert!(mods.join("cycle-a.jar").is_file());
+    assert!(mods.join("cycle-b.jar").is_file());
+}
+
+#[tokio::test]
+async fn add_gives_up_on_a_chain_deeper_than_the_limit() {
+    let server = MockServer::start().await;
+    let (_dir, root, mut instance) = fixture();
+
+    // `dep-0` needs `dep-1` needs ... needs `dep-12`: past MAX_DEPENDENCY_DEPTH.
+    let last = MAX_DEPENDENCY_DEPTH + 2;
+    let mut source = FakeSource::new(SourceId::Modrinth);
+    for step in 0..=last {
+        let id = format!("dep-{step}");
+        let mut v = version(&id, &format!("{id}-v1"), "1.0");
+        v.files = vec![served_file(&server, &format!("{id}.jar"), b"chain bytes").await];
+        if step < last {
+            v.dependencies = vec![requires(&format!("dep-{}", step + 1))];
+        }
+        source = source.with(project(&id, ContentKind::Mod), vec![v]);
+    }
+    let h = Harness::new(root, vec![source.boxed()]);
+
+    let err = with_ctx!(h, |ctx| add(&ctx, &mut instance, request("dep-0"))
+        .await
+        .expect_err("too deep"));
+    assert!(
+        matches!(err, Error::DependencyDepth(ref p) if p == &format!("dep-{}", MAX_DEPENDENCY_DEPTH + 1)),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn add_installs_a_resource_pack_dependency_into_resourcepacks() {
+    let server = MockServer::start().await;
+    let (_dir, root, mut instance) = fixture();
+
+    let mut host = version("host-mod", "hv1", "1.0");
+    host.files = vec![served_file(&server, "host-mod.jar", b"host bytes").await];
+    host.dependencies = vec![requires("needed-pack")];
+    let mut pack = version("needed-pack", "pv1", "1.0");
+    // A resource pack lists no mod loader; `pick_version` ignores loaders for it.
+    pack.loaders = vec!["minecraft".to_string()];
+    pack.files = vec![served_file(&server, "needed-pack.zip", b"pack bytes").await];
+    let source = FakeSource::new(SourceId::Modrinth)
+        .with(project("host-mod", ContentKind::Mod), vec![host])
+        .with(
+            project("needed-pack", ContentKind::ResourcePack),
+            vec![pack],
+        )
+        .boxed();
+    let h = Harness::new(root, vec![source]);
+
+    let out = with_ctx!(h, |ctx| add(&ctx, &mut instance, request("host-mod"))
+        .await
+        .expect("add"));
+
+    assert_eq!(out.installed.len(), 2, "{:?}", out.installed);
+    assert!(
+        instance
+            .game_dir()
+            .join("resourcepacks/needed-pack.zip")
+            .is_file()
+    );
+    let entry = instance
+        .config
+        .content
+        .iter()
+        .find(|e| e.project_id == "needed-pack")
+        .expect("the pack is recorded");
+    assert_eq!(entry.kind, ContentKind::ResourcePack);
+}
+
 // ---------------------------------------------------------------------------
 // check_updates / apply_update
 // ---------------------------------------------------------------------------
@@ -663,6 +785,7 @@ fn pending_for(bytes: &[u8]) -> ManualDownload {
         page_url: "https://www.curseforge.com/minecraft/mc-mods/gated/files/gv1".to_string(),
         fingerprint: Some(curseforge_fingerprint(bytes)),
         sha1: None,
+        world: None,
     }
 }
 
@@ -730,4 +853,36 @@ async fn import_manual_accepts_a_file_when_nothing_can_be_verified() {
             .expect("import")
     });
     assert_eq!(entry.project_id, "gated");
+}
+
+#[tokio::test]
+async fn import_manual_puts_a_data_pack_in_the_pending_world() {
+    let (dir, root, mut instance) = fixture();
+    let bytes = b"data pack bytes".as_slice();
+    let dropped = dir.path().join("dropped.zip");
+    std::fs::write(&dropped, bytes).expect("write");
+    let mut pending = pending_for(bytes);
+    pending.file_name = "pack.zip".to_string();
+    pending.world = Some("w".to_string());
+    let h = Harness::new(root, Vec::new());
+
+    let entry = with_ctx!(h, |ctx| {
+        import_manual(
+            &ctx,
+            &mut instance,
+            &pending,
+            &dropped,
+            ContentKind::DataPack,
+        )
+        .await
+        .expect("import")
+    });
+
+    assert_eq!(entry.world.as_deref(), Some("w"));
+    assert!(
+        instance
+            .game_dir()
+            .join("saves/w/datapacks/pack.zip")
+            .is_file()
+    );
 }

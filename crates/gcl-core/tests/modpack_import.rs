@@ -287,7 +287,10 @@ async fn import_installs_the_loader_the_files_and_the_overrides() {
     let entry = &saved.config.content[0];
     assert_eq!(entry.file_name, "alpha.jar");
     assert_eq!(entry.kind, ContentKind::Mod);
-    assert_eq!(entry.source, "modrinth");
+    assert_eq!(
+        entry.source, "file",
+        "an mrpack file has no project at a source, so the entry is not updatable"
+    );
     assert_eq!(entry.sha1.as_deref(), Some(sha1_hex(MOD_JAR).as_str()));
 
     // The pack the instance came from is recorded.

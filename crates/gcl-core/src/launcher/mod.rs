@@ -96,6 +96,12 @@ impl Default for Endpoints {
 
 impl Endpoints {
     /// Reads every test-only base URL override, falling back to the production hosts.
+    ///
+    /// The overrides are read in a debug build only. A release build returns
+    /// [`Endpoints::default`] whatever the environment holds, so no `GCL_*_BASE_URL`
+    /// variable can redirect a shipped launcher at another host. Tests and both e2e
+    /// scripts run debug builds, so nothing that relies on the overrides changes.
+    #[cfg(debug_assertions)]
     pub fn from_env() -> Endpoints {
         Endpoints {
             mojang: env_base(MOJANG_BASE_URL_ENV, PISTON_META),
@@ -109,6 +115,12 @@ impl Endpoints {
                 neoforge: env_base(NEOFORGE_BASE_URL_ENV, crate::loaders::neoforge::MAVEN),
             },
         }
+    }
+
+    /// The production hosts. A release build reads no environment override at all.
+    #[cfg(not(debug_assertions))]
+    pub fn from_env() -> Endpoints {
+        Endpoints::default()
     }
 }
 
@@ -920,6 +932,9 @@ struct PendingRecord {
     fingerprint: Option<u32>,
     #[serde(default)]
     sha1: Option<String>,
+    /// World a data pack installs into. Absent in a file written before this field existed.
+    #[serde(default)]
+    world: Option<String>,
 }
 
 impl From<&ManualDownload> for PendingRecord {
@@ -932,6 +947,7 @@ impl From<&ManualDownload> for PendingRecord {
             page_url: pending.page_url.clone(),
             fingerprint: pending.fingerprint,
             sha1: pending.sha1.clone(),
+            world: pending.world.clone(),
         }
     }
 }
@@ -946,6 +962,7 @@ impl From<PendingRecord> for ManualDownload {
             page_url: record.page_url,
             fingerprint: record.fingerprint,
             sha1: record.sha1,
+            world: record.world,
         }
     }
 }
@@ -1013,6 +1030,10 @@ fn write_pending(path: &Path, items: &[ManualDownload]) -> Result<(), crate::Err
 }
 
 /// Reads a test-only base URL override, falling back to the production endpoint.
+///
+/// Debug builds only: [`Endpoints::from_env`] is the sole caller, and a release build
+/// reads no override.
+#[cfg(debug_assertions)]
 fn env_base(var: &str, default: &str) -> String {
     std::env::var(var)
         .ok()
@@ -1403,6 +1424,7 @@ mod tests {
             page_url: format!("https://example.invalid/{n}"),
             fingerprint: Some(n),
             sha1: None,
+            world: None,
         }
     }
 

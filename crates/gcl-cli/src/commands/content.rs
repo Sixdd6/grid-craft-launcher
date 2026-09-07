@@ -111,6 +111,9 @@ pub enum ContentCommand {
         /// Project id of the pending download, when the file name does not match.
         #[arg(long, value_name = "ID")]
         project: Option<String>,
+        /// World a data pack installs into, overriding the one the pending download carries.
+        #[arg(long, value_name = "NAME")]
+        world: Option<String>,
     },
 }
 
@@ -372,13 +375,20 @@ pub fn run(launcher: &Launcher, format: Format, command: ContentCommand) -> Resu
             path,
             kind,
             project,
+            world,
         } => {
             let kind = parse_kind(&kind)?;
             let pending = launcher.pending_manual(&slug)?;
             let Some(matched) = pick_pending(&pending, &path, project.as_deref()) else {
                 bail!("no pending download matches");
             };
-            let entry = launcher.import_manual_file(&slug, matched, &path, kind)?;
+            // `--world` wins over the world the pending entry recorded, so a data pack
+            // can be dropped into a world the original request did not name.
+            let mut matched = matched.clone();
+            if world.is_some() {
+                matched.world = world;
+            }
+            let entry = launcher.import_manual_file(&slug, &matched, &path, kind)?;
             match format {
                 Format::Json => print_json(&ContentRow::from(&entry))?,
                 Format::Text => println!("imported {} ({})", entry.file_name, entry.project_id),
@@ -477,6 +487,7 @@ mod tests {
             page_url: "https://example.invalid/p".to_string(),
             fingerprint: None,
             sha1: None,
+            world: None,
         }
     }
 

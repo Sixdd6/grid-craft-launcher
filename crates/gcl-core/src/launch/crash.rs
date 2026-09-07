@@ -16,8 +16,8 @@ pub const GENERIC_HINT: &str = "non-zero exit; read the log";
 
 /// Reads `log` and returns a one-line reason for the exit.
 ///
-/// It scans the last [`TAIL_LINES`] lines for the first line naming an exception, a cause, a
-/// mod file, or a mixin, and quotes it trimmed to [`MAX_CHARS`] characters. An unreadable log,
+/// It scans the last 200 lines for the first line naming an exception, a cause, a
+/// mod file, or a mixin, and quotes it trimmed to 160 characters. An unreadable log,
 /// or one with no such line, gives [`GENERIC_HINT`].
 pub fn crash_hint(log: &Path) -> String {
     match std::fs::read_to_string(log) {

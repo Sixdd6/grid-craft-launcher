@@ -71,7 +71,7 @@ pub enum Error {
         /// Hash or fingerprint the file actually has.
         actual: String,
     },
-    /// The dependency chain is deeper than [`MAX_DEPENDENCY_DEPTH`].
+    /// The dependency chain is more than 10 hops deep.
     #[error("dependency chain is more than 10 levels deep at {0}")]
     DependencyDepth(String),
     /// A filesystem operation on an object or a dropped file failed.
@@ -163,6 +163,8 @@ pub struct ManualDownload {
     pub fingerprint: Option<u32>,
     /// Expected sha1, when the source publishes one.
     pub sha1: Option<String>,
+    /// World a data pack installs into, carried over from the request that produced it.
+    pub world: Option<String>,
 }
 
 /// An installed entry that has a newer compatible version at its source.
@@ -367,6 +369,7 @@ pub async fn add(
                     page_url,
                     fingerprint: file.fingerprint,
                     sha1: file.sha1.clone(),
+                    world: item.world.clone(),
                 });
             }
             None => {
@@ -484,8 +487,9 @@ async fn install_file(
 
 /// Fetches `file` into `cache/objects/` and returns its object path and sha1.
 ///
-/// The download always lands on a staging path under `cache/objects/tmp/`, never on the
-/// object path itself: [`download_one`] stores the object first and then links it to the
+/// The download always lands on a staging path under `cache/objects/tmp/`, named
+/// `<uuid>.part` so [`crate::download::cleanup_partials`] sweeps an abandoned one, never
+/// on the object path itself: [`download_one`] stores the object first and then links it to the
 /// destination, so naming the object as the destination would unlink the object it just
 /// wrote. A published sha1 goes into the spec, so a jar both sources serve is verified
 /// on arrival and fetched only once. With no published sha1 the staged bytes are hashed
@@ -501,11 +505,13 @@ pub(crate) async fn fetch_object(
         .as_deref()
         .filter(|sha1| ctx.root.object_path(sha1).is_ok())
         .map(str::to_string);
+    // The `.part` suffix is what `download::cleanup_partials` sweeps, so a staged file
+    // abandoned by a crash is removed on the next start.
     let staging = ctx
         .root
         .objects_dir()
         .join("tmp")
-        .join(uuid::Uuid::new_v4().to_string());
+        .join(format!("{}.part", uuid::Uuid::new_v4()));
     create_parent(&staging).await?;
 
     let spec = DownloadSpec {
@@ -569,7 +575,8 @@ pub(crate) async fn place(
 ///
 /// An entry whose source is not configured, or whose source answers with an error, is
 /// skipped with an [`Event::Warning`]: one dead source must not hide the updates the
-/// others found.
+/// others found. An entry whose `source` names no known source — `file`, written by a
+/// `.mrpack` import — is skipped silently: it has no project to check.
 #[tracing::instrument(skip(ctx), fields(slug = %instance.slug))]
 pub async fn check_updates(
     ctx: &ContentCtx<'_>,
@@ -580,6 +587,9 @@ pub async fn check_updates(
     let mut candidates = Vec::new();
 
     for entry in &instance.config.content {
+        // A source that does not parse is skipped without a word. `file` is the one
+        // that happens in practice: a `.mrpack` file records no project at either
+        // source, so there is nothing to ask for a newer version.
         let Some(source_id) = SourceId::parse(&entry.source) else {
             continue;
         };
@@ -646,6 +656,10 @@ pub async fn apply_update(
 /// The CurseForge fingerprint is checked when the source published one; otherwise the
 /// sha1 is. A pending download with neither is accepted as-is, because there is nothing
 /// to check it against. The file is copied, never moved: it is the user's own file.
+///
+/// [`ManualDownload::world`] decides the world a [`ContentKind::DataPack`] lands in, so a
+/// data pack the user fetched by hand goes to the same `saves/<world>/datapacks/` the
+/// original request asked for.
 #[tracing::instrument(skip(ctx), fields(slug = %instance.slug, file = %file.display()))]
 pub async fn import_manual(
     ctx: &ContentCtx<'_>,
@@ -694,7 +708,7 @@ pub async fn import_manual(
             SourceId::Modrinth => pending.fingerprint,
         },
         kind,
-        world: None,
+        world: pending.world.clone(),
         enabled: true,
     };
     ctx.log(format!("imported {} by hand", entry.file_name));

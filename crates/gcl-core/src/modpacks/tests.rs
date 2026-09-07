@@ -485,6 +485,17 @@ mod online {
             out
         }
 
+        /// Every `Event::Warning` message emitted so far.
+        fn warnings(&mut self) -> Vec<String> {
+            let mut out = Vec::new();
+            while let Ok(event) = self.rx.try_recv() {
+                if let Event::Warning(message) = event {
+                    out.push(message);
+                }
+            }
+            out
+        }
+
         fn dl(&self) -> DownloadCtx<'_> {
             DownloadCtx {
                 http: &self.http,
@@ -744,6 +755,77 @@ mod online {
             logs.iter()
                 .any(|l| l.contains("did not resolve") && l.contains("1003")),
             "the unresolved file id is reported: {logs:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_curseforge_data_pack_is_warned_about_and_not_placed() {
+        let server = MockServer::start().await;
+        serve(&server, "/v1/categories", CLASSES.as_bytes().to_vec()).await;
+        serve(&server, "/files/pack.zip", PACK_BYTES.to_vec()).await;
+
+        let files_body = serde_json::json!({ "data": [
+            cf_file(2001, 7001, Some(format!("{}/files/pack.zip", server.uri()))),
+        ]})
+        .to_string();
+        Mock::given(method("POST"))
+            .and(path("/v1/mods/files"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(files_body))
+            .mount(&server)
+            .await;
+
+        // Class 6945 is `data-packs` in the fixture.
+        let mods_body = serde_json::json!({ "data": [
+            { "id": 7001, "name": "Pack", "slug": "pack", "classId": 6945 },
+        ]})
+        .to_string();
+        Mock::given(method("POST"))
+            .and(path("/v1/mods"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(mods_body))
+            .mount(&server)
+            .await;
+
+        let client: BoxSource = Arc::new(CurseForge::with_base_url(
+            HttpClient::new().expect("http"),
+            KEY.to_string(),
+            server.uri(),
+        ));
+        let mut harness = Harness::new(vec![client]);
+        let mut instance = Instances::new(harness.root.clone())
+            .create("Pack", "1.20.1", Loader::Fabric, None, &BTreeMap::new())
+            .expect("create");
+
+        let plan_files = vec![PackFile {
+            path: None,
+            url: None,
+            sha1: None,
+            size: None,
+            source: Some((SourceId::CurseForge, "7001".to_string(), "2001".to_string())),
+            required: true,
+        }];
+        let (placed, manual) = with_ctx!(harness, |ctx| install_curseforge_files(
+            &ctx,
+            &mut instance,
+            &plan_files
+        )
+        .await
+        .expect("install"));
+
+        assert_eq!(placed, 0, "a data pack has no world to go into");
+        assert!(manual.is_empty());
+        assert!(instance.config.content.is_empty());
+        let saves = instance.game_dir().join("saves");
+        assert!(
+            std::fs::read_dir(&saves).map(|d| d.count()).unwrap_or(0) == 0,
+            "nothing was written under {}",
+            saves.display()
+        );
+        let warnings = harness.warnings();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("file-2001.jar") && w.contains("data pack")),
+            "the skipped data pack is named: {warnings:?}"
         );
     }
 
