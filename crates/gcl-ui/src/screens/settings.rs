@@ -138,10 +138,15 @@ fn apply_view(window: &AppWindow, view: &ConfigView) {
     let rows: Vec<SettingRow> = setting_rows(&view.game_defaults.iter().cloned().collect());
     state.set_game_defaults(ModelRc::new(VecModel::from(rows)));
     // Saving a client id here is what turns Microsoft sign-in on, so the other screen's
-    // button is told at the same time rather than waiting for its own reload.
-    window
-        .global::<AccountsState>()
-        .set_msa_available(view.msa_client_id_set);
+    // button, and the hint under it, are told at the same time rather than waiting for its
+    // own reload.
+    let accounts = window.global::<AccountsState>();
+    accounts.set_msa_available(view.msa_client_id_set);
+    accounts.set_msa_hint(if view.msa_client_id_set {
+        "".into()
+    } else {
+        crate::screens::accounts::NO_CLIENT_ID.into()
+    });
 }
 
 /// Points the launcher at another app root. Nothing is moved.

@@ -6,8 +6,7 @@ mod app;
 mod bridge;
 mod events;
 mod keys;
-// The converters land with the screens that use them, in tasks 3 to 7.
-#[allow(dead_code)]
+mod launch_flow;
 mod models;
 mod screens;
 mod state;

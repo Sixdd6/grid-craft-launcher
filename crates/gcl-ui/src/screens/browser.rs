@@ -5,6 +5,7 @@
 //! screen's labels stand for: the source list, the instance list, and whatever a modal is
 //! waiting to finish.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use gcl_core::content::AddRequest;
@@ -51,6 +52,15 @@ struct Pending {
     kind: Option<ContentKind>,
 }
 
+/// What the name prompt is about to install as a new instance.
+#[derive(Clone)]
+enum Pack {
+    /// A project id or slug to fetch from the chosen source.
+    Project(String),
+    /// A `.mrpack` or CurseForge zip already on disk.
+    File(PathBuf),
+}
+
 /// What the screen's indices and its modals stand for.
 ///
 /// The labels in the Slint models carry no ids, so the lists behind them live here. Cloning
@@ -63,8 +73,8 @@ struct Shared {
     targets: Arc<Mutex<Vec<Target>>>,
     /// The project the world chooser is open for, with the kind its row named.
     pending_world: Arc<Mutex<Option<Pending>>>,
-    /// The project the name prompt is open for.
-    pending_pack: Arc<Mutex<Option<String>>>,
+    /// The pack the name prompt is open for, from a source or from disk.
+    pending_pack: Arc<Mutex<Option<Pack>>>,
 }
 
 impl Shared {
@@ -122,16 +132,16 @@ impl Shared {
             .take()
     }
 
-    /// Remembers, or forgets, the project the name prompt is open for.
-    fn set_pending_pack(&self, project: Option<String>) {
+    /// Remembers, or forgets, the pack the name prompt is open for.
+    fn set_pending_pack(&self, project: Option<Pack>) {
         *self
             .pending_pack
             .lock()
             .unwrap_or_else(|err| err.into_inner()) = project;
     }
 
-    /// Takes the project the name prompt was open for.
-    fn take_pending_pack(&self) -> Option<String> {
+    /// Takes the pack the name prompt was open for.
+    fn take_pending_pack(&self) -> Option<Pack> {
         self.pending_pack
             .lock()
             .unwrap_or_else(|err| err.into_inner())
@@ -290,9 +300,30 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
             let Some(window) = bridge.weak().upgrade() else {
                 return;
             };
-            shared.set_pending_pack(Some(project.clone()));
+            shared.set_pending_pack(Some(Pack::Project(project.clone())));
             let state = window.global::<BrowserState>();
             state.set_name_value(project.as_str().into());
+            state.set_name_open(true);
+        });
+    }
+
+    {
+        let bridge = bridge.clone();
+        let shared = shared.clone();
+        state.on_install_pack_file(move |path| {
+            let path = PathBuf::from(path.trim());
+            if path.as_os_str().is_empty() {
+                return;
+            }
+            let Some(window) = bridge.weak().upgrade() else {
+                return;
+            };
+            let state = window.global::<BrowserState>();
+            // The archive's own name is the obvious first name for the instance, and the
+            // prompt lets the user change it before anything is written.
+            let suggested = pack_name(&path);
+            shared.set_pending_pack(Some(Pack::File(path)));
+            state.set_name_value(suggested.as_str().into());
             state.set_name_open(true);
         });
     }
@@ -536,6 +567,10 @@ fn pick_world(bridge: &Bridge, shared: &Shared, project_id: &str, kind: &str) {
 }
 
 /// Imports the modpack the prompt named as a new instance, then opens it.
+///
+/// The pack is either fetched from the chosen source or read off disk, depending on which
+/// button opened the prompt. Everything after the fetch is the same, so both go through one
+/// job and one report.
 fn install_pack(bridge: &Bridge, shared: &Shared, name: &str) {
     let name = name.trim().to_string();
     if name.is_empty() {
@@ -546,12 +581,19 @@ fn install_pack(bridge: &Bridge, shared: &Shared, name: &str) {
     };
     let state = window.global::<BrowserState>();
     state.set_name_open(false);
-    let Some(project) = shared.take_pending_pack() else {
+    let Some(pack) = shared.take_pending_pack() else {
         return;
     };
-    let Some(source) = shared.source_at(state.get_source_index()) else {
-        state.set_status("No content source is enabled".into());
-        return;
+    let source = match &pack {
+        // A file names its own source inside the archive; only a fetch needs one here.
+        Pack::File(_) => None,
+        Pack::Project(_) => match shared.source_at(state.get_source_index()) {
+            Some(source) => Some(source),
+            None => {
+                state.set_status("No content source is enabled".into());
+                return;
+            }
+        },
     };
 
     state.set_loading(true);
@@ -559,19 +601,40 @@ fn install_pack(bridge: &Bridge, shared: &Shared, name: &str) {
     run_reporting(
         bridge,
         "Install modpack",
-        move |launcher| launcher.import_modpack(source, &project, None, Some(name)),
+        move |launcher| match (&pack, source) {
+            (Pack::File(path), _) => launcher.import_modpack_file(path, Some(name)),
+            (Pack::Project(project), Some(source)) => {
+                launcher.import_modpack(source, project, None, Some(name))
+            }
+            // Refused above: a project with no source never reaches the job.
+            (Pack::Project(_), None) => {
+                Err(std::io::Error::other("no content source is enabled").into())
+            }
+        },
         move |window, outcome| {
             let state = window.global::<BrowserState>();
             if !outcome.manual.is_empty() {
                 warn(window, &manual_note(outcome.manual.len()));
             }
             state.set_status(format!("installed {} file(s)", outcome.installed).into());
+            state.set_pack_path("".into());
             // The new instance is what the user asked for, so the shell moves to it.
             let app = window.global::<App>();
             app.set_current_slug(outcome.instance.slug.as_str().into());
             app.set_screen(Screen::Instance);
         },
     );
+}
+
+/// The name an archive suggests for the instance it becomes.
+///
+/// The file stem, with nothing else read: the pack's own manifest names it too, but that is
+/// inside the zip, and this only has to fill a field the user can still change.
+pub fn pack_name(path: &std::path::Path) -> String {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// The content kinds one source can serve, in ComboBox order.
@@ -756,7 +819,7 @@ fn some_text(text: &str) -> Option<String> {
 
 /// Opens the shell's error dialog with a message of our own.
 ///
-/// [`show_error`] needs a `gcl_core::Error`; this is for the cases the browser refuses before
+/// [`crate::bridge::show_error`] needs a `gcl_core::Error`; this is for the cases the browser refuses before
 /// core is ever called, such as a data pack with no world to go into.
 fn error_dialog(window: &AppWindow, title: &str, text: &str) {
     let app = window.global::<App>();

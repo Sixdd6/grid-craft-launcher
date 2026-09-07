@@ -1450,6 +1450,11 @@ fn build_sources(http: &HttpClient, config: &Config, endpoints: &Endpoints) -> V
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PendingRecord {
     source: SourceId,
+    /// Kind the file installs as. A file written before this field existed carries none, and
+    /// reads back as [`ContentKind::Mod`]: every pending download the launcher wrote until
+    /// now came from a mod page.
+    #[serde(default = "default_pending_kind")]
+    kind: ContentKind,
     project_id: String,
     version_id: String,
     file_name: String,
@@ -1467,6 +1472,7 @@ impl From<&ManualDownload> for PendingRecord {
     fn from(pending: &ManualDownload) -> Self {
         PendingRecord {
             source: pending.source,
+            kind: pending.kind,
             project_id: pending.project_id.clone(),
             version_id: pending.version_id.clone(),
             file_name: pending.file_name.clone(),
@@ -1482,6 +1488,7 @@ impl From<PendingRecord> for ManualDownload {
     fn from(record: PendingRecord) -> Self {
         ManualDownload {
             source: record.source,
+            kind: record.kind,
             project_id: record.project_id,
             version_id: record.version_id,
             file_name: record.file_name,
@@ -1491,6 +1498,11 @@ impl From<PendingRecord> for ManualDownload {
             world: record.world,
         }
     }
+}
+
+/// The kind a `pending-manual.json` entry written before the `kind` field gets.
+fn default_pending_kind() -> ContentKind {
+    ContentKind::Mod
 }
 
 /// What makes two pending downloads the same entry.
@@ -1992,6 +2004,7 @@ mod tests {
     fn pending(n: u32) -> ManualDownload {
         ManualDownload {
             source: SourceId::CurseForge,
+            kind: ContentKind::Mod,
             project_id: format!("project-{n}"),
             version_id: format!("version-{n}"),
             file_name: format!("mod-{n}.jar"),
@@ -2037,6 +2050,38 @@ mod tests {
             read_pending(&path).expect("read"),
             vec![pending(1), pending(3)]
         );
+    }
+
+    #[test]
+    fn the_pending_kind_round_trips_through_the_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(PENDING_MANUAL_FILE);
+        let mut pack = pending(1);
+        pack.kind = ContentKind::ResourcePack;
+        let mut data = pending(2);
+        data.kind = ContentKind::DataPack;
+        append_pending(&path, &[pack.clone(), data.clone()]).expect("append");
+
+        let read = read_pending(&path).expect("read");
+        assert_eq!(read, vec![pack, data]);
+        assert_eq!(read[0].kind, ContentKind::ResourcePack);
+        assert_eq!(read[1].kind, ContentKind::DataPack);
+    }
+
+    #[test]
+    fn a_pending_file_written_before_the_kind_field_reads_as_a_mod() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(PENDING_MANUAL_FILE);
+        std::fs::write(
+            &path,
+            r#"[{"source":"curseforge","project_id":"p1","version_id":"v1",
+                 "file_name":"old.jar","page_url":"https://example.invalid/1"}]"#,
+        )
+        .expect("write");
+
+        let read = read_pending(&path).expect("read");
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].kind, ContentKind::Mod, "old files carry no kind");
     }
 
     #[test]

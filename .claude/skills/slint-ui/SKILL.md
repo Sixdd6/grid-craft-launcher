@@ -21,6 +21,7 @@ crates/gcl-ui/
   src/app.rs                   builds AppWindow, wires App/Shell callbacks, starts the forwarder
   src/bridge.rs                Bridge: runs a Launcher call off the UI thread
   src/events.rs                forwarder thread: batches core Events onto the UI thread
+  src/launch_flow.rs           the one launch path: running flag, log tail, offline prompt
   src/state.rs                 RunState: which slugs have a game running
   src/keys.rs                  pure keyboard rules
   src/toasts.rs                the toast queue
@@ -99,6 +100,24 @@ piece of shared state that lives outside a `*State` global: an `Arc<Mutex<HashSe
 running slugs, so the instances list and the detail screen agree on "Running" regardless of which
 one started the launch.
 
+## Launching
+
+`launch_flow::launch(bridge, run, slug, offline_user)` is the only way either screen starts a
+game; neither keeps a copy. It marks the slug running in `RunState` and on both screens, calls
+`launch_instance_async` on a thread, tails the game's log file into `InstanceState.game_log`
+while the detail screen shows that slug, and at the end clears the running flag, posts the
+outcome (a status line, plus a warning toast carrying the hint when the exit code is not zero),
+refreshes `InstancesState.rows`, and reloads the detail screen. A launch that comes back
+`auth::Error::NoAccount` is the one failure that does not open the error dialog: the shell
+navigates to the detail screen and opens its prompt for an offline name, then calls back into
+`launch` with it. The instances list opens that screen before launching for the same reason —
+the prompt and the log view both belong to it.
+
+`InstanceState`'s prompt is shared: `prompt_mode` is `"offline"` for that name and `"rename"`
+for the detail header's Rename button, which prefills the current name and, on accept, calls
+`instances().rename(slug, new_name)` in a job. The slug never changes, so only the header and
+the list row have to be reloaded.
+
 ## Keyboard
 
 A focused element sees a key first; the `FocusScope` in `app.slint` only gets what bubbles up, and
@@ -149,9 +168,12 @@ previewing, and describe what you saw in your report — the tool has no snapsho
 - **No clipboard**: Slint 1.17 has no clipboard call reachable from a button here. Anywhere a user
   might want to copy text (the error dialog's body, for one) uses a read-only, selectable
   `TextEdit` instead — Ctrl+C on a selection is the whole copy story.
-- **Modpack discovery is install-by-id**: the browser installs a modpack once its source and
-  project id are known; there is no in-app modpack *search* flow, because `gcl-core` has no
-  modpack search endpoint, only project lookup and install.
+- **Modpack discovery is install-by-id or by path**: the browser installs a modpack once its
+  source and project id are known, and its "From file" row imports a `.mrpack` or CurseForge
+  zip already on disk (`import_modpack_file`). There is no in-app modpack *search* flow,
+  because `gcl-core` has no modpack search endpoint, only project lookup and install. There is
+  no file picker either: the path is typed into a `LineEdit`, the same way a hand-downloaded
+  file is named on the detail screen.
 - **`stop()` is disabled**: `InstanceState.stop` exists so the button has a place to grow into, but
   it is a no-op that only reports why — `gcl-core` has no way to kill a running launch.
 - **Verified by compile, not by hand**: keyboard routing is exercised through unit tests on the

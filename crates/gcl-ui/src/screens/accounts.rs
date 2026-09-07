@@ -25,7 +25,10 @@ use crate::models::account_row;
 use crate::{AccountRow, AccountsState, AppWindow};
 
 /// Shown next to the disabled sign-in button when no Microsoft client id is configured.
-const NO_CLIENT_ID: &str = "Microsoft sign-in is off: set a client id in Settings, or \
+///
+/// The settings screen writes it too: saving a client id there is what turns sign-in on, so
+/// both screens say the same thing about why it is off.
+pub const NO_CLIENT_ID: &str = "Microsoft sign-in is off: set a client id in Settings, or \
                             GCL_MSA_CLIENT_ID";
 
 /// The token that cancels the sign-in on screen, and the account a remove is waiting on.

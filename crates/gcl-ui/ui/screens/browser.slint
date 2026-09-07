@@ -88,6 +88,8 @@ export global BrowserState {
     // One line about the last thing that happened here.
     in-out property <string> status: "2 result(s)";
 
+    // Path typed into the modpack panel's "From file" field.
+    in-out property <string> pack_path: "";
     // Whether the new-instance name prompt is up, for a modpack install.
     in-out property <bool> name_open: false;
     // What the user typed into it.
@@ -113,6 +115,8 @@ export global BrowserState {
     callback add(string /* project_id */, string /* kind */);
     // A modpack is to be installed as a new instance. Carries the project id or slug.
     callback install_pack(string /* project_id */);
+    // A modpack archive on disk is to be imported as a new instance. Carries its path.
+    callback install_pack_file(string /* path */);
     // The source ComboBox changed. Carries its new index.
     callback set_source(int);
     // The kind ComboBox changed. Carries its new index.
@@ -360,6 +364,44 @@ export component BrowserScreen inherits Rectangle {
                         clicked => {
                             BrowserState.install_pack(BrowserState.query);
                         }
+                    }
+                }
+
+                Text {
+                    text: "Or import a .mrpack or CurseForge zip you already have.";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    spacing: Theme.gap;
+                    height: Theme.row-height;
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    LineEdit {
+                        placeholder-text: "Path to the modpack archive";
+                        text <=> BrowserState.pack_path;
+                        width: 360px;
+                        accepted(path) => {
+                            BrowserState.install_pack_file(path);
+                        }
+                    }
+
+                    Button {
+                        text: "Install from file";
+                        enabled: BrowserState.pack_path != "" && !BrowserState.loading;
+                        clicked => {
+                            BrowserState.install_pack_file(BrowserState.pack_path);
+                        }
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
                     }
                 }
             }

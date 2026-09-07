@@ -231,6 +231,96 @@ fn content_search_of_an_unknown_source_exits_one() {
         .stderr(predicates::str::contains("unknown source"));
 }
 
+/// Writes a pending hand-download of `kind` for `slug`, as `content add` would have.
+///
+/// No fingerprint and no sha1, so the import has nothing to check the bytes against and
+/// accepts whatever file it is given: this test is about the kind, not the verification.
+fn write_pending(root: &Path, slug: &str, file_name: &str, kind: &str) {
+    let dir = root.join("instances").join(slug);
+    let record = serde_json::json!([{
+        "source": "curseforge",
+        "kind": kind,
+        "project_id": "p1",
+        "version_id": "v1",
+        "file_name": file_name,
+        "page_url": "https://example.invalid/p1",
+    }]);
+    std::fs::write(
+        dir.join("pending-manual.json"),
+        serde_json::to_vec_pretty(&record).expect("json"),
+    )
+    .expect("write pending-manual.json");
+}
+
+#[test]
+fn content_pending_names_the_kind_of_each_download() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    create_instance(dir.path(), "http://modrinth.invalid", "demo");
+    write_pending(dir.path(), "demo", "look.zip", "resourcepack");
+    gcl(dir.path(), "http://modrinth.invalid")
+        .args(["content", "pending", "demo"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("look.zip (resourcepack)"));
+}
+
+#[test]
+fn content_import_file_without_a_kind_uses_the_one_the_pending_entry_carries() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    create_instance(dir.path(), "http://modrinth.invalid", "demo");
+    write_pending(dir.path(), "demo", "look.zip", "resourcepack");
+    let zip = dir.path().join("look.zip");
+    std::fs::write(&zip, b"hand downloaded").expect("write zip");
+
+    gcl(dir.path(), "http://modrinth.invalid")
+        .args(["content", "import-file", "demo"])
+        .arg(&zip)
+        .assert()
+        .success();
+
+    let out = gcl(dir.path(), "http://modrinth.invalid")
+        .args(["--json", "content", "list", "demo"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("stdout is json");
+    assert_eq!(parsed[0]["kind"], "resourcepack", "{parsed}");
+    // The file landed where a resource pack belongs, not in `mods/`.
+    assert!(
+        dir.path()
+            .join("instances/demo/.minecraft/resourcepacks/look.zip")
+            .is_file()
+    );
+}
+
+#[test]
+fn content_import_file_lets_the_kind_flag_win() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    create_instance(dir.path(), "http://modrinth.invalid", "demo");
+    write_pending(dir.path(), "demo", "look.zip", "resourcepack");
+    let zip = dir.path().join("look.zip");
+    std::fs::write(&zip, b"hand downloaded").expect("write zip");
+
+    gcl(dir.path(), "http://modrinth.invalid")
+        .args(["content", "import-file", "demo"])
+        .arg(&zip)
+        .args(["--kind", "shader"])
+        .assert()
+        .success();
+
+    let out = gcl(dir.path(), "http://modrinth.invalid")
+        .args(["--json", "content", "list", "demo"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("stdout is json");
+    assert_eq!(parsed[0]["kind"], "shader", "{parsed}");
+}
+
 #[test]
 fn content_import_file_without_a_pending_download_exits_one() {
     let dir = tempfile::tempdir().expect("tempdir");

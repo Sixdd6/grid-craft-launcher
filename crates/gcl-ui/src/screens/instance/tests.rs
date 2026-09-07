@@ -4,7 +4,7 @@ use gcl_core::content::{ManualDownload, UpdateCandidate};
 use gcl_core::instances::model::{ContentEntry, ContentKind};
 use gcl_core::sources::{ReleaseKind, SourceId, Version};
 
-use super::{content_rows, instance_jvm, jvm_valid, pending_kind, tail_new_lines};
+use super::{content_rows, instance_jvm, jvm_valid, pending_rows};
 
 /// An installed entry with only the fields these helpers read.
 fn entry(project_id: &str, file_name: &str) -> ContentEntry {
@@ -35,17 +35,18 @@ fn candidate(entry: ContentEntry) -> UpdateCandidate {
     UpdateCandidate { entry, new }
 }
 
-/// A pending manual download with the two fields the kind is guessed from.
-fn pending(file_name: &str, world: Option<&str>) -> ManualDownload {
+/// A pending manual download, with the kind the add that produced it resolved.
+fn pending(file_name: &str, kind: ContentKind) -> ManualDownload {
     ManualDownload {
         source: SourceId::CurseForge,
+        kind,
         project_id: "p1".to_string(),
         version_id: "v1".to_string(),
         file_name: file_name.to_string(),
         page_url: "https://example.invalid/file".to_string(),
         fingerprint: None,
         sha1: None,
-        world: world.map(str::to_string),
+        world: None,
     }
 }
 
@@ -85,40 +86,6 @@ fn instance_jvm_splits_the_arguments_and_drops_an_empty_java_path() {
 }
 
 #[test]
-fn tail_new_lines_returns_only_whole_lines() {
-    let (lines, read) = tail_new_lines(0, "one\ntwo\nthr");
-    assert_eq!(lines, vec!["one".to_string(), "two".to_string()]);
-    assert_eq!(read, 8, "the partial third line is left for the next call");
-
-    let (lines, read) = tail_new_lines(read, "one\ntwo\nthree\n");
-    assert_eq!(lines, vec!["three".to_string()]);
-    assert_eq!(read, 14);
-
-    let (lines, read) = tail_new_lines(read, "one\ntwo\nthree\n");
-    assert!(lines.is_empty(), "nothing was appended");
-    assert_eq!(read, 14);
-}
-
-#[test]
-fn tail_new_lines_strips_carriage_returns_and_restarts_on_a_truncated_file() {
-    let (lines, _) = tail_new_lines(0, "one\r\ntwo\r\n");
-    assert_eq!(lines, vec!["one".to_string(), "two".to_string()]);
-
-    // The file was replaced by a shorter one, so the offset no longer means anything.
-    let (lines, read) = tail_new_lines(500, "fresh\n");
-    assert_eq!(lines, vec!["fresh".to_string()]);
-    assert_eq!(read, 6);
-}
-
-#[test]
-fn tail_new_lines_reads_from_the_start_when_the_offset_splits_a_character() {
-    // "é" is two bytes, so an offset of 1 is inside it.
-    let (lines, read) = tail_new_lines(1, "é\n");
-    assert_eq!(lines, vec!["é".to_string()]);
-    assert_eq!(read, 3);
-}
-
-#[test]
 fn content_rows_marks_only_the_entries_a_candidate_names() {
     let entries = vec![
         entry("sodium", "sodium-0.5.8.jar"),
@@ -143,16 +110,12 @@ fn content_rows_marks_nothing_without_candidates() {
 }
 
 #[test]
-fn pending_kind_reads_the_kind_off_the_pending_entry() {
-    assert_eq!(pending_kind(&pending("mod.jar", None)), ContentKind::Mod);
-    assert_eq!(pending_kind(&pending("MOD.JAR", None)), ContentKind::Mod);
-    assert_eq!(
-        pending_kind(&pending("pack.zip", None)),
-        ContentKind::ResourcePack
-    );
-    assert_eq!(
-        pending_kind(&pending("pack.zip", Some("New World"))),
-        ContentKind::DataPack,
-        "a named world makes it a data pack"
-    );
+fn pending_rows_carry_the_kind_the_entry_records() {
+    let rows = pending_rows(&[
+        pending("mod.jar", ContentKind::Mod),
+        pending("pack.zip", ContentKind::ResourcePack),
+        pending("data.zip", ContentKind::DataPack),
+    ]);
+    let kinds: Vec<&str> = rows.iter().map(|row| row.kind.as_str()).collect();
+    assert_eq!(kinds, vec!["mod", "resourcepack", "datapack"]);
 }

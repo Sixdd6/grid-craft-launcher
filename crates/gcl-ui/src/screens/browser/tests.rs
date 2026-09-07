@@ -2,8 +2,8 @@ use gcl_core::instances::model::{ContentKind, Loader};
 use gcl_core::sources::SourceId;
 
 use super::{
-    add_request, clamp_index, kinds_for, manual_note, needs_world, page_bounds, parse_loader,
-    result_status, source_status,
+    add_request, clamp_index, kinds_for, manual_note, needs_world, pack_name, page_bounds,
+    parse_loader, result_status, source_status,
 };
 
 #[test]
@@ -165,4 +165,21 @@ fn a_datapack_row_keeps_its_kind_in_the_request() {
     );
     assert_eq!(request.kind, Some(ContentKind::DataPack));
     assert_eq!(request.world.as_deref(), Some("New World"));
+}
+
+#[test]
+fn pack_name_suggests_the_archives_own_name() {
+    assert_eq!(
+        pack_name(std::path::Path::new(
+            "/home/steve/Fabulously Optimized.mrpack"
+        )),
+        "Fabulously Optimized"
+    );
+    assert_eq!(pack_name(std::path::Path::new("packs/atm9.zip")), "atm9");
+    assert_eq!(
+        pack_name(std::path::Path::new("/tmp/")),
+        "tmp",
+        "a directory still names itself"
+    );
+    assert_eq!(pack_name(std::path::Path::new("")), "");
 }

@@ -779,6 +779,7 @@ async fn check_updates_skips_an_entry_whose_source_is_missing() {
 fn pending_for(bytes: &[u8]) -> ManualDownload {
     ManualDownload {
         source: SourceId::CurseForge,
+        kind: ContentKind::Mod,
         project_id: "gated".to_string(),
         version_id: "gv1".to_string(),
         file_name: "gated.jar".to_string(),

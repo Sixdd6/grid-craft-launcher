@@ -59,6 +59,10 @@ impl Bridge {
     /// [`Bridge::run`] drops `done` when the job fails, which leaves a screen that set a
     /// "loading" flag stuck on it. Here `done` always runs, so every path can clear that
     /// flag, and the error dialog still opens with `label` as its title before it does.
+    ///
+    /// A job that panics is the one exception: the worker thread dies without sending a
+    /// result, so the call takes the generic "the background job ended without a result"
+    /// error path and `done` is not called at all. Do not panic in a job; return an error.
     pub fn run_with_error<T: Send + 'static>(
         &self,
         label: &'static str,

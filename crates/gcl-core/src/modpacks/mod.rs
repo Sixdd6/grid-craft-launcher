@@ -505,6 +505,7 @@ async fn install_curseforge_files(
             ));
             manual.push(ManualDownload {
                 source: SourceId::CurseForge,
+                kind,
                 project_id: version.project_id.clone(),
                 version_id: version.id.clone(),
                 file_name: file.file_name.clone(),

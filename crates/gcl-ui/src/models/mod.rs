@@ -116,12 +116,15 @@ pub fn version_row(e: &ManifestEntry) -> VersionRow {
 }
 
 /// Builds the row for one download the user has to fetch by hand.
-pub fn pending_row(m: &ManualDownload, kind: &str) -> PendingRow {
+///
+/// The kind comes off the pending entry itself: it is the kind the add resolved, and the
+/// same one the import will install as.
+pub fn pending_row(m: &ManualDownload) -> PendingRow {
     PendingRow {
         project_id: m.project_id.as_str().into(),
         file_name: m.file_name.as_str().into(),
         page_url: m.page_url.as_str().into(),
-        kind: kind.into(),
+        kind: m.kind.to_string().into(),
     }
 }
 

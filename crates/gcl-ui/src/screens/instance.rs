@@ -1,25 +1,22 @@
 //! Wires the instance detail screen: header, content, settings, JVM, and the game log.
 //!
-//! Every call into `gcl-core` runs off the UI thread, through [`Bridge`] or through the two
-//! threads a launch owns: one waits for the game, one tails its log file. The screen itself
-//! is pure layout; this module owns the `InstanceState` global that feeds it.
+//! Every call into `gcl-core` runs off the UI thread, through [`Bridge`] or, for a launch,
+//! through [`crate::launch_flow`], which both this screen and the instances list share. The
+//! screen itself is pure layout; this module owns the `InstanceState` global that feeds it.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use gcl_core::content::{ManualDownload, UpdateCandidate};
-use gcl_core::instances::model::{ContentEntry, ContentKind, InstanceJvm};
-use gcl_core::launcher::LaunchOutcome;
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
+use gcl_core::instances::model::{ContentEntry, InstanceJvm};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use crate::bridge::{Bridge, show_error, warn};
+use crate::bridge::Bridge;
+use crate::launch_flow;
 use crate::models::{content_row, pending_row, setting_rows};
 use crate::state::RunState;
 use crate::{
-    App, AppWindow, BrowserState, ContentRow, InstanceState, LogLine, PendingRow, Screen,
-    SettingRow,
+    App, AppWindow, BrowserState, ContentRow, InstanceState, PendingRow, Screen, SettingRow,
 };
 
 /// Smallest heap the JVM tab offers, in MiB. Matches the `SpinBox` bounds in the screen.
@@ -32,11 +29,8 @@ const HEAP_MAX_MIB: i32 = 65536;
 /// `config.toml`, so this is only what the tab offers before the user saves anything.
 const DEFAULT_MAX_MIB: i32 = 2048;
 
-/// How often the log tail re-reads the running game's log file.
-const TAIL_INTERVAL: Duration = Duration::from_millis(250);
-
-/// Most game log lines kept in the model. Older lines are dropped from the front.
-const GAME_LOG_LIMIT: usize = 2000;
+/// What the prompt is for when it is asking for a new instance name.
+const PROMPT_RENAME: &str = "rename";
 
 /// What one loaded instance put on the screen, so the callbacks can look things up again.
 ///
@@ -376,12 +370,28 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState) {
     {
         let bridge = bridge.clone();
         let run = run.clone();
-        let shared = shared.clone();
         state.on_launch(move || {
             let Some(slug) = shown_slug(&bridge) else {
                 return;
             };
-            launch(&bridge, &run, &shared, &slug, None);
+            launch_flow::launch(&bridge, &run, slug, None);
+        });
+    }
+
+    {
+        let bridge = bridge.clone();
+        state.on_rename(move || {
+            let Some(window) = bridge.weak().upgrade() else {
+                return;
+            };
+            let state = window.global::<InstanceState>();
+            state.set_prompt_mode(PROMPT_RENAME.into());
+            state.set_prompt_title("Rename instance".into());
+            state.set_prompt_label("Instance name".into());
+            state.set_prompt_accept("Rename".into());
+            // Prefilled with the name it has: a rename is usually an edit, not a retype.
+            state.set_prompt_value(state.get_name());
+            state.set_prompt_open(true);
         });
     }
 
@@ -399,10 +409,15 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState) {
             };
             let state = window.global::<InstanceState>();
             state.set_prompt_open(false);
+            let mode = state.get_prompt_mode().to_string();
             let Some(slug) = shown_slug(&bridge) else {
                 return;
             };
-            launch(&bridge, &run, &shared, &slug, Some(name));
+            if mode == PROMPT_RENAME {
+                rename(&bridge, &run, &shared, &slug, &name);
+            } else {
+                launch_flow::launch(&bridge, &run, slug, Some(name));
+            }
         });
     }
 
@@ -412,10 +427,36 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState) {
             if let Some(window) = weak.upgrade() {
                 let state = window.global::<InstanceState>();
                 state.set_prompt_open(false);
-                state.set_status_text("Launch cancelled: no account".into());
+                let cancelled = if state.get_prompt_mode() == PROMPT_RENAME {
+                    "Rename cancelled"
+                } else {
+                    "Launch cancelled: no account"
+                };
+                state.set_status_text(cancelled.into());
             }
         });
     }
+}
+
+/// Renames the instance, then reloads its header and the instances list.
+///
+/// The slug never changes, so nothing else on the screen has to be told: the name in the
+/// header and the row in the list are the only two places it shows.
+fn rename(bridge: &Bridge, run: &RunState, shared: &Shared, slug: &str, name: &str) {
+    let (job_slug, new_name) = (slug.to_string(), name.to_string());
+    let slug = slug.to_string();
+    let after = (bridge.clone(), run.clone(), shared.clone());
+    status(bridge, "Renaming\u{2026}");
+    bridge.run(
+        "Rename instance",
+        move |launcher| Ok(launcher.instances().rename(&job_slug, &new_name)?),
+        move |window, _instance| {
+            let (bridge, run, shared) = after;
+            status(&bridge, "Renamed");
+            load(&bridge, &run, &shared, &slug);
+            window.global::<crate::InstancesState>().invoke_refresh();
+        },
+    );
 }
 
 /// Everything one load reads off disk, as the UI-thread half of the load then shows it.
@@ -490,7 +531,8 @@ fn import_manual(bridge: &Bridge, run: &RunState, shared: &Shared, project_id: &
         status(bridge, "That download is no longer pending");
         return;
     };
-    let kind = pending_kind(&pending);
+    // The pending entry records the kind the add resolved, so the import uses it as-is.
+    let kind = pending.kind;
     let (job_slug, file) = (slug.clone(), path.to_path_buf());
     let after = (bridge.clone(), run.clone(), shared.clone());
     status(bridge, "Importing…");
@@ -507,159 +549,6 @@ fn import_manual(bridge: &Bridge, run: &RunState, shared: &Shared, project_id: &
             load(&bridge, &run, &shared, &slug);
         },
     );
-}
-
-/// Starts the game and follows it: one thread waits for it, one tails its log.
-///
-/// `offline_user` is the name typed into the prompt, and is `None` for the first attempt: a
-/// launch with no account comes back as [`gcl_core::auth::Error::NoAccount`], and that is what
-/// opens the prompt.
-fn launch(
-    bridge: &Bridge,
-    run: &RunState,
-    shared: &Shared,
-    slug: &str,
-    offline_user: Option<String>,
-) {
-    if !run.start(slug) {
-        return;
-    }
-    if let Some(window) = bridge.weak().upgrade() {
-        let state = window.global::<InstanceState>();
-        state.set_running(true);
-        state.set_status_text("Starting…".into());
-        state.set_game_log(ModelRc::new(VecModel::from(Vec::<LogLine>::new())));
-    }
-
-    let slug = slug.to_string();
-    let launcher = Arc::clone(bridge.launcher());
-    let weak = bridge.weak().clone();
-    let bridge = bridge.clone();
-    let run = run.clone();
-    let shared = shared.clone();
-    std::thread::spawn(move || {
-        let started = launcher.launch_instance_async(&slug, None, offline_user.as_deref());
-        let outcome = match started {
-            Ok(running) => {
-                let stop = Arc::new(AtomicBool::new(false));
-                let tail = start_tail(weak.clone(), running.log_path.clone(), Arc::clone(&stop));
-                let outcome = running.wait_blocking(&launcher);
-                stop.store(true, Ordering::Relaxed);
-                let _ = tail.join();
-                outcome
-            }
-            Err(err) => Err(err),
-        };
-        run.finish(&slug);
-        finish_launch(&weak, &bridge, &run, &shared, &slug, outcome);
-    });
-}
-
-/// Reports what the game did and reloads the screen. Runs on the launch thread.
-fn finish_launch(
-    weak: &Weak<AppWindow>,
-    bridge: &Bridge,
-    run: &RunState,
-    shared: &Shared,
-    slug: &str,
-    outcome: Result<LaunchOutcome, gcl_core::Error>,
-) {
-    let (bridge, run, shared) = (bridge.clone(), run.clone(), shared.clone());
-    let slug = slug.to_string();
-    let _ = weak.upgrade_in_event_loop(move |window| {
-        let state = window.global::<InstanceState>();
-        state.set_running(false);
-        match outcome {
-            Ok(LaunchOutcome::Exited { code, hint, .. }) if code != 0 => {
-                let hint = hint.unwrap_or_else(|| "see the instance log".to_string());
-                let text = format!("Minecraft exited with code {code}: {hint}");
-                state.set_status_text(text.as_str().into());
-                warn(&window, &text);
-            }
-            Ok(_) => state.set_status_text("Minecraft exited".into()),
-            Err(err) if is_no_account(&err) => {
-                // The prompt is the answer to this error, so it replaces the error dialog.
-                state.set_status_text("No account: choose an offline name".into());
-                state.set_prompt_title("Play offline".into());
-                state.set_prompt_label("Player name".into());
-                state.set_prompt_open(true);
-            }
-            Err(err) => {
-                state.set_status_text("Launch failed".into());
-                show_error(&window, "Launch", &err);
-            }
-        }
-        load(&bridge, &run, &shared, &slug);
-    });
-}
-
-/// Starts the thread that copies new lines of the game's log into the screen.
-///
-/// The game writes both of its output streams to one file, so tailing that file is how the
-/// UI sees the game without core growing a second event kind.
-fn start_tail(
-    weak: Weak<AppWindow>,
-    path: PathBuf,
-    stop: Arc<AtomicBool>,
-) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
-        let mut read = 0usize;
-        loop {
-            if let Ok(contents) = std::fs::read_to_string(&path) {
-                let (lines, next) = tail_new_lines(read, &contents);
-                read = next;
-                if !lines.is_empty()
-                    && weak
-                        .upgrade_in_event_loop(move |window| append_game_log(&window, &lines))
-                        .is_err()
-                {
-                    return;
-                }
-            }
-            // Checked after the read, so the last lines of a finished game still land.
-            if stop.load(Ordering::Relaxed) {
-                return;
-            }
-            std::thread::sleep(TAIL_INTERVAL);
-        }
-    })
-}
-
-/// Appends log lines, dropping the oldest once the model is full. Runs on the UI thread.
-fn append_game_log(window: &AppWindow, lines: &[String]) {
-    let state = window.global::<InstanceState>();
-    let mut log: Vec<LogLine> = state.get_game_log().iter().collect();
-    log.extend(lines.iter().map(|text| LogLine {
-        level: "info".into(),
-        text: text.as_str().into(),
-    }));
-    if log.len() > GAME_LOG_LIMIT {
-        log.drain(..log.len() - GAME_LOG_LIMIT);
-    }
-    state.set_game_log(ModelRc::new(VecModel::from(log)));
-}
-
-/// The complete lines `contents` grew since `prev_len` bytes, and the new byte count.
-///
-/// A partial last line is left for the next call, so a line is only shown once it is whole. A
-/// file that shrank, or an offset that is not a character boundary, is read again from the
-/// start: a truncated log is rare, and re-reading it is better than losing it.
-pub fn tail_new_lines(prev_len: usize, contents: &str) -> (Vec<String>, usize) {
-    let from = if prev_len <= contents.len() && contents.is_char_boundary(prev_len) {
-        prev_len
-    } else {
-        0
-    };
-    let fresh = &contents[from..];
-    let complete = match fresh.rfind('\n') {
-        Some(at) => at + 1,
-        None => return (Vec::new(), from),
-    };
-    let lines = fresh[..complete]
-        .lines()
-        .map(|line| line.trim_end_matches('\r').to_string())
-        .collect();
-    (lines, from + complete)
 }
 
 /// Whether a heap range can be saved: both bounds in range, and the minimum not above the
@@ -681,22 +570,6 @@ pub fn content_rows(entries: &[ContentEntry], candidates: &[UpdateCandidate]) ->
             content_row(entry, update)
         })
         .collect()
-}
-
-/// What kind of content a hand download is, as far as the pending entry says.
-///
-/// The pending list does not record the kind, so it is read back off the entry: a data pack
-/// names the world it belongs to, and a jar is a mod. Anything else is treated as a resource
-/// pack, which is where a loose zip belongs. `content import --kind` in the CLI has the full
-/// choice for the cases this guesses wrong.
-pub fn pending_kind(pending: &ManualDownload) -> ContentKind {
-    if pending.world.is_some() {
-        ContentKind::DataPack
-    } else if pending.file_name.to_lowercase().ends_with(".jar") {
-        ContentKind::Mod
-    } else {
-        ContentKind::ResourcePack
-    }
 }
 
 /// Builds the JVM overrides from the four fields of the JVM tab.
@@ -729,10 +602,7 @@ pub fn loader_label(instance: &gcl_core::instances::Instance) -> String {
 
 /// Builds the pending rows, each labelled with the kind its import will use.
 fn pending_rows(pending: &[ManualDownload]) -> Vec<PendingRow> {
-    pending
-        .iter()
-        .map(|item| pending_row(item, &pending_kind(item).to_string()))
-        .collect()
+    pending.iter().map(pending_row).collect()
 }
 
 /// Builds the read-only rows for the pairs `options.txt` holds.
@@ -782,11 +652,6 @@ fn status(bridge: &Bridge, text: &str) {
             .global::<InstanceState>()
             .set_status_text(text.into());
     }
-}
-
-/// Whether a launch failed only because no account is selected.
-fn is_no_account(err: &gcl_core::Error) -> bool {
-    matches!(err, gcl_core::Error::Auth(gcl_core::auth::Error::NoAccount))
 }
 
 #[cfg(test)]

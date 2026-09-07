@@ -102,12 +102,18 @@ export global InstanceState {
     // How many installed files have a newer version at their source.
     in-out property <int> update_count: 1;
 
-    // The offline-name prompt, shown when a launch found no account.
+    // The one-field prompt this screen owns, shown when a launch found no account and when
+    // the instance is renamed.
     in-out property <bool> prompt_open: false;
+    // What the open prompt is for: "offline" for the launch name, "rename" for the new name.
+    // `src/screens/instance.rs` reads it back to decide what an accepted prompt does.
+    in-out property <string> prompt_mode: "offline";
     // Headline of that prompt.
     in-out property <string> prompt_title: "Play offline";
     // Label above its field.
     in-out property <string> prompt_label: "Player name";
+    // Label of its accepting button.
+    in-out property <string> prompt_accept: "Launch";
     // What the user typed into it.
     in-out property <string> prompt_value: "";
 
@@ -122,6 +128,8 @@ export global InstanceState {
     callback install();
     // Go back to the instance list.
     callback back();
+    // Rename this instance: open the prompt with the current name in it.
+    callback rename();
     // A tab was picked. Carries its index.
     callback set_tab(int);
     // A row's Enable/Disable button was pressed. Carries the project id and the new state.
@@ -144,9 +152,9 @@ export global InstanceState {
     callback jvm_save(int /* min */, int /* max */, string /* extra */, string /* java_path */);
     // Report where this instance's logs are written.
     callback open_log_folder();
-    // The offline-name prompt was accepted. Carries the name typed.
+    // The prompt was accepted. Carries the name typed; `prompt_mode` says what it is for.
     callback prompt_ok(string);
-    // The offline-name prompt was dismissed.
+    // The prompt was dismissed.
     callback prompt_cancel();
 }
 

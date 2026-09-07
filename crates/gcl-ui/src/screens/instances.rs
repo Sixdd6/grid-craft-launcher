@@ -1,16 +1,14 @@
 //! Wires the instances screen: list, filter, create, delete, and launch.
 //!
-//! Every call into `gcl-core` runs off the UI thread, through [`Bridge`] or through the one
-//! thread a launch owns. The screen itself is pure layout; this module owns the `InstancesState`
-//! global that feeds it.
-
-use std::sync::Arc;
+//! Every call into `gcl-core` runs off the UI thread, through [`Bridge`] or, for a launch,
+//! through [`crate::launch_flow`], which this screen shares with the detail screen. The screen
+//! itself is pure layout; this module owns the `InstancesState` global that feeds it.
 
 use gcl_core::instances::model::Loader;
-use gcl_core::launcher::LaunchOutcome;
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use crate::bridge::{Bridge, show_error, warn};
+use crate::bridge::{Bridge, show_error};
+use crate::launch_flow;
 use crate::models::{instance_row, loader_version_row, version_row};
 use crate::state::RunState;
 use crate::{App, AppWindow, InstanceRow, InstancesState, Screen};
@@ -417,8 +415,9 @@ fn confirm_delete(bridge: &Bridge, running: &RunState) {
 
 /// Shows the instance's detail screen and starts its game.
 ///
-/// The launch runs on a thread of its own: `launch_instance_async` returns once the process
-/// is up, and the same thread then blocks on the game and posts the outcome back.
+/// The detail screen is opened first, so the log tail has somewhere to write and the
+/// offline-name prompt — which that screen owns — has somewhere to open. The launch itself is
+/// [`launch_flow::launch`], the one path both screens use.
 fn launch(bridge: &Bridge, running: &RunState, slug: &str) {
     let Some(window) = bridge.weak().upgrade() else {
         return;
@@ -426,86 +425,7 @@ fn launch(bridge: &Bridge, running: &RunState, slug: &str) {
     let app = window.global::<App>();
     app.set_current_slug(slug.into());
     app.set_screen(Screen::Instance);
-
-    // A slug already in the set has a game up; the button is disabled, but a stale row could
-    // still send this.
-    if !running.start(slug) {
-        return;
-    }
-    mark_running(&window, running);
-
-    let slug = slug.to_string();
-    let launcher = Arc::clone(bridge.launcher());
-    let weak = bridge.weak().clone();
-    let bridge = bridge.clone();
-    let running = running.clone();
-    std::thread::spawn(move || {
-        let started = launcher.launch_instance_async(&slug, None, None);
-        let outcome = match started {
-            Ok(launch) => launch.wait_blocking(&launcher),
-            Err(err) => Err(err),
-        };
-        finish_launch(&weak, &bridge, &running, &slug, outcome);
-    });
-}
-
-/// Clears the running flag and reports what the game did. Runs on the launch thread.
-fn finish_launch(
-    weak: &Weak<AppWindow>,
-    bridge: &Bridge,
-    running: &RunState,
-    slug: &str,
-    outcome: Result<LaunchOutcome, gcl_core::Error>,
-) {
-    running.finish(slug);
-    let bridge = bridge.clone();
-    let running = running.clone();
-    let _ = weak.upgrade_in_event_loop(move |window| {
-        match outcome {
-            Ok(LaunchOutcome::Exited { code, hint, .. }) if code != 0 => {
-                let hint = hint.unwrap_or_else(|| "see the instance log".to_string());
-                warn(
-                    &window,
-                    &format!("Minecraft exited with code {code}: {hint}"),
-                );
-            }
-            Ok(_) => {}
-            Err(err) if is_no_account(&err) => {
-                let app = window.global::<App>();
-                app.set_error_title("No account".into());
-                app.set_error_text(
-                    "Launching needs an account. Add one on the Accounts screen, or set an \
-                     offline user name there."
-                        .into(),
-                );
-                app.set_error_open(true);
-            }
-            Err(err) => show_error(&window, "Launch", &err),
-        }
-        // The last-launched stamp and the running flag both changed.
-        load(&bridge, &running);
-    });
-}
-
-/// Whether a launch failed only because no account is selected.
-fn is_no_account(err: &gcl_core::Error) -> bool {
-    matches!(err, gcl_core::Error::Auth(gcl_core::auth::Error::NoAccount))
-}
-
-/// Rewrites the `running` flag on every row from the live set.
-fn mark_running(window: &AppWindow, running: &RunState) {
-    let live = running.snapshot();
-    let state = window.global::<InstancesState>();
-    let rows: Vec<InstanceRow> = state
-        .get_all_rows()
-        .iter()
-        .map(|mut row| {
-            row.running = live.contains(row.slug.as_str());
-            row
-        })
-        .collect();
-    state.set_all_rows(ModelRc::new(VecModel::from(rows)));
-    apply_filter(window);
+    launch_flow::launch(bridge, running, slug.to_string(), None);
 }
 
 #[cfg(test)]

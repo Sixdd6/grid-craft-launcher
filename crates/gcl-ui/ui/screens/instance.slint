@@ -78,6 +78,17 @@ export component InstanceScreen inherits Rectangle {
                 alignment: center;
                 horizontal-stretch: 0;
                 Button {
+                    text: "Rename";
+                    clicked => {
+                        InstanceState.rename();
+                    }
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Button {
                     text: "Install";
                     enabled: !InstanceState.running;
                     clicked => {

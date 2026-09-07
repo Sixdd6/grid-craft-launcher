@@ -106,8 +106,9 @@ pub enum ContentCommand {
         /// Path of the file that was downloaded by hand.
         path: PathBuf,
         /// Kind of content the file is: mod, resourcepack, shader, datapack, world.
+        /// Defaults to the kind the pending download recorded.
         #[arg(long)]
-        kind: String,
+        kind: Option<String>,
         /// Project id of the pending download, when the file name does not match.
         #[arg(long, value_name = "ID")]
         project: Option<String>,
@@ -145,6 +146,7 @@ impl From<&ContentEntry> for ContentRow {
 #[derive(Serialize)]
 struct ManualRow {
     source: String,
+    kind: String,
     project_id: String,
     version_id: String,
     file_name: String,
@@ -157,6 +159,7 @@ impl From<&ManualDownload> for ManualRow {
     fn from(manual: &ManualDownload) -> ManualRow {
         ManualRow {
             source: manual.source.to_string(),
+            kind: manual.kind.to_string(),
             project_id: manual.project_id.clone(),
             version_id: manual.version_id.clone(),
             file_name: manual.file_name.clone(),
@@ -364,7 +367,7 @@ pub fn run(launcher: &Launcher, format: Format, command: ContentCommand) -> Resu
                 Format::Json => print_json(&rows)?,
                 Format::Text => {
                     for row in &rows {
-                        println!("{} -> {}", row.file_name, row.page_url);
+                        println!("{} ({}) -> {}", row.file_name, row.kind, row.page_url);
                     }
                 }
             }
@@ -377,10 +380,15 @@ pub fn run(launcher: &Launcher, format: Format, command: ContentCommand) -> Resu
             project,
             world,
         } => {
-            let kind = parse_kind(&kind)?;
             let pending = launcher.pending_manual(&slug)?;
             let Some(matched) = pick_pending(&pending, &path, project.as_deref()) else {
                 bail!("no pending download matches");
+            };
+            // Without `--kind` the pending entry's own kind is used: it is the kind the add
+            // that produced the entry resolved, so it is right unless the user says otherwise.
+            let kind = match kind {
+                Some(text) => parse_kind(&text)?,
+                None => matched.kind,
             };
             // `--world` wins over the world the pending entry recorded, so a data pack
             // can be dropped into a world the original request did not name.
@@ -481,6 +489,7 @@ mod tests {
     fn manual(project_id: &str, file_name: &str) -> ManualDownload {
         ManualDownload {
             source: SourceId::CurseForge,
+            kind: ContentKind::Mod,
             project_id: project_id.to_string(),
             version_id: "v1".to_string(),
             file_name: file_name.to_string(),

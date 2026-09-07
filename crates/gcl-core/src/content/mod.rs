@@ -151,6 +151,8 @@ pub struct AddOutcome {
 pub struct ManualDownload {
     /// Source the file belongs to. [`import_manual`] records it in the entry.
     pub source: SourceId,
+    /// Kind the file installs as, decided when the pending entry was made.
+    pub kind: ContentKind,
     /// Project id at the source.
     pub project_id: String,
     /// Version id at the source.
@@ -363,6 +365,7 @@ pub async fn add(
                 ));
                 outcome.manual.push(ManualDownload {
                     source: req.source,
+                    kind,
                     project_id: project.id.clone(),
                     version_id: version.id.clone(),
                     file_name: file.file_name.clone(),

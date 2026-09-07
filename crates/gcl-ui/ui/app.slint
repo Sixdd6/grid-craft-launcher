@@ -332,7 +332,8 @@ export component AppWindow inherits Window {
         }
     }
 
-    // Offline-name prompt, used when a launch found no account.
+    // The detail screen's one-field prompt: the offline name a launch needs, and the new name
+    // a rename takes. `InstanceState.prompt_mode` says which, and Rust reads it back.
     PromptDialog {
         width: root.width;
         height: root.height;
@@ -340,7 +341,7 @@ export component AppWindow inherits Window {
         title: InstanceState.prompt_title;
         label: InstanceState.prompt_label;
         value <=> InstanceState.prompt_value;
-        accept_label: "Launch";
+        accept_label: InstanceState.prompt_accept;
         accept(name) => {
             InstanceState.prompt_ok(name);
         }

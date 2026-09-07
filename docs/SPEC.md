@@ -14,7 +14,7 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 ## R2 Instances
 
 - R2.1 Create an instance with a name, Minecraft version, and optional loader and loader version.
-- R2.2 List, rename, delete instances. Delete asks for confirmation in the UI; the CLI needs `--yes`.
+- R2.2 List, rename, delete instances. Delete asks for confirmation in the UI; the CLI needs `--yes`. Rename is in the GUI too: the detail header's Rename button opens a prompt with the current name in it, and the slug never changes.
 - R2.3 Each instance has its own game directory (`.minecraft/`) with mods, resourcepacks, shaderpacks, saves, options.txt, logs.
 - R2.4 `instance.toml` records name, Minecraft version, loader, loader version, JVM min and max memory, Java path override, settings overrides, and the installed content list.
 - R2.5 The installed content list stores per item: source (modrinth, curseforge, file), project id, version or file id, file name, sha1, content type, enabled flag.
@@ -64,6 +64,7 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 
 - R8.1 Install a Modrinth modpack (`.mrpack`) from the catalog or a local file into a new instance.
 - R8.2 Install a CurseForge modpack (zip with `manifest.json`) from the catalog or a local file into a new instance.
+- Both are reachable from the GUI: the browser's modpack panel installs by project id or slug, and its "From file" row imports an archive already on disk. Both name the new instance through the same prompt.
 - R8.3 The new instance gets the pack's Minecraft version and loader, all files, and overrides.
 
 ## R9 Game settings preseed and overrides
@@ -98,7 +99,7 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 - R13.2 Progress for downloads and installs is visible per task. Delivered: `App.tasks` shows one row per active task with a fraction and status, in the bottom panel.
 - R13.3 Dark theme by default. Native window, no web view. Delivered through `winit` + `renderer-femtovg`; `std-widgets` controls (combo boxes, text fields, spin boxes) keep the `fluent` style's light palette and sit on the dark shell rather than matching it — see the `slint-ui` skill's "Known limitations".
 - R13.4 Keyboard: every list is arrow-navigable, Enter activates a row, Escape closes the open dialog, digits 1-5 jump to a screen. Delivered and unit-tested at the pure-function level (`gcl-ui/src/keys.rs`); the `.slint` wiring is verified by compiling, not by a keyboard-driving test.
-- Known gaps: modpack discovery in the browser is install-by-id (source + project id), not a modpack search flow — `gcl-core` has no modpack search endpoint. `InstanceState.stop` is present but disabled: `gcl-core` cannot kill a running launch yet, so the button reports why instead of acting. The CurseForge search and the Microsoft device-code sign-in flows are implemented and unit-tested but unverified live on this machine.
+- Known gaps: modpack discovery in the browser is install-by-id (source + project id) or by a path to an archive on disk, not a modpack search flow — `gcl-core` has no modpack search endpoint. `InstanceState.stop` is present but disabled: `gcl-core` cannot kill a running launch yet, so the button reports why instead of acting. The CurseForge search and the Microsoft device-code sign-in flows are implemented and unit-tested but unverified live on this machine.
 
 ## Later
 
