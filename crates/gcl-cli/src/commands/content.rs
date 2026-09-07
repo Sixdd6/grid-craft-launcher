@@ -6,7 +6,9 @@ use std::process::ExitCode;
 use anyhow::{Result, bail};
 use clap::Subcommand;
 use gcl_core::Launcher;
-use gcl_core::content::{AddOutcome, AddRequest, ManualDownload, UpdateCandidate};
+use gcl_core::content::{
+    AddOutcome, AddRequest, DependencyConflict, ManualDownload, UpdateCandidate,
+};
 use gcl_core::instances::model::{ContentEntry, ContentKind};
 use gcl_core::sources::{SearchQuery, SourceId};
 use serde::Serialize;
@@ -170,12 +172,35 @@ impl From<&ManualDownload> for ManualRow {
     }
 }
 
+/// A [`DependencyConflict`] as the CLI reports it in JSON.
+#[derive(Serialize)]
+struct ConflictRow {
+    project_id: String,
+    title: String,
+    installed_version_id: String,
+    wanted_version_id: String,
+    wanted_by: String,
+}
+
+impl From<&DependencyConflict> for ConflictRow {
+    fn from(conflict: &DependencyConflict) -> ConflictRow {
+        ConflictRow {
+            project_id: conflict.project_id.clone(),
+            title: conflict.title.clone(),
+            installed_version_id: conflict.installed_version_id.clone(),
+            wanted_version_id: conflict.wanted_version_id.clone(),
+            wanted_by: conflict.wanted_by.clone(),
+        }
+    }
+}
+
 /// An [`AddOutcome`] as the CLI reports it in JSON.
 #[derive(Serialize)]
 struct AddRow {
     installed: Vec<ContentRow>,
     skipped: Vec<String>,
     manual: Vec<ManualRow>,
+    conflicts: Vec<ConflictRow>,
 }
 
 impl From<&AddOutcome> for AddRow {
@@ -184,6 +209,7 @@ impl From<&AddOutcome> for AddRow {
             installed: outcome.installed.iter().map(ContentRow::from).collect(),
             skipped: outcome.skipped.clone(),
             manual: outcome.manual.iter().map(ManualRow::from).collect(),
+            conflicts: outcome.conflicts.iter().map(ConflictRow::from).collect(),
         }
     }
 }
@@ -444,6 +470,9 @@ fn report_add(format: Format, outcome: &AddOutcome) -> Result<ExitCode> {
                     manual.file_name, manual.page_url
                 );
             }
+            for conflict in &outcome.conflicts {
+                println!("{}", conflict_line(conflict));
+            }
         }
     }
     if outcome.manual.is_empty() {
@@ -453,6 +482,17 @@ fn report_add(format: Format, outcome: &AddOutcome) -> Result<ExitCode> {
     }
 }
 
+/// The warning line for a dependency that wanted another version of an installed project.
+fn conflict_line(conflict: &DependencyConflict) -> String {
+    format!(
+        "warning: kept {} at {}; {} wants {}",
+        conflict.title,
+        conflict.installed_version_id,
+        conflict.wanted_by,
+        conflict.wanted_version_id
+    )
+}
+
 /// Folds several [`AddOutcome`]s into one, so `content update --apply` reports once.
 fn merge(outcomes: &[AddOutcome]) -> AddOutcome {
     let mut merged = AddOutcome::default();
@@ -460,6 +500,7 @@ fn merge(outcomes: &[AddOutcome]) -> AddOutcome {
         merged.installed.extend(outcome.installed.iter().cloned());
         merged.skipped.extend(outcome.skipped.iter().cloned());
         merged.manual.extend(outcome.manual.iter().cloned());
+        merged.conflicts.extend(outcome.conflicts.iter().cloned());
     }
     merged
 }
@@ -533,10 +574,31 @@ mod tests {
             installed: vec![ContentEntry::default()],
             skipped: vec!["x".to_string()],
             manual: vec![manual("a", "one.jar")],
+            conflicts: vec![conflict()],
         };
         let merged = merge(&[first.clone(), first]);
         assert_eq!(merged.installed.len(), 2);
         assert_eq!(merged.skipped.len(), 2);
         assert_eq!(merged.manual.len(), 2);
+        assert_eq!(merged.conflicts.len(), 2);
+    }
+
+    /// One conflict: sodium is installed at sv-new, iris wanted sv-old.
+    fn conflict() -> DependencyConflict {
+        DependencyConflict {
+            project_id: "sodium".to_string(),
+            title: "Sodium".to_string(),
+            installed_version_id: "sv-new".to_string(),
+            wanted_version_id: "sv-old".to_string(),
+            wanted_by: "Iris".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_conflict_prints_one_warning_line() {
+        assert_eq!(
+            conflict_line(&conflict()),
+            "warning: kept Sodium at sv-new; Iris wants sv-old"
+        );
     }
 }

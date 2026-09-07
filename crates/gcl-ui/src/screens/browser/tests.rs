@@ -1,9 +1,11 @@
 use gcl_core::instances::model::{ContentKind, Loader};
 use gcl_core::sources::SourceId;
 
+use gcl_core::content::DependencyConflict;
+
 use super::{
-    add_request, clamp_index, kinds_for, loader_option_at, loader_option_index, manual_note,
-    needs_world, pack_name, page_bounds, parse_loader, result_status, source_status,
+    add_request, clamp_index, conflict_note, kinds_for, loader_option_at, loader_option_index,
+    manual_note, needs_world, pack_name, page_bounds, parse_loader, result_status, source_status,
 };
 
 #[test]
@@ -123,6 +125,23 @@ fn manual_note_names_the_tab_that_finishes_the_job() {
     let note = manual_note(2);
     assert!(note.starts_with("2 file(s)"), "got {note}");
     assert!(note.contains("Content tab"), "got {note}");
+}
+
+#[test]
+fn conflict_note_names_one_conflict_and_counts_more() {
+    let conflict = DependencyConflict {
+        project_id: "sodium".to_string(),
+        title: "Sodium".to_string(),
+        installed_version_id: "sv-new".to_string(),
+        wanted_version_id: "sv-old".to_string(),
+        wanted_by: "Iris".to_string(),
+    };
+    assert_eq!(
+        conflict_note(std::slice::from_ref(&conflict)),
+        "Kept Sodium at sv-new; Iris wanted sv-old"
+    );
+    let note = conflict_note(&[conflict.clone(), conflict]);
+    assert!(note.contains("2 mod(s)"), "got {note}");
 }
 
 #[test]

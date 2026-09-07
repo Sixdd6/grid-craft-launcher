@@ -887,3 +887,107 @@ async fn import_manual_puts_a_data_pack_in_the_pending_world() {
             .is_file()
     );
 }
+
+// ---------------------------------------------------------------------------
+// pinned dependencies
+// ---------------------------------------------------------------------------
+
+/// A source with sodium at two versions and an iris that pins the older sodium.
+///
+/// `sv-new` is published after `sv-old`, so a request with no pin picks it.
+async fn pinned_dependency_source(server: &MockServer) -> BoxSource {
+    let mut new = version("sodium", "sv-new", "0.8.13");
+    new.published = "2026-02-01T00:00:00Z".to_string();
+    new.files = vec![served_file(server, "sodium-0.8.13.jar", b"sodium new").await];
+    let mut old = version("sodium", "sv-old", "0.6.13");
+    old.published = "2025-01-01T00:00:00Z".to_string();
+    old.files = vec![served_file(server, "sodium-0.6.13.jar", b"sodium old").await];
+
+    let mut iris = version("iris", "iv1", "1.7");
+    iris.files = vec![served_file(server, "iris.jar", b"iris bytes").await];
+    iris.dependencies = vec![Dependency {
+        project_id: Some("sodium".to_string()),
+        version_id: Some("sv-old".to_string()),
+        kind: DependencyKind::Required,
+    }];
+
+    FakeSource::new(SourceId::Modrinth)
+        .with(project("sodium", ContentKind::Mod), vec![new, old])
+        .with(project("iris", ContentKind::Mod), vec![iris])
+        .boxed()
+}
+
+#[tokio::test]
+async fn a_pinned_dependency_never_installs_a_second_copy_of_an_installed_project() {
+    let server = MockServer::start().await;
+    let (_dir, root, mut instance) = fixture();
+    let mut h = Harness::new(root, vec![pinned_dependency_source(&server).await]);
+
+    with_ctx!(h, |ctx| add(&ctx, &mut instance, request("sodium"))
+        .await
+        .expect("add sodium"));
+    let out = with_ctx!(h, |ctx| add(&ctx, &mut instance, request("iris"))
+        .await
+        .expect("add iris"));
+
+    let mods = instance.game_dir().join("mods");
+    assert!(mods.join("sodium-0.8.13.jar").is_file());
+    assert!(
+        !mods.join("sodium-0.6.13.jar").exists(),
+        "the pinned dependency must not land next to the installed jar"
+    );
+    assert_eq!(
+        instance
+            .config
+            .content
+            .iter()
+            .filter(|e| e.project_id == "sodium")
+            .count(),
+        1,
+        "one entry per project: {:?}",
+        instance.config.content
+    );
+    assert_eq!(out.installed.len(), 1, "{:?}", out.installed);
+    assert_eq!(out.installed[0].project_id, "iris");
+
+    assert_eq!(out.conflicts.len(), 1, "{:?}", out.conflicts);
+    let conflict = &out.conflicts[0];
+    assert_eq!(conflict.project_id, "sodium");
+    assert_eq!(conflict.title, "sodium");
+    assert_eq!(conflict.installed_version_id, "sv-new");
+    assert_eq!(conflict.wanted_version_id, "sv-old");
+    assert_eq!(conflict.wanted_by, "iris");
+    assert!(
+        h.logs()
+            .iter()
+            .any(|m| m == "sodium is already installed at sv-new; iris wants sv-old"),
+        "the conflict is logged"
+    );
+}
+
+#[tokio::test]
+async fn a_top_level_pin_replaces_the_installed_file() {
+    let server = MockServer::start().await;
+    let (_dir, root, mut instance) = fixture();
+    let h = Harness::new(root, vec![pinned_dependency_source(&server).await]);
+
+    with_ctx!(h, |ctx| add(&ctx, &mut instance, request("sodium"))
+        .await
+        .expect("add sodium"));
+    let mut pinned = request("sodium");
+    pinned.version = Some("sv-old".to_string());
+    let out = with_ctx!(h, |ctx| add(&ctx, &mut instance, pinned)
+        .await
+        .expect("add pinned sodium"));
+
+    let mods = instance.game_dir().join("mods");
+    assert!(mods.join("sodium-0.6.13.jar").is_file());
+    assert!(
+        !mods.join("sodium-0.8.13.jar").exists(),
+        "the replaced jar is deleted"
+    );
+    assert_eq!(instance.config.content.len(), 1);
+    assert_eq!(instance.config.content[0].version_id, "sv-old");
+    assert_eq!(out.installed.len(), 1);
+    assert!(out.conflicts.is_empty(), "{:?}", out.conflicts);
+}

@@ -143,6 +143,27 @@ pub struct AddOutcome {
     /// Files the user must fetch from a browser, because the author opted out of
     /// third-party distribution.
     pub manual: Vec<ManualDownload>,
+    /// Dependencies that wanted a version of a project the instance already has at
+    /// another version. The installed version was kept.
+    pub conflicts: Vec<DependencyConflict>,
+}
+
+/// A dependency pin that lost to the version already installed.
+///
+/// A dependency never replaces an installed project: two files for one project break
+/// mod loading. The pin is reported instead, so the CLI and the GUI can say so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependencyConflict {
+    /// Project id at the source.
+    pub project_id: String,
+    /// Project title, for a message a user reads.
+    pub title: String,
+    /// Version id `instance.toml` records now.
+    pub installed_version_id: String,
+    /// Version id the dependency asked for.
+    pub wanted_version_id: String,
+    /// Title of the project whose dependency asked for it.
+    pub wanted_by: String,
 }
 
 /// A file the launcher may not download: the user fetches it and imports it with
@@ -261,6 +282,8 @@ struct Pending {
     world: Option<String>,
     /// How many dependency hops away from the original request this is.
     depth: usize,
+    /// Title of the project that asked for this one. `None` at depth 0.
+    parent: Option<String>,
 }
 
 /// Installs a project and its required dependencies into `instance`.
@@ -268,9 +291,11 @@ struct Pending {
 /// The queue is breadth-first from `req`: each item resolves its project, picks a
 /// compatible version, downloads the version's primary file into the object store, and
 /// places it in the instance. A project already installed from the same source is
-/// skipped unless the caller pinned a different version. A file the author opted out of
-/// third-party distribution has no URL; it is reported in [`AddOutcome::manual`] and
-/// never fails the call.
+/// skipped unless the caller pinned a different version at depth 0. A dependency never
+/// installs a second copy of an installed project, whatever version it pins: it is
+/// reported in [`AddOutcome::conflicts`] and the installed version is kept. A file the
+/// author opted out of third-party distribution has no URL; it is reported in
+/// [`AddOutcome::manual`] and never fails the call.
 ///
 /// `instance` is replaced with the saved copy after every placement, so the caller's
 /// value stays in step with `instance.toml`.
@@ -293,6 +318,7 @@ pub async fn add(
         kind: req.kind,
         world: req.world.clone(),
         depth: 0,
+        parent: None,
     });
 
     while let Some(item) = queue.pop_front() {
@@ -308,19 +334,32 @@ pub async fn add(
         }
         seen.insert(item.project.clone());
 
-        if let Some(entry) = installed(instance, req.source, &project.id)
-            && item
-                .version
-                .as_ref()
-                .is_none_or(|want| *want == entry.version_id)
+        let have = installed(instance, req.source, &project.id).map(|e| e.version_id.clone());
+        // A dependency never replaces an installed project: a second file for one
+        // project breaks mod loading. Only a top-level pin of another version does.
+        if let Some(have) = have
+            && (item.depth > 0 || item.version.as_ref().is_none_or(|want| *want == have))
         {
-            ctx.log(format!(
-                "{} is already installed at {}",
-                project.title, entry.version_id
-            ));
+            match item.version.as_deref().filter(|want| *want != have) {
+                Some(want) => {
+                    let parent = item.parent.clone().unwrap_or_else(|| project.title.clone());
+                    ctx.log(format!(
+                        "{} is already installed at {have}; {parent} wants {want}",
+                        project.title
+                    ));
+                    outcome.conflicts.push(DependencyConflict {
+                        project_id: project.id.clone(),
+                        title: project.title.clone(),
+                        installed_version_id: have.clone(),
+                        wanted_version_id: want.to_string(),
+                        wanted_by: parent,
+                    });
+                }
+                None => ctx.log(format!("{} is already installed at {have}", project.title)),
+            }
             outcome.skipped.push(project.id.clone());
-            let version_id = entry.version_id.clone();
-            queue_installed_dependencies(ctx, source, &version_id, &item, &mut queue).await;
+            queue_installed_dependencies(ctx, source, &have, &item, &project.title, &mut queue)
+                .await;
             continue;
         }
 
@@ -384,7 +423,7 @@ pub async fn add(
             }
         }
 
-        queue_dependencies(&mut queue, &version.dependencies, &item);
+        queue_dependencies(&mut queue, &version.dependencies, &item, &project.title);
     }
 
     Ok(outcome)
@@ -398,6 +437,7 @@ fn queue_dependencies(
     queue: &mut VecDeque<Pending>,
     deps: &[crate::sources::Dependency],
     parent: &Pending,
+    parent_title: &str,
 ) {
     for dep in deps {
         if dep.kind != DependencyKind::Required {
@@ -412,6 +452,7 @@ fn queue_dependencies(
             kind: None,
             world: parent.world.clone(),
             depth: parent.depth + 1,
+            parent: Some(parent_title.to_string()),
         });
     }
 }
@@ -426,10 +467,11 @@ async fn queue_installed_dependencies(
     source: &BoxSource,
     version_id: &str,
     parent: &Pending,
+    parent_title: &str,
     queue: &mut VecDeque<Pending>,
 ) {
     match source.version(version_id).await {
-        Ok(version) => queue_dependencies(queue, &version.dependencies, parent),
+        Ok(version) => queue_dependencies(queue, &version.dependencies, parent, parent_title),
         Err(err) => warn(ctx, version_id, &err.to_string()),
     }
 }

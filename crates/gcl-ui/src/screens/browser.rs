@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use gcl_core::content::AddRequest;
+use gcl_core::content::{AddRequest, DependencyConflict};
 use gcl_core::instances::Instance;
 use gcl_core::instances::model::{ContentKind, Loader};
 use gcl_core::sources::{SearchQuery, SourceId};
@@ -604,6 +604,9 @@ fn install(
             if !outcome.manual.is_empty() {
                 warn(window, &manual_note(outcome.manual.len()));
             }
+            if !outcome.conflicts.is_empty() {
+                warn(window, &conflict_note(&outcome.conflicts));
+            }
             state.set_status(format!("installed {}", outcome.installed.len()).into());
         },
     );
@@ -826,6 +829,22 @@ pub fn parse_loader(text: &str) -> Option<Loader> {
 /// The toast shown when an add left files for the user to fetch by hand.
 pub fn manual_note(count: usize) -> String {
     format!("{count} file(s) need a manual download; see the instance's Content tab")
+}
+
+/// The toast shown when a dependency wanted another version of an installed project.
+///
+/// One conflict names the project; more than one is counted, since a toast has one line.
+pub fn conflict_note(conflicts: &[DependencyConflict]) -> String {
+    match conflicts {
+        [one] => format!(
+            "Kept {} at {}; {} wanted {}",
+            one.title, one.installed_version_id, one.wanted_by, one.wanted_version_id
+        ),
+        many => format!(
+            "Kept the installed version of {} mod(s) a dependency pinned",
+            many.len()
+        ),
+    }
 }
 
 /// The status line for a page of hits.

@@ -118,6 +118,21 @@ there is no per-file page there. The CLI and UI show the page and accept a dropp
 `content::import_manual` verifies it by fingerprint (CurseForge) or sha1 (Modrinth) before
 storing it.
 
+## One file per project
+
+`content::add` installs a project at most once per instance. A dependency (`depth > 0`) whose
+pin names another version than the one `instances::content::installed` finds is never
+installed: the installed version stays, the walk goes on through
+`queue_installed_dependencies`, and the pin lands in `AddOutcome.conflicts` as a
+`DependencyConflict { project_id, title, installed_version_id, wanted_version_id, wanted_by }`.
+Two jars for one project break NeoForge and Forge mod loading, which is the whole reason.
+The CLI prints one `warning: kept ...` line per conflict and puts them in `--json`; the GUI
+browser raises one toast (`screens::browser::conflict_note`).
+
+Only the top-level request (`depth == 0`) may change the installed version: a user pin of
+another version replaces the entry in place, and `place_file` deletes the old file and its
+`.disabled` twin before linking the new one.
+
 ## Install targets
 
 | ContentKind | Directory under `.minecraft/` |

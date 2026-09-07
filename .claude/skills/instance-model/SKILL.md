@@ -194,6 +194,12 @@ through `safe_join` so a world name cannot escape `saves/`).
 `place_world` after resolving a project and downloading its file; nothing in `instances`
 depends on `sources` or `content` beyond the `SourceId` type.
 
+One `(source, project_id)` has one entry and one file. `place_file` replaces an existing entry
+where it sits and deletes its file first, so a project can never end up with two jars in
+`mods/`. `content::add` only ever asks for that replacement for the top-level request; a
+dependency that pins another version is reported in `AddOutcome.conflicts` instead (see the
+`mod-sources` skill).
+
 ## `pack` and pending manual downloads
 
 `instance.config.pack: Option<PackSource>` is set only when the instance came from a modpack
