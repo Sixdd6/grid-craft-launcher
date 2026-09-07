@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::paths::{Root, write_atomic};
+use crate::paths::{Root, write_atomic_with_mode};
 
 use super::{Account, Error};
 
@@ -16,6 +16,9 @@ pub struct AccountsFile {
     /// The id of the active account, if one is selected.
     pub active: Option<String>,
 }
+
+/// Unix permissions `accounts.json` is written with: owner read and write only.
+const ACCOUNTS_MODE: u32 = 0o600;
 
 /// Reads and writes the account store at `<root>/accounts.json`.
 #[derive(Debug, Clone)]
@@ -52,18 +55,24 @@ impl Accounts {
     }
 
     /// Writes `f` to `accounts.json`, through a temp file and a rename.
+    ///
+    /// The file is created at mode `0600` on unix: it holds a live Minecraft token, so no
+    /// other user on the machine may read it, not even for the moment between the temp write
+    /// and the rename.
     pub fn save(&self, f: &AccountsFile) -> Result<(), Error> {
         let text = serde_json::to_string_pretty(f).map_err(|source| Error::Json {
             path: self.path.clone(),
             source,
         })?;
-        write_atomic(&self.path, text.as_bytes()).map_err(|err| match err {
-            crate::paths::Error::Io { path, source } => Error::Io { path, source },
-            other => Error::Io {
-                path: self.path.clone(),
-                source: std::io::Error::other(other.to_string()),
+        write_atomic_with_mode(&self.path, text.as_bytes(), ACCOUNTS_MODE).map_err(
+            |err| match err {
+                crate::paths::Error::Io { path, source } => Error::Io { path, source },
+                other => Error::Io {
+                    path: self.path.clone(),
+                    source: std::io::Error::other(other.to_string()),
+                },
             },
-        })
+        )
     }
 
     /// Adds or replaces an account by id. Sets it active when no account is active yet.
@@ -237,6 +246,21 @@ mod tests {
         assert!(accounts.active().unwrap().is_some());
         accounts.remove("id-1").unwrap();
         assert_eq!(accounts.active().unwrap(), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn accounts_json_is_written_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (dir, accounts) = store();
+        accounts.add(account("id-1", "Alice")).unwrap();
+        let mode = std::fs::metadata(dir.path().join("accounts.json"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "accounts.json holds a live Minecraft token");
     }
 
     #[test]

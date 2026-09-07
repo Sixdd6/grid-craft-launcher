@@ -6,13 +6,14 @@ use std::sync::{Arc, Mutex};
 
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use tokio_util::sync::CancellationToken;
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 use super::*;
 use crate::auth::msa::MsaEndpoints;
 use crate::auth::secrets::{MemoryStore, SecretStoreKind};
-use crate::events::null_sink;
+use crate::events::{Event, LogLevel, null_sink};
 use crate::http::HttpClient;
 use crate::paths::Root;
 
@@ -134,6 +135,21 @@ fn recording_sleep() -> (
     (waits, sleep)
 }
 
+/// Every `Log` message a sink received, oldest first.
+fn drain_log(events: &mut tokio::sync::mpsc::UnboundedReceiver<Event>) -> Vec<String> {
+    let mut lines = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let Event::Log {
+            level: LogLevel::Info,
+            message,
+        } = event
+        {
+            lines.push(message);
+        }
+    }
+    lines
+}
+
 fn msa_account(expires: Option<&str>) -> Account {
     Account {
         id: ACCOUNT_ID.to_string(),
@@ -171,12 +187,14 @@ async fn login_polls_until_ready_then_stores_the_account_and_the_refresh_token()
     let msa = msa(&server);
     let secrets = MemoryStore::new();
     let (_dir, store) = accounts();
-    let sink = null_sink();
+    let (sink, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let cancel = CancellationToken::new();
     let ctx = LoginCtx {
         msa: &msa,
         secrets: &secrets,
         accounts: &store,
         sink: &sink,
+        cancel: &cancel,
     };
     let seen = Arc::new(Mutex::new(Vec::new()));
     let codes = Arc::clone(&seen);
@@ -205,6 +223,23 @@ async fn login_polls_until_ready_then_stores_the_account_and_the_refresh_token()
         secrets.get(ACCOUNT_ID).expect("get"),
         Some("refresh-1".to_string())
     );
+
+    let logged = drain_log(&mut events);
+    assert!(
+        logged.contains(&"loaded profile Notch".to_string()),
+        "{logged:?}"
+    );
+    assert!(
+        logged.contains(&"waiting for the code to be entered".to_string()),
+        "{logged:?}"
+    );
+    assert!(
+        !logged.iter().any(|line| line.contains("dev-secret")
+            || line.contains("refresh-1")
+            || line.contains("mc-token")
+            || line.contains(CLIENT_ID)),
+        "progress never carries a secret: {logged:?}"
+    );
 }
 
 #[tokio::test]
@@ -222,11 +257,13 @@ async fn slow_down_adds_five_seconds_to_the_poll_interval() {
     let secrets = MemoryStore::new();
     let (_dir, store) = accounts();
     let sink = null_sink();
+    let cancel = CancellationToken::new();
     let ctx = LoginCtx {
         msa: &msa,
         secrets: &secrets,
         accounts: &store,
         sink: &sink,
+        cancel: &cancel,
     };
     let (waits, sleep) = recording_sleep();
 
@@ -258,11 +295,13 @@ async fn login_gives_up_when_the_sleeps_reach_the_code_lifetime() {
     let secrets = MemoryStore::new();
     let (_dir, store) = accounts();
     let sink = null_sink();
+    let cancel = CancellationToken::new();
     let ctx = LoginCtx {
         msa: &msa,
         secrets: &secrets,
         accounts: &store,
         sink: &sink,
+        cancel: &cancel,
     };
     let (waits, sleep) = recording_sleep();
 
@@ -296,11 +335,13 @@ async fn refresh_rotates_the_stored_token_and_updates_the_minecraft_token() {
     let stored = msa_account(Some("2020-01-01T00:00:00Z"));
     store.add(stored.clone()).expect("add");
     let sink = null_sink();
+    let cancel = CancellationToken::new();
     let ctx = LoginCtx {
         msa: &msa,
         secrets: &secrets,
         accounts: &store,
         sink: &sink,
+        cancel: &cancel,
     };
 
     let fresh = refresh_account(&ctx, &stored).await.expect("refresh works");
@@ -340,11 +381,13 @@ async fn a_chain_failure_after_the_refresh_keeps_the_rotated_token() {
     let stored = msa_account(Some("2020-01-01T00:00:00Z"));
     store.add(stored.clone()).expect("add");
     let sink = null_sink();
+    let cancel = CancellationToken::new();
     let ctx = LoginCtx {
         msa: &msa,
         secrets: &secrets,
         accounts: &store,
         sink: &sink,
+        cancel: &cancel,
     };
 
     refresh_account(&ctx, &stored)
@@ -365,11 +408,13 @@ async fn refresh_without_a_stored_token_reports_no_refresh_token() {
     let secrets = MemoryStore::new();
     let (_dir, store) = accounts();
     let sink = null_sink();
+    let cancel = CancellationToken::new();
     let ctx = LoginCtx {
         msa: &msa,
         secrets: &secrets,
         accounts: &store,
         sink: &sink,
+        cancel: &cancel,
     };
 
     let err = refresh_account(&ctx, &msa_account(None))
@@ -405,11 +450,13 @@ async fn refresh_of_a_profile_for_another_account_is_a_mismatch() {
     secrets.put("someone-else", "refresh-1").expect("put");
     let (_dir, store) = accounts();
     let sink = null_sink();
+    let cancel = CancellationToken::new();
     let ctx = LoginCtx {
         msa: &msa,
         secrets: &secrets,
         accounts: &store,
         sink: &sink,
+        cancel: &cancel,
     };
     let other = Account {
         id: "someone-else".to_string(),
@@ -423,8 +470,8 @@ async fn refresh_of_a_profile_for_another_account_is_a_mismatch() {
     assert!(matches!(err, Error::AccountMismatch { .. }), "got {err:?}");
     assert_eq!(
         secrets.get("someone-else").expect("get"),
-        Some("refresh-2".to_string()),
-        "the rotated token is kept: Microsoft has already invalidated refresh-1"
+        Some("refresh-1".to_string()),
+        "the rotated token belongs to another account, so it is not stored under this id"
     );
 }
 
@@ -435,11 +482,13 @@ async fn ensure_fresh_leaves_a_token_with_time_left_alone() {
     let secrets = MemoryStore::new();
     let (_dir, store) = accounts();
     let sink = null_sink();
+    let cancel = CancellationToken::new();
     let ctx = LoginCtx {
         msa: &msa,
         secrets: &secrets,
         accounts: &store,
         sink: &sink,
+        cancel: &cancel,
     };
     let now = OffsetDateTime::now_utc();
     let account = msa_account(Some(&rfc3339(now + Duration::from_secs(3600))));
@@ -477,11 +526,13 @@ async fn ensure_fresh_refreshes_a_token_inside_the_margin() {
     secrets.put(ACCOUNT_ID, "refresh-1").expect("put");
     let (_dir, store) = accounts();
     let sink = null_sink();
+    let cancel = CancellationToken::new();
     let ctx = LoginCtx {
         msa: &msa,
         secrets: &secrets,
         accounts: &store,
         sink: &sink,
+        cancel: &cancel,
     };
     let now = OffsetDateTime::now_utc();
     let account = msa_account(Some(&rfc3339(now + Duration::from_secs(60))));
@@ -500,11 +551,13 @@ async fn ensure_fresh_passes_an_offline_account_through() {
     let secrets = MemoryStore::new();
     let (_dir, store) = accounts();
     let sink = null_sink();
+    let cancel = CancellationToken::new();
     let ctx = LoginCtx {
         msa: &msa,
         secrets: &secrets,
         accounts: &store,
         sink: &sink,
+        cancel: &cancel,
     };
     let account = crate::auth::offline::offline_account("Notch");
 
@@ -520,5 +573,128 @@ async fn ensure_fresh_passes_an_offline_account_through() {
             .unwrap_or_default()
             .is_empty(),
         "an offline account makes no request"
+    );
+}
+
+#[tokio::test]
+async fn a_zero_poll_interval_is_raised_to_one_second() {
+    let server = MockServer::start().await;
+    mount_device_code(&server, 0, 2).await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(Sequence::new(&[PENDING]))
+        .mount(&server)
+        .await;
+
+    let msa = msa(&server);
+    let secrets = MemoryStore::new();
+    let (_dir, store) = accounts();
+    let sink = null_sink();
+    let cancel = CancellationToken::new();
+    let ctx = LoginCtx {
+        msa: &msa,
+        secrets: &secrets,
+        accounts: &store,
+        sink: &sink,
+        cancel: &cancel,
+    };
+    let (waits, sleep) = recording_sleep();
+
+    let err = login_device_code(&ctx, &|_| {}, &sleep)
+        .await
+        .expect_err("an unapproved code expires");
+
+    assert!(matches!(err, Error::DeviceCodeExpired), "got {err:?}");
+    assert_eq!(
+        *waits.lock().expect("lock"),
+        vec![Duration::from_secs(1); 2],
+        "a zero interval would busy-poll the token endpoint"
+    );
+}
+
+#[tokio::test]
+async fn cancelling_the_token_stops_the_poll_loop() {
+    let server = MockServer::start().await;
+    mount_device_code(&server, 5, 900).await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(Sequence::new(&[READY]))
+        .mount(&server)
+        .await;
+    mount_chain(&server, "mc-token").await;
+
+    let msa = msa(&server);
+    let secrets = MemoryStore::new();
+    let (_dir, store) = accounts();
+    let sink = null_sink();
+    let cancel = CancellationToken::new();
+    let ctx = LoginCtx {
+        msa: &msa,
+        secrets: &secrets,
+        accounts: &store,
+        sink: &sink,
+        cancel: &cancel,
+    };
+    // The wait is where a cancel lands in the real launcher: cancel from inside it.
+    let waits = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&waits);
+    let token = cancel.clone();
+    let sleep = move |d: Duration| {
+        recorder.lock().expect("lock").push(d);
+        token.cancel();
+        Box::pin(std::future::ready(())) as BoxFuture<'static, ()>
+    };
+
+    let err = login_device_code(&ctx, &|_| {}, &sleep)
+        .await
+        .expect_err("the sign-in was cancelled");
+
+    assert!(matches!(err, Error::Cancelled), "got {err:?}");
+    assert_eq!(waits.lock().expect("lock").len(), 1);
+    let polls = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter(|r| r.url.path() == "/token")
+        .count();
+    assert_eq!(polls, 0, "no poll runs after the cancel");
+    assert!(store.list().expect("list").is_empty());
+}
+
+#[tokio::test]
+async fn a_revoked_refresh_token_is_deleted_and_asks_for_a_new_sign_in() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(400).set_body_string(r#"{"error":"invalid_grant"}"#))
+        .mount(&server)
+        .await;
+
+    let msa = msa(&server);
+    let secrets = MemoryStore::new();
+    secrets.put(ACCOUNT_ID, "refresh-1").expect("put");
+    let (_dir, store) = accounts();
+    let stored = msa_account(Some("2020-01-01T00:00:00Z"));
+    store.add(stored.clone()).expect("add");
+    let sink = null_sink();
+    let cancel = CancellationToken::new();
+    let ctx = LoginCtx {
+        msa: &msa,
+        secrets: &secrets,
+        accounts: &store,
+        sink: &sink,
+        cancel: &cancel,
+    };
+
+    let err = refresh_account(&ctx, &stored)
+        .await
+        .expect_err("the saved token was revoked");
+
+    assert!(matches!(err, Error::SignInAgain), "got {err:?}");
+    assert_eq!(
+        secrets.get(ACCOUNT_ID).expect("get"),
+        None,
+        "a revoked token is dropped, not retried"
     );
 }

@@ -697,6 +697,32 @@ async fn a_launch_with_a_stale_token_refreshes_once_before_building_the_command(
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn refreshing_an_offline_account_is_not_a_microsoft_account() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    tokio::task::spawn_blocking(move || {
+        // A client id is configured, so the refusal is about the account, not the config.
+        let launcher = msa_launcher(&dir, "http://msa.invalid", Some("client-id"));
+        launcher
+            .accounts()
+            .add(gcl_core::auth::offline::offline_account("Alice"))
+            .expect("add account");
+
+        let err = launcher
+            .msa_refresh("Alice")
+            .expect_err("an offline account has nothing to refresh");
+
+        assert!(
+            matches!(&err, gcl_core::Error::Auth(auth::Error::NotMicrosoft(name)) if name == "Alice"),
+            "{err:?}"
+        );
+        assert_eq!(err.to_string(), "Alice is not a Microsoft account");
+        dir
+    })
+    .await
+    .expect("blocking task");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn without_a_client_id_microsoft_login_is_disabled() {
     let dir = tempfile::tempdir().expect("tempdir");
     tokio::task::spawn_blocking(move || {
@@ -714,7 +740,7 @@ async fn without_a_client_id_microsoft_login_is_disabled() {
         );
         assert_eq!(
             err.to_string(),
-            "microsoft login: disabled (no GCL_MSA_CLIENT_ID)"
+            "microsoft login: disabled (set GCL_MSA_CLIENT_ID or keys.msa_client_id in config.toml)"
         );
 
         // A stale token cannot be refreshed either, so the launch says the same thing.

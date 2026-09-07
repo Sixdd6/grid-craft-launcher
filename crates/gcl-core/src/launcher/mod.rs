@@ -101,7 +101,7 @@ const NO_CURSEFORGE_KEY: &str = "no CURSEFORGE_API_KEY";
 ///
 /// [`Launcher::new`] fills it from the test-only environment overrides;
 /// [`Launcher::open_with_endpoints`] takes one whole, and reads no environment at all.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoints {
     /// Mojang metadata base URL.
     pub mojang: String,
@@ -126,25 +126,6 @@ impl Default for Endpoints {
         }
     }
 }
-
-/// Written by hand rather than derived: [`MsaEndpoints`] carries no [`PartialEq`], so its six
-/// URLs are compared one by one here.
-impl PartialEq for Endpoints {
-    fn eq(&self, other: &Self) -> bool {
-        self.mojang == other.mojang
-            && self.modrinth == other.modrinth
-            && self.curseforge == other.curseforge
-            && self.loaders == other.loaders
-            && self.msa.device_code == other.msa.device_code
-            && self.msa.token == other.msa.token
-            && self.msa.xbl == other.msa.xbl
-            && self.msa.xsts == other.msa.xsts
-            && self.msa.mc_login == other.msa.mc_login
-            && self.msa.profile == other.msa.profile
-    }
-}
-
-impl Eq for Endpoints {}
 
 impl Endpoints {
     /// Reads every test-only base URL override, falling back to the production hosts.
@@ -398,15 +379,22 @@ impl Launcher {
     /// endpoint is polled until the sign-in is approved, waiting the interval it asks for.
     /// Without a configured client id this is [`crate::auth::Error::Disabled`] and no request
     /// is made.
+    ///
+    /// The poll loop watches this launcher's own cancel token ([`Launcher::cancel_token`]),
+    /// the one downloads use. Cancelling it while a sign-in is waiting for the user aborts
+    /// that sign-in with [`crate::auth::Error::Cancelled`] rather than polling until the
+    /// code expires.
     #[tracing::instrument(skip_all)]
     pub fn msa_login(&self, on_code: &OnCodeFn) -> Result<Account, crate::Error> {
         let msa = self.msa_client()?;
         let accounts = self.accounts();
+        let cancel = self.cancel_token();
         let ctx = LoginCtx {
             msa: &msa,
             secrets: self.secrets(),
             accounts: &accounts,
             sink: &self.events,
+            cancel: &cancel,
         };
         let sleep: &SleepFn = &real_sleep;
         Ok(self.block_on(async move { login_device_code(&ctx, on_code, sleep).await })?)
@@ -415,20 +403,26 @@ impl Launcher {
     /// Signs a saved Microsoft account in again from its stored refresh token. Blocks.
     ///
     /// `id_or_name` names the account the same way `--account` does. An unknown one is
-    /// [`crate::auth::Error::NotFound`]; no configured client id is
-    /// [`crate::auth::Error::Disabled`].
+    /// [`crate::auth::Error::NotFound`]; an offline account is
+    /// [`crate::auth::Error::NotMicrosoft`], since it has nothing to refresh whatever the
+    /// configuration says; no configured client id is [`crate::auth::Error::Disabled`].
     #[tracing::instrument(skip(self))]
     pub fn msa_refresh(&self, id_or_name: &str) -> Result<Account, crate::Error> {
         let accounts = self.accounts();
         let account = accounts
             .find(id_or_name)?
             .ok_or_else(|| crate::auth::Error::NotFound(id_or_name.to_string()))?;
+        if account.kind != AccountKind::Msa {
+            return Err(crate::auth::Error::NotMicrosoft(account.name).into());
+        }
         let msa = self.msa_client()?;
+        let cancel = self.cancel_token();
         let ctx = LoginCtx {
             msa: &msa,
             secrets: self.secrets(),
             accounts: &accounts,
             sink: &self.events,
+            cancel: &cancel,
         };
         Ok(self.block_on(async move { refresh_account(&ctx, &account).await })?)
     }
@@ -957,11 +951,13 @@ impl Launcher {
         }
         let msa = self.msa_client()?;
         let accounts = self.accounts();
+        let cancel = self.cancel_token();
         let ctx = LoginCtx {
             msa: &msa,
             secrets: self.secrets(),
             accounts: &accounts,
             sink: &self.events,
+            cancel: &cancel,
         };
         Ok(self.block_on(async move { ensure_fresh(&ctx, account, now).await })?)
     }

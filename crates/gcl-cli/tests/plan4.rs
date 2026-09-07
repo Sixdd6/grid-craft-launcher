@@ -225,17 +225,18 @@ async fn add_msa_signs_in_and_list_and_refresh_report_the_account() {
 }
 
 #[test]
-fn account_refresh_of_an_offline_account_fails_without_a_client_id() {
+fn account_refresh_of_an_offline_account_is_rejected() {
     let dir = tempfile::tempdir().expect("tempdir");
     gcl(dir.path())
         .args(["account", "add-offline", "alice"])
         .assert()
         .success();
+    // Checked before the client id: no configuration makes an offline account refreshable.
     gcl(dir.path())
         .args(["account", "refresh", "alice"])
         .assert()
         .code(1)
-        .stderr(predicates::str::contains("disabled"));
+        .stderr(predicates::str::contains("not a Microsoft account"));
 }
 
 #[test]

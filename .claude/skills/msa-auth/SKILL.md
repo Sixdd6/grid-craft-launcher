@@ -9,7 +9,7 @@ Full detail: `docs/research/2026-09-06-msa-auth-and-rust-crates.md` section A.
 
 `GCL_MSA_CLIENT_ID` env, then `config.toml` (`Config::msa_client_id`). Absent →
 `Launcher::msa_available() == false`; UI hides the button, CLI reports `Error::Disabled`
-("microsoft login: disabled (no GCL_MSA_CLIENT_ID)").
+("microsoft login: disabled (set GCL_MSA_CLIENT_ID or keys.msa_client_id in config.toml)").
 
 To register a client id, see the README's "Microsoft login" section: personal-account app
 registration, redirect URI, public client flows, and the Minecraft launcher approval form.
@@ -50,10 +50,10 @@ launcher always talks to the real endpoints.
 
 | Code | Error | Message to user |
 |---|---|---|
-| 2148916233 | `NoXboxProfile` | This Microsoft account has no Xbox profile. Create one at xbox.com, then retry. |
-| 2148916235 | `XboxRegionUnavailable` | Xbox Live is not available in this region. |
-| 2148916236, 2148916237 | `XboxAdultVerification` | This account needs adult verification before it can sign in. |
-| 2148916238 | `XboxChildAccount` | This is a child account: an adult must add it to their family group. |
+| 2148916233 | `NoXboxProfile` | this Microsoft account has no Xbox profile: create one at xbox.com, then retry |
+| 2148916235 | `XboxRegionUnavailable` | Xbox Live is not available in this region |
+| 2148916236, 2148916237 | `XboxAdultVerification` | this account needs adult verification before it can sign in |
+| 2148916238 | `XboxChildAccount` | this is a child account: an adult must add it to their family group |
 | anything else | `Xsts { code }` | Xbox XSTS error `<code>` |
 
 ## Storage
@@ -63,7 +63,8 @@ launcher always talks to the real endpoints.
   `kind` (`Offline` | `Msa`), `mc_token`, `mc_token_expires` (RFC 3339), `xuid`, and
   `refresh_store` (which `SecretStoreKind` holds this account's refresh token — omitted from
   JSON when `None`). The Minecraft token is cached here, never in the keyring, so a launch
-  never has to touch it.
+  never has to touch it. Because it holds that live token, `accounts.json` is written through
+  `paths::write_atomic_with_mode` at mode `0600`, the same way `secrets.json` is.
 - Refresh tokens go through `SecretStore` (`gcl-core/src/auth/secrets.rs`), keyed by account
   id: `SecretStore::put/get/delete`. `open_default(root, sink)` picks the backing store:
   - `KeyringStore` (service name `grid-craft-launcher`, from `secrets::SERVICE`): the OS
@@ -89,12 +90,18 @@ launcher always talks to the real endpoints.
   unchanged and makes no request. An offline account always passes through unchanged.
 - `session::refresh_account` redeems the stored refresh token
   (`grant_type=refresh_token`, steps 3 to 6 again) and writes the *rotated* refresh token to
-  the secret store as soon as the token endpoint answers — before Xbox Live, XSTS, or the
-  Minecraft login run. Microsoft invalidates the old token at that point, so if a later step
-  fails, the new token must already be saved: otherwise the next attempt would retry with a
-  token that no longer works, and the account would need a fresh device-code sign-in.
+  the secret store. Microsoft invalidates the old token as soon as the token endpoint
+  answers, so the rotated one is stored even when Xbox Live, XSTS, or the Minecraft login
+  fails afterwards: otherwise the next attempt would retry with a token that no longer works,
+  and the account would need a fresh device-code sign-in. The one case that stores nothing is
+  `Error::AccountMismatch` — the profile came back for another account, so the rotated token
+  is not this account's to keep. The mismatch check therefore runs before the store.
 - A missing stored token is `Error::NoRefreshToken`. A refresh that resolves to a different
-  account than the one being refreshed is `Error::AccountMismatch`.
+  account than the one being refreshed is `Error::AccountMismatch`. A token endpoint answer
+  of `invalid_grant` (the sign-in was revoked, or it aged out) deletes the stored token and
+  reports `Error::SignInAgain`, so nothing keeps retrying a token that can never work.
+- `Launcher::msa_refresh` on an offline account is `Error::NotMicrosoft(name)`, checked
+  before the client id: no configuration makes an offline account refreshable.
 - Without `GCL_MSA_CLIENT_ID`, `Launcher::launch_instance` still launches an account whose
   cached token has not gone stale; a token that needs refreshing but has no client id to
   refresh it with is `Error::Disabled`.
@@ -115,8 +122,24 @@ launcher always talks to the real endpoints.
 `Account::launch_identity_with(client_id)` on a Microsoft account fills: `auth_player_name =
 name`, `auth_uuid = id without dashes`, `auth_access_token = mc_token` (or `"0"` when there is
 none, so a launch fails inside the game rather than with an empty token), `user_type = "msa"`,
-`auth_xuid = xuid` (or empty), `clientid = client_id` as given by the caller (`Launcher`
-passes the base64 client id `${clientid}` expects; the field itself does no encoding).
+`auth_xuid = xuid` (or empty), `clientid = client_id` as given by the caller. That is the
+raw Azure client id, exactly as `GCL_MSA_CLIENT_ID` or `keys.msa_client_id` holds it:
+`${clientid}` is substituted with it unchanged, and neither `LaunchIdentity` nor `Launcher`
+base64-encodes anything.
+
+## Progress and cancellation
+
+- `login_device_code`, `complete_chain`, and `refresh_account` report each step on
+  `ctx.sink` as `Event::Log { level: Info, .. }`: "waiting for the code to be entered",
+  "signed in to Microsoft", "signed in to Xbox Live", "authorized for Minecraft", "signed in
+  to Minecraft", "loaded profile <name>", and "refreshing sign-in". A message never carries a
+  token, a device code, or the client id.
+- `LoginCtx.cancel` is a `CancellationToken`. The poll loop selects between the `sleep` and
+  `cancel.cancelled()`, so cancelling ends the sign-in with `Error::Cancelled` and makes no
+  further poll. `Launcher::msa_login` passes the launcher-wide token
+  (`Launcher::cancel_token`), the same one downloads watch.
+- The poll interval is floored at one second, whatever `interval` the device-code response
+  asks for.
 
 ## GUI threading
 

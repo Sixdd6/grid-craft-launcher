@@ -53,7 +53,7 @@ const ACCEPT_JSON: (&str, &str) = ("accept", "application/json");
 /// Every base URL the login chain uses. [`Default`] is the production set.
 ///
 /// Tests build one pointing at a mock server; nothing else overrides it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MsaEndpoints {
     /// Where the device code is requested.
     pub device_code: String,

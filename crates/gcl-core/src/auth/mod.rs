@@ -39,6 +39,15 @@ pub enum Error {
     /// The account has no stored refresh token, so it cannot be signed in again.
     #[error("this account has no saved sign-in: remove it and sign in again")]
     NoRefreshToken,
+    /// The saved refresh token was rejected, so the account must sign in from scratch.
+    #[error("the saved sign-in is no longer valid; run `gcl account add-msa` again")]
+    SignInAgain,
+    /// A refresh was asked for on an account that does not sign in with Microsoft.
+    #[error("{0} is not a Microsoft account")]
+    NotMicrosoft(String),
+    /// The sign-in was cancelled before it finished.
+    #[error("the sign-in was cancelled")]
+    Cancelled,
     /// A refresh returned a profile for a different account than the one being refreshed.
     #[error("the refreshed sign-in is for account {actual}, not {expected}")]
     AccountMismatch {
@@ -54,7 +63,9 @@ pub enum Error {
     #[error("no account selected: add one, or launch with an offline user name")]
     NoAccount,
     /// Microsoft login was asked for without a client id, so the launcher cannot sign in.
-    #[error("microsoft login: disabled (no GCL_MSA_CLIENT_ID)")]
+    #[error(
+        "microsoft login: disabled (set GCL_MSA_CLIENT_ID or keys.msa_client_id in config.toml)"
+    )]
     Disabled,
     /// The device code was not approved before it expired.
     #[error("the login code expired before it was approved")]
@@ -182,7 +193,9 @@ pub struct LaunchIdentity {
     pub user_type: String,
     /// The Xbox user id, empty for offline play.
     pub xuid: String,
-    /// Base64 of the MSA client id, empty for offline play.
+    /// The raw Azure client id `${clientid}` is replaced with, empty for offline play.
+    ///
+    /// It is passed through as the caller gives it, with no base64 or other encoding.
     pub client_id: String,
 }
 
@@ -314,13 +327,13 @@ mod tests {
 
     #[test]
     fn msa_launch_identity_carries_the_token_xuid_and_client_id() {
-        let identity = msa_account(None).launch_identity_with("client-id-base64");
+        let identity = msa_account(None).launch_identity_with("azure-client-id");
         assert_eq!(identity.name, "Notch");
         assert_eq!(identity.uuid_undashed, "b50ad385829d3141a2167e7d7539ba7f");
         assert_eq!(identity.access_token, "mc-token");
         assert_eq!(identity.user_type, "msa");
         assert_eq!(identity.xuid, "2535");
-        assert_eq!(identity.client_id, "client-id-base64");
+        assert_eq!(identity.client_id, "azure-client-id");
     }
 
     #[test]
@@ -334,7 +347,7 @@ mod tests {
 
     #[test]
     fn debug_never_prints_the_access_token() {
-        let identity = msa_account(None).launch_identity_with("client-id-base64");
+        let identity = msa_account(None).launch_identity_with("azure-client-id");
         let debug = format!("{identity:?}");
         assert!(!debug.contains("mc-token"), "{debug}");
         assert!(debug.contains("access_token: \"<set>\""), "{debug}");
