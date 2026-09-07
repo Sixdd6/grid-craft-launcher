@@ -216,8 +216,8 @@ id on this machine.
 | `just e2e` (Fabric, MC 1.20.1) | PASS | `PASS create instance`, `PASS install loader`, `PASS content add`, `PASS dry-run launch`, `PASS check classpath files exist (60 entries)` |
 | `just e2e-modpack` (Fabulously Optimized) | PASS | `PASS install modpack`, `50 content entries`, `PASS dry-run launch`, `PASS check classpath files exist (68 entries)` |
 | `GCL_E2E_LOADER=quilt just e2e` (MC 1.20.1) | PASS | `PASS install loader`, `PASS content add`, `PASS check classpath files exist (66 entries)` |
-| `GCL_E2E_LOADER=neoforge just e2e` (MC 1.20.2) | FAIL at `content add` | `PASS install loader`, then `error: AANobbMI has no version for Minecraft 1.20.2 on loader neoforge` |
-| `GCL_E2E_LOADER=forge just e2e` (MC 1.20.1) | FAIL at `content add` | `PASS install loader`, then `error: AANobbMI has no version for Minecraft 1.20.1 on loader forge` |
+| `GCL_E2E_LOADER=neoforge just e2e` (MC 1.20.2, mod Jade) | PASS | `PASS install loader`, `PASS content add`, `PASS dry-run launch`, `PASS check classpath files exist (106 entries)` |
+| `GCL_E2E_LOADER=forge just e2e` (MC 1.20.1, mod JEI) | PASS | `PASS install loader`, `PASS content add`, `PASS dry-run launch`, `PASS check classpath files exist (81 entries)` |
 | `just run-ui -- --smoke` | PASS | exit 0 |
 | `just appimage-smoke` | PASS | exit 0 |
 | `./dist/grid-craft-launcher-0.1.0-x86_64.AppImage --appimage-extract-and-run --cli --version` | PASS | `gcl 0.1.0` |

@@ -2,7 +2,9 @@
 # End-to-end CLI run in a temporary root. Fails at the first step the CLI does not support yet.
 #
 # GCL_E2E_LOADER picks the loader (fabric, quilt, forge, neoforge); GCL_E2E_MC_VERSION the
-# Minecraft version. Nothing is installed outside the temporary root, which is removed on exit.
+# Minecraft version; GCL_E2E_MOD the Modrinth project to add, defaulted per loader since not
+# every mod publishes for every loader. Nothing is installed outside the temporary root, which
+# is removed on exit.
 set -euo pipefail
 
 # shellcheck source=scripts/lib/classpath-check.sh
@@ -22,10 +24,19 @@ case "$LOADER" in
 esac
 MC_VERSION="${GCL_E2E_MC_VERSION:-$DEFAULT_MC}"
 
+# Sodium is Fabric/Quilt-only, so Forge and NeoForge need a mod published for them instead.
+# JEI has no NeoForge 1.20.2 build, so NeoForge uses Jade there. GCL_E2E_MOD overrides this.
+case "$LOADER" in
+  fabric|quilt) DEFAULT_MOD=sodium ;;
+  forge) DEFAULT_MOD=jei ;;
+  neoforge) DEFAULT_MOD=jade ;;
+esac
+MOD="${GCL_E2E_MOD:-$DEFAULT_MOD}"
+
 step() { printf '\n== %s\n' "$1"; }
 pass() { printf 'PASS %s\n' "$1"; }
 
-printf 'loader %s, minecraft %s, root %s\n' "$LOADER" "$MC_VERSION" "$ROOT"
+printf 'loader %s, minecraft %s, mod %s, root %s\n' "$LOADER" "$MC_VERSION" "$MOD" "$ROOT"
 
 step "create instance"
 $GCL instance create e2e --minecraft "$MC_VERSION" --loader "$LOADER"
@@ -36,10 +47,14 @@ $GCL loader install e2e
 pass "install loader"
 
 step "add a mod from modrinth"
-$GCL content add e2e --source modrinth --project sodium
+ADD_OUTPUT="$($GCL content add e2e --source modrinth --project "$MOD" | tee /dev/stderr)"
+# The content list stores the Modrinth project id, not the slug we passed in, so match either:
+# the slug (case-insensitively, since file names capitalize mod names differently) or the id
+# `content add` printed in parentheses.
+PROJECT_ID="$(printf '%s' "$ADD_OUTPUT" | grep -oE '\([A-Za-z0-9]+\)$' | tr -d '()')"
 $GCL content list e2e --json > "$ROOT/content.json"
-if ! grep -q sodium "$ROOT/content.json"; then
-  echo "FAIL: sodium is missing from the content list"
+if ! grep -qi "$MOD" "$ROOT/content.json" && { [ -z "$PROJECT_ID" ] || ! grep -q "$PROJECT_ID" "$ROOT/content.json"; }; then
+  echo "FAIL: $MOD is missing from the content list"
   cat "$ROOT/content.json"
   exit 1
 fi

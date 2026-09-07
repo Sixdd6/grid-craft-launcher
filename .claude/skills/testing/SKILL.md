@@ -253,7 +253,7 @@ key output lines. Use `--json` and parse with serde_json for structure.
 
 ## e2e
 
-`just e2e` runs `scripts/e2e.sh`: temp root, create instance, install the loader, add Sodium
+`just e2e` runs `scripts/e2e.sh`: temp root, create instance, install the loader, add a mod
 from Modrinth (`gcl content add`, a real network call), dry-run launch, check every classpath
 jar exists. It uses the network. Only the e2e-runner agent and humans run it.
 
@@ -262,6 +262,9 @@ jar exists. It uses the network. Only the e2e-runner agent and humans run it.
 - `GCL_E2E_MC_VERSION`: which Minecraft version to use. Defaults to `1.20.1`, except when
   `GCL_E2E_LOADER=neoforge`, where the default is `1.20.2` — NeoForge has no build for 1.20.1
   (see the `modloaders` skill). Set this to override either default.
+- `GCL_E2E_MOD`: which Modrinth project to add. Defaults to `sodium` for `fabric`/`quilt`, `jei`
+  for `forge`, and `jade` for `neoforge` — Sodium publishes for Fabric and Quilt only, and JEI
+  has no NeoForge build for 1.20.2. Set this to override any of these.
 
 `just e2e-modpack` runs `scripts/e2e-modpack.sh`: temp root, `gcl modpack install --source
 modrinth --project <pack>` (`GCL_E2E_PACK`, default `fabulously-optimized`), list content,

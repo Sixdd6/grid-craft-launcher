@@ -42,6 +42,9 @@ printf 'X-AppImage-Version=%s\n' "$VERSION" >>"$APPDIR/grid-craft-launcher.deskt
 cp packaging/icon.png "$APPDIR/grid-craft-launcher.png"
 cp packaging/icon.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/grid-craft-launcher.png"
 
+# The "continuous" release of appimagetool publishes no checksum or signature, so this
+# download is trusted on first use. The file lands in packaging/tools/ and is reused on
+# every later build, so the trust decision is made once per machine, not once per build.
 if [ ! -x "$APPIMAGETOOL" ]; then
     echo "Downloading appimagetool..."
     mkdir -p "$TOOLS"
