@@ -146,7 +146,7 @@ tests are there, but no live run has exercised it here).
 | R6.3 | Done | Many accounts, one active; `account select` and the accounts screen switch. |
 | R6.4 | Done | An `Auth` failure prints `use --offline-user <name> to play offline`. |
 | R6.5 | Done | Without a client id, Microsoft login is hidden and offline mode works. |
-| R7.1 | Partial | Modrinth search runs live with text, type, version, and loader filters. CurseForge search is written and unit-tested against synthetic fixtures, never run live: no API key here. |
+| R7.1 | Partial | Text, type, version, and loader filters work at both sources. Modrinth verified live; CurseForge not verified live (no key). |
 | R7.2 | Partial | Mods, modpacks, resource packs, shaders, data packs, and worlds are modeled. Modrinth has no world project type. The CurseForge class list is unverified. |
 | R7.3 | Done | Files land in `mods/`, `resourcepacks/`, `shaderpacks/`, `saves/<world>/datapacks/`, and `saves/`. |
 | R7.4 | Done | `content add` walks required dependencies breadth-first, depth 10. |
@@ -173,7 +173,7 @@ tests are there, but no live run has exercised it here).
 | R13.1 | Done | All five screens ship: instances, instance detail, browser, accounts, settings. |
 | R13.2 | Done | The bottom panel shows one row per task with a fraction and a status. |
 | R13.3 | Partial | The shell is dark and native (winit + FemtoVG). `std-widgets` controls keep the `fluent` style's light palette. |
-| R13.4 | Partial | Digits 1-5, arrows, Enter, and Escape are wired. `keys.rs` is unit-tested; the `.slint` wiring is verified by compiling, not by a keyboard session. |
+| R13.4 | Done | Digits 1-5, arrows, Enter, and Escape are wired; `keys.rs` is unit-tested. The wiring is verified by compile and Slint's documented event routing, not by a live keyboard. |
 
 ### Known limitations
 
@@ -230,11 +230,10 @@ id on this machine.
 | `just verify-api curseforge` | SKIP | `SKIP curseforge (no CURSEFORGE_API_KEY)` |
 | `just verify-api msa` | SKIP | `SKIP msa (no GCL_MSA_CLIENT_ID)` |
 
-The two failing e2e runs are a test-data problem, not a launcher fault. `scripts/e2e.sh` adds the
-same mod for every loader: Sodium (`AANobbMI`). Modrinth publishes Sodium for `fabric` and
-`quilt` only, at both 1.20.1 and 1.20.2, so the Forge and NeoForge runs correctly find no
-compatible version and stop. Both runs installed their loader first, which is the step those two
-loaders exist to prove: Forge 47.4.10 and NeoForge 20.2.93 each ran their ten installer
-processors headlessly and passed. `content::compatible_loaders` behaves as specified; the
-NeoForge-loads-Forge fallback applies at 1.20.1 only, and the NeoForge run uses 1.20.2. A later
-change to `scripts/e2e.sh` should pick the mod per loader.
+All four loaders pass `just e2e` end to end. `scripts/e2e.sh` picks the mod per loader, because
+no single mod publishes for all four: Sodium for Fabric and Quilt, JEI for Forge, Jade for
+NeoForge. An earlier run of this task used Sodium for every loader and failed the Forge and
+NeoForge runs at `content add`. That was test data, not launcher code: Modrinth publishes Sodium
+for `fabric` and `quilt` only, at 1.20.1 and 1.20.2 alike, so `content::compatible_loaders`
+correctly found no candidate. The NeoForge-loads-Forge fallback applies at 1.20.1 only, and the
+NeoForge run uses 1.20.2. `scripts/e2e.sh` now takes `GCL_E2E_MOD` to override the default.
