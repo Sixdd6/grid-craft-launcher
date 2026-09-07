@@ -92,7 +92,7 @@ fn state(present: bool) -> &'static str {
 pub fn run(launcher: &mut Launcher, format: Format, command: ConfigCommand) -> Result<()> {
     match command {
         ConfigCommand::Show => {
-            let view = RedactedConfig::new(launcher.config());
+            let view = RedactedConfig::new(&launcher.config());
             match format {
                 Format::Json => print_json(&view),
                 Format::Text => {
@@ -104,8 +104,7 @@ pub fn run(launcher: &mut Launcher, format: Format, command: ConfigCommand) -> R
         ConfigCommand::SetRoot { path } => {
             let old_root = launcher.root().path().display().to_string();
             let new_root = path.display().to_string();
-            launcher.config_mut().root = Some(path);
-            launcher.save_config()?;
+            launcher.update_config(|config| config.root = Some(path))?;
             match format {
                 Format::Json => print_json(&serde_json::json!({
                     "root": new_root,
@@ -125,18 +124,17 @@ pub fn run(launcher: &mut Launcher, format: Format, command: ConfigCommand) -> R
             if min.is_none() && max.is_none() {
                 bail!("set-jvm needs --min, --max, or both");
             }
-            if let Some(min) = min {
-                launcher.config_mut().jvm.min_mib = min;
-            }
-            if let Some(max) = max {
-                launcher.config_mut().jvm.max_mib = max;
-            }
-            let jvm = &launcher.config().jvm;
-            let (min_mib, max_mib) = (jvm.min_mib, jvm.max_mib);
+            let (min_mib, max_mib) = {
+                let jvm = &launcher.config().jvm;
+                (min.unwrap_or(jvm.min_mib), max.unwrap_or(jvm.max_mib))
+            };
             if min_mib > max_mib {
                 bail!("min heap {min_mib} MiB is above max heap {max_mib} MiB");
             }
-            launcher.save_config()?;
+            launcher.update_config(|config| {
+                config.jvm.min_mib = min_mib;
+                config.jvm.max_mib = max_mib;
+            })?;
             match format {
                 Format::Json => {
                     print_json(&serde_json::json!({ "min_mib": min_mib, "max_mib": max_mib }))

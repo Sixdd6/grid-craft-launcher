@@ -516,9 +516,11 @@ fn msa_launcher(dir: &tempfile::TempDir, uri: &str, client_id: Option<&str>) -> 
         },
         msa: common::msa_endpoints(uri),
     };
-    let (mut launcher, _rx) =
+    let (launcher, _rx) =
         Launcher::open_with_endpoints(dir.path().to_path_buf(), endpoints).expect("build launcher");
-    launcher.config_mut().keys.msa_client_id = client_id.map(str::to_string);
+    launcher
+        .update_config(|config| config.keys.msa_client_id = client_id.map(str::to_string))
+        .expect("update config");
     launcher.with_secret_store(Box::new(MemoryStore::new()))
 }
 
@@ -755,6 +757,75 @@ async fn without_a_client_id_microsoft_login_is_disabled() {
         assert!(
             matches!(err, gcl_core::Error::Auth(auth::Error::Disabled)),
             "{err:?}"
+        );
+        dir
+    })
+    .await
+    .expect("blocking task");
+}
+
+/// A tiny shell script that stands in for a JVM: it prints one line and exits 3.
+///
+/// A real launch would need a real Java, which no unit test may depend on. The launch command
+/// hands the script every Java argument it built; the script ignores them all.
+#[cfg(unix)]
+fn fake_java_script(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join("fake-java.sh");
+    std::fs::write(&path, "#!/bin/sh\necho hello\nexit 3\n").expect("write fake java");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    path
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn an_async_launch_runs_the_game_and_reports_how_it_exited() {
+    let server = MockServer::start().await;
+    mock_vanilla(&server, MC).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let uri = server.uri();
+
+    tokio::task::spawn_blocking(move || {
+        let launcher = launcher(&dir, Some(uri), None);
+        let mut instance = launcher
+            .instances()
+            .create("Pack", MC, Loader::None, None, &BTreeMap::new())
+            .expect("create instance");
+        instance.config.jvm.java_path = Some(fake_java_script(dir.path()));
+        instance.save().expect("save instance");
+
+        let running = launcher
+            .launch_instance_async(&instance.slug, None, Some("tester"))
+            .expect("start the game");
+        assert_eq!(running.slug, instance.slug);
+        assert!(running.pid.is_some(), "the child was started");
+        let log_path = running.log_path.clone();
+
+        let outcome = running.wait_blocking(&launcher).expect("wait");
+        let LaunchOutcome::Exited {
+            code,
+            log_path: reported,
+            hint,
+        } = outcome
+        else {
+            panic!("expected an exit, got {outcome:?}");
+        };
+        assert_eq!(code, 3);
+        assert_eq!(reported, log_path);
+        assert!(hint.is_some(), "a non-zero exit carries a crash hint");
+
+        assert!(log_path.is_file(), "{}", log_path.display());
+        let written = std::fs::read_to_string(&log_path).expect("read the game log");
+        assert!(written.contains("hello"), "{written}");
+        assert!(
+            launcher
+                .instances()
+                .get(&instance.slug)
+                .expect("reload")
+                .config
+                .last_launched
+                .is_some(),
+            "the launch was recorded"
         );
         dir
     })

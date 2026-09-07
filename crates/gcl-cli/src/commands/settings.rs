@@ -130,16 +130,15 @@ fn defaults(launcher: &mut Launcher, format: Format, command: DefaultsCommand) -
         }
         DefaultsCommand::Set { key, value } => {
             check(&key, &value)?;
-            launcher
-                .config_mut()
-                .game_defaults
-                .insert(key.clone(), value.clone());
-            launcher.save_config()?;
+            launcher.update_config(|config| {
+                config.game_defaults.insert(key.clone(), value.clone());
+            })?;
             report_change(format, &key, Some(&value))
         }
         DefaultsCommand::Unset { key } => {
-            launcher.config_mut().game_defaults.remove(&key);
-            launcher.save_config()?;
+            launcher.update_config(|config| {
+                config.game_defaults.remove(&key);
+            })?;
             report_change(format, &key, None)
         }
     }

@@ -5,7 +5,7 @@
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard};
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
@@ -184,16 +184,83 @@ pub enum LaunchOutcome {
     },
 }
 
+/// Read access to the launcher's config, for as long as the guard lives.
+///
+/// It derefs to [`Config`], so `launcher.config().parallel_downloads` reads as it always did.
+/// It holds a read lock, so a guard kept alive blocks [`Launcher::update_config`].
+#[derive(Debug)]
+pub struct ConfigRead<'a>(RwLockReadGuard<'a, Config>);
+
+impl std::ops::Deref for ConfigRead<'_> {
+    type Target = Config;
+
+    fn deref(&self) -> &Config {
+        &self.0
+    }
+}
+
+/// A launch that is ready to start: the command line, its instance, and its log file.
+struct PreparedLaunch {
+    /// The command line [`crate::launch::build`] produced.
+    cmd: LaunchCommand,
+    /// The instance being launched, saved again when the game exits.
+    instance: Instance,
+    /// The file both of the game's output streams are written to.
+    log_path: PathBuf,
+}
+
+/// A game [`Launcher::launch_instance_async`] started, and the task waiting for it.
+#[derive(Debug)]
+pub struct RunningLaunch {
+    /// Process id of the game, or `None` if it already exited.
+    pub pid: Option<u32>,
+    /// File both of the game's output streams are written to.
+    pub log_path: PathBuf,
+    /// Slug of the instance that was launched.
+    pub slug: String,
+    /// Finishes with the [`LaunchOutcome::Exited`] the game produced.
+    pub wait: tokio::task::JoinHandle<Result<LaunchOutcome, crate::Error>>,
+}
+
+impl RunningLaunch {
+    /// Waits for the game to exit on `launcher`'s runtime. Blocks.
+    ///
+    /// The launcher must be the one that started this launch: its runtime owns the waiting
+    /// task. A task that panicked is reported as an I/O error, since there is nothing better
+    /// to say about it.
+    pub fn wait_blocking(self, launcher: &Launcher) -> Result<LaunchOutcome, crate::Error> {
+        launcher
+            .block_on(self.wait)
+            .map_err(|err| std::io::Error::other(err.to_string()))?
+    }
+}
+
+/// Everything one instance's detail view shows, as [`Launcher::instance_summary`] read it.
+#[derive(Debug, Clone)]
+pub struct InstanceSummary {
+    /// The instance as `instance.toml` holds it.
+    pub instance: Instance,
+    /// Version id a launch resolves, when its version JSON is already cached.
+    pub installed_version_id: Option<String>,
+    /// Downloads the user still has to fetch by hand.
+    pub pending_manual: Vec<ManualDownload>,
+    /// The `java` a launch would run: the instance's own, else the configured one.
+    pub java: Option<PathBuf>,
+}
+
 /// Owns the runtime and every shared handle the rest of the launcher needs.
 pub struct Launcher {
     runtime: tokio::runtime::Runtime,
     root: Root,
-    config: Config,
+    /// The loaded config. Read through [`Launcher::config`], changed through
+    /// [`Launcher::update_config`], which is the only thing that writes it back to disk.
+    config: RwLock<Config>,
     http: HttpClient,
     events: EventSink,
     cancel: CancellationToken,
     endpoints: Endpoints,
-    sources: Vec<BoxSource>,
+    /// The content sources, built on first use and cleared by [`Launcher::update_config`].
+    sources: RwLock<Option<Vec<BoxSource>>>,
     process_runner: Option<Arc<dyn ProcessRunner>>,
     /// The refresh-token store, opened on first use by [`Launcher::secrets`].
     secrets: OnceLock<Box<dyn SecretStore>>,
@@ -230,7 +297,7 @@ impl Launcher {
         let root = redirect_root(resolved.clone(), config.root.as_deref(), overridden);
         if root != resolved && root.config_file().is_file() {
             // The redirected root has its own config.toml. It is the one the user edits and
-            // the one `save_config` writes, so it wins over the config that pointed here.
+            // the one `update_config` writes, so it wins over the config that pointed here.
             config = Config::load(&root.config_file())?;
         }
 
@@ -243,13 +310,12 @@ impl Launcher {
 
         let http = HttpClient::new()?;
         let (events, receiver) = tokio::sync::mpsc::unbounded_channel();
-        let sources = build_sources(&http, &config, &endpoints);
         let launcher = Launcher {
             runtime,
             root,
-            config,
+            config: RwLock::new(config),
             http,
-            sources,
+            sources: RwLock::new(None),
             events,
             cancel: CancellationToken::new(),
             endpoints,
@@ -297,20 +363,42 @@ impl Launcher {
         &self.root
     }
 
-    /// The loaded config.
-    pub fn config(&self) -> &Config {
-        &self.config
+    /// Read access to the loaded config.
+    ///
+    /// The returned guard holds the config's read lock and derefs to [`Config`], so hold it
+    /// no longer than the read needs: [`Launcher::update_config`] waits for it. Never call
+    /// `update_config` while one is alive on the same thread, which would deadlock.
+    pub fn config(&self) -> ConfigRead<'_> {
+        ConfigRead(self.read_config())
     }
 
-    /// Mutable access to the config, for settings edits before [`Launcher::save_config`].
-    pub fn config_mut(&mut self) -> &mut Config {
-        &mut self.config
-    }
-
-    /// Writes the config back to `config.toml` in the app root.
-    pub fn save_config(&self) -> Result<(), crate::Error> {
-        self.config.save(&self.root.config_file())?;
+    /// Changes the config, writes it to `config.toml`, and clears the source cache.
+    ///
+    /// `f` runs under the write lock, so a whole edit lands at once. The file is saved before
+    /// the lock is released, so a reader never sees a change that is not on disk. The cache
+    /// behind [`Launcher::sources`] is cleared afterwards, because an edit may have added or
+    /// removed the CurseForge API key; the next `sources` call builds the list again.
+    pub fn update_config(&self, f: impl FnOnce(&mut Config)) -> Result<(), crate::Error> {
+        {
+            let mut config = self.config.write().unwrap_or_else(|err| err.into_inner());
+            f(&mut config);
+            config.save(&self.root.config_file())?;
+        }
+        self.clear_sources();
         Ok(())
+    }
+
+    /// The config's read guard, taking a poisoned lock's value rather than panicking.
+    ///
+    /// A panic while the config was locked leaves the value itself intact: it is a plain
+    /// struct, and every write finishes before the guard drops.
+    fn read_config(&self) -> RwLockReadGuard<'_, Config> {
+        self.config.read().unwrap_or_else(|err| err.into_inner())
+    }
+
+    /// Drops the cached source list, so the next [`Launcher::sources`] builds it again.
+    fn clear_sources(&self) {
+        *self.sources.write().unwrap_or_else(|err| err.into_inner()) = None;
     }
 
     /// The shared HTTP client.
@@ -370,7 +458,7 @@ impl Launcher {
 
     /// True when a Microsoft client id is configured, so signing in is possible.
     pub fn msa_available(&self) -> bool {
-        self.config.msa_client_id().is_some()
+        self.read_config().msa_client_id().is_some()
     }
 
     /// Signs in with the device-code flow and saves the account. Blocks.
@@ -386,9 +474,23 @@ impl Launcher {
     /// code expires.
     #[tracing::instrument(skip_all)]
     pub fn msa_login(&self, on_code: &OnCodeFn) -> Result<Account, crate::Error> {
+        self.msa_login_with_cancel(on_code, self.cancel_token().child_token())
+    }
+
+    /// Signs in with the device-code flow, watching `cancel` instead of the shared token.
+    ///
+    /// The same sign-in [`Launcher::msa_login`] runs, with the caller deciding what cancels
+    /// it. A GUI passes a child of [`Launcher::cancel_token`] and keeps it, so a "cancel
+    /// sign-in" button ends this one login without cancelling every download in flight;
+    /// cancelling the parent still cancels this too. Blocks.
+    #[tracing::instrument(skip_all)]
+    pub fn msa_login_with_cancel(
+        &self,
+        on_code: &OnCodeFn,
+        cancel: CancellationToken,
+    ) -> Result<Account, crate::Error> {
         let msa = self.msa_client()?;
         let accounts = self.accounts();
-        let cancel = self.cancel_token();
         let ctx = LoginCtx {
             msa: &msa,
             secrets: self.secrets(),
@@ -433,7 +535,7 @@ impl Launcher {
     /// reports the same thing when Microsoft login is turned off.
     fn msa_client(&self) -> Result<Msa, crate::Error> {
         let client_id = self
-            .config
+            .read_config()
             .msa_client_id()
             .ok_or(crate::auth::Error::Disabled)?;
         Ok(Msa::new(
@@ -455,7 +557,7 @@ impl Launcher {
             root: &self.root,
             sink: &self.events,
             cancel: &self.cancel,
-            parallel: self.config.parallel_downloads,
+            parallel: self.read_config().parallel_downloads,
         }
     }
 
@@ -603,7 +705,7 @@ impl Launcher {
     ///
     /// A Microsoft account's Minecraft token is refreshed first when it is about to expire.
     /// A refresh failure is returned as [`crate::Error::Auth`]; the caller decides what to
-    /// tell the user. Blocks.
+    /// tell the user. Blocks until the game exits.
     #[tracing::instrument(skip(self))]
     pub fn launch_instance(
         &self,
@@ -612,6 +714,40 @@ impl Launcher {
         offline_user: Option<&str>,
         dry_run: bool,
     ) -> Result<LaunchOutcome, crate::Error> {
+        let prepared = self.prepare_launch(slug, account, offline_user)?;
+        if dry_run {
+            return Ok(LaunchOutcome::DryRun(prepared.cmd));
+        }
+        self.start(prepared)?.wait_blocking(self)
+    }
+
+    /// Starts the game and returns at once, with a handle to what is running.
+    ///
+    /// Everything [`Launcher::launch_instance`] does up to the spawn is done here, on the
+    /// calling thread: the account is resolved and refreshed, the instance is installed, and
+    /// the command line is built. Only the waiting is left, and it runs as a task on this
+    /// launcher's runtime, so a GUI can show the game as running and keep working. There is
+    /// no dry run: [`Launcher::launch_instance`] has that.
+    #[tracing::instrument(skip(self))]
+    pub fn launch_instance_async(
+        &self,
+        slug: &str,
+        account: Option<&str>,
+        offline_user: Option<&str>,
+    ) -> Result<RunningLaunch, crate::Error> {
+        let prepared = self.prepare_launch(slug, account, offline_user)?;
+        self.start(prepared)
+    }
+
+    /// Resolves the account, installs the instance, and builds the command line.
+    ///
+    /// The shared body of the two launches: everything before the process is started.
+    fn prepare_launch(
+        &self,
+        slug: &str,
+        account: Option<&str>,
+        offline_user: Option<&str>,
+    ) -> Result<PreparedLaunch, crate::Error> {
         let accounts = self.accounts();
         let account = match (offline_user, account) {
             (Some(name), _) => accounts.add(offline_account(name))?,
@@ -621,17 +757,17 @@ impl Launcher {
                 .ok_or_else(|| crate::auth::Error::NotFound(id_or_name.to_string()))?,
             (None, None) => accounts.active()?.ok_or(crate::auth::Error::NoAccount)?,
         };
-        let client_id = self.config.msa_client_id();
+        let client_id = self.read_config().msa_client_id();
         let account = self.fresh_for_launch(account, client_id.as_deref())?;
 
         let plan = self.install_instance(slug)?;
-        let mut instance = self.instances().get(slug)?;
+        let instance = self.instances().get(slug)?;
         let java = match instance
             .config
             .jvm
             .java_path
             .clone()
-            .or_else(|| self.config.jvm.java_path.clone())
+            .or_else(|| self.read_config().jvm.java_path.clone())
         {
             Some(path) => path,
             None => self.ensure_java_for(&plan)?.path,
@@ -643,18 +779,13 @@ impl Launcher {
 
         let identity = account.launch_identity_with(client_id.as_deref().unwrap_or_default());
         let rules = RuleContext::current();
-        let jvm = JvmSettings {
-            min_mib: instance
-                .config
-                .jvm
-                .min_mib
-                .unwrap_or(self.config.jvm.min_mib),
-            max_mib: instance
-                .config
-                .jvm
-                .max_mib
-                .unwrap_or(self.config.jvm.max_mib),
-            extra_args: instance.config.jvm.extra_args.clone(),
+        let jvm = {
+            let config = self.read_config();
+            JvmSettings {
+                min_mib: instance.config.jvm.min_mib.unwrap_or(config.jvm.min_mib),
+                max_mib: instance.config.jvm.max_mib.unwrap_or(config.jvm.max_mib),
+                extra_args: instance.config.jvm.extra_args.clone(),
+            }
         };
         let cmd = crate::launch::build(
             &LaunchInputs {
@@ -671,43 +802,119 @@ impl Launcher {
             },
             Some(&self.events),
         )?;
-        if dry_run {
-            return Ok(LaunchOutcome::DryRun(cmd));
-        }
-
         let log_path = self
             .root
             .logs_dir()
             .join(format!("{slug}-{}.log", now_rfc3339().replace(':', "-")));
+        Ok(PreparedLaunch {
+            cmd,
+            instance,
+            log_path,
+        })
+    }
+
+    /// Spawns the prepared command and the task that waits for it.
+    ///
+    /// The task records the launch in `instance.toml` and reads a crash hint out of the log
+    /// when the exit code is not zero, so both launches report the same [`LaunchOutcome`].
+    fn start(&self, prepared: PreparedLaunch) -> Result<RunningLaunch, crate::Error> {
+        let PreparedLaunch {
+            cmd,
+            mut instance,
+            log_path,
+        } = prepared;
         let sink = self.events.clone();
         let target = log_path.clone();
         let game = self.block_on(async move { crate::launch::spawn(&cmd, target, sink).await })?;
-        instance.config.last_launched = Some(now_rfc3339());
-        instance.save()?;
-        let code = self.block_on(async move { crate::launch::wait(game).await })?;
-        let hint = (code != 0).then(|| crate::launch::crash_hint(&log_path));
-        Ok(LaunchOutcome::Exited {
-            code,
+        let pid = game.child.id();
+        let slug = instance.slug.clone();
+        let path = log_path.clone();
+        let wait = self.runtime.spawn(async move {
+            let code = crate::launch::wait(game).await?;
+            instance.config.last_launched = Some(now_rfc3339());
+            instance.save()?;
+            let hint = (code != 0).then(|| crate::launch::crash_hint(&path));
+            Ok(LaunchOutcome::Exited {
+                code,
+                log_path: path,
+                hint,
+            })
+        });
+        Ok(RunningLaunch {
+            pid,
             log_path,
-            hint,
+            slug,
+            wait,
+        })
+    }
+
+    /// Everything one instance's detail view needs, in one call.
+    ///
+    /// `installed_version_id` is the version id a launch would resolve — the loader build, or
+    /// the Minecraft version for a vanilla instance — and it is `None` until that version
+    /// JSON is in the cache, which is how the caller knows the instance still needs an
+    /// install. `java` is the instance's own `java_path`, else the one in `config.toml`, and
+    /// `None` when neither is set and a launch would find or install a runtime itself.
+    pub fn instance_summary(&self, slug: &str) -> Result<InstanceSummary, crate::Error> {
+        let instance = self.instances().get(slug)?;
+        let id = crate::loaders::version_id(
+            instance.config.loader,
+            &instance.config.minecraft,
+            instance
+                .config
+                .loader_version
+                .as_deref()
+                .unwrap_or_default(),
+        );
+        let installed_version_id = self
+            .root
+            .versions_dir()
+            .join(format!("{id}.json"))
+            .is_file()
+            .then_some(id);
+        let java = instance
+            .config
+            .jvm
+            .java_path
+            .clone()
+            .or_else(|| self.read_config().jvm.java_path.clone());
+        Ok(InstanceSummary {
+            pending_manual: self.pending_manual(slug)?,
+            instance,
+            installed_version_id,
+            java,
         })
     }
 
     /// Every configured content source, in preference order.
     ///
     /// Modrinth is always present. CurseForge is present only when
-    /// [`Config::curseforge_api_key`] found a key when this launcher opened. The list is
-    /// built once, so a later `config_mut` edit of the key changes nothing until a new
-    /// [`Launcher`] is opened.
+    /// [`Config::curseforge_api_key`] finds a key. The list is built on the first call and
+    /// kept; [`Launcher::update_config`] clears it, so an edit that adds or removes the key
+    /// takes effect on the next call. Two threads that race to build it get the same list,
+    /// and the last one written wins.
     pub fn sources(&self) -> Vec<BoxSource> {
-        self.sources.clone()
+        if let Some(cached) = self
+            .sources
+            .read()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone()
+        {
+            return cached;
+        }
+        // The config guard is dropped at the end of this statement, before the write lock is
+        // taken: `update_config` locks the config first and the sources second, and taking
+        // them in the other order here could deadlock.
+        let built = build_sources(&self.http, &self.read_config(), &self.endpoints);
+        *self.sources.write().unwrap_or_else(|err| err.into_inner()) = Some(built.clone());
+        built
     }
 
     /// The configured source with this id.
     ///
     /// A CurseForge lookup without an API key is [`crate::sources::Error::Disabled`].
     pub fn source(&self, id: SourceId) -> Result<BoxSource, crate::Error> {
-        self.sources
+        self.sources()
             .iter()
             .find(|source| source.id() == id)
             .cloned()
@@ -734,7 +941,8 @@ impl Launcher {
     pub fn add_content(&self, slug: &str, req: AddRequest) -> Result<AddOutcome, crate::Error> {
         let mut instance = self.instances().get(slug)?;
         let dl = self.download_ctx();
-        let ctx = self.content_ctx(&dl);
+        let sources = self.sources();
+        let ctx = self.content_ctx(&dl, &sources);
         let outcome = self.block_on(crate::content::add(&ctx, &mut instance, req))?;
         append_pending(&self.pending_path(slug), &outcome.manual)?;
         Ok(outcome)
@@ -774,7 +982,8 @@ impl Launcher {
     pub fn check_updates(&self, slug: &str) -> Result<Vec<UpdateCandidate>, crate::Error> {
         let instance = self.instances().get(slug)?;
         let dl = self.download_ctx();
-        let ctx = self.content_ctx(&dl);
+        let sources = self.sources();
+        let ctx = self.content_ctx(&dl, &sources);
         Ok(self.block_on(crate::content::check_updates(&ctx, &instance))?)
     }
 
@@ -791,7 +1000,8 @@ impl Launcher {
     ) -> Result<Vec<AddOutcome>, crate::Error> {
         let mut instance = self.instances().get(slug)?;
         let dl = self.download_ctx();
-        let ctx = self.content_ctx(&dl);
+        let sources = self.sources();
+        let ctx = self.content_ctx(&dl, &sources);
         let mut outcomes = Vec::with_capacity(candidates.len());
         for candidate in candidates {
             let outcome =
@@ -822,7 +1032,8 @@ impl Launcher {
     ) -> Result<ContentEntry, crate::Error> {
         let mut instance = self.instances().get(slug)?;
         let dl = self.download_ctx();
-        let ctx = self.content_ctx(&dl);
+        let sources = self.sources();
+        let ctx = self.content_ctx(&dl, &sources);
         let entry = self.block_on(crate::content::import_manual(
             &ctx,
             &mut instance,
@@ -857,7 +1068,8 @@ impl Launcher {
     ) -> Result<ImportOutcome, crate::Error> {
         let (zip, pack_source) = {
             let dl = self.download_ctx();
-            let ctx = self.content_ctx(&dl);
+            let sources = self.sources();
+            let ctx = self.content_ctx(&dl, &sources);
             self.block_on(crate::modpacks::fetch_pack(&ctx, source, project, version))?
         };
         self.import_pack(&zip, name, Some(pack_source))
@@ -909,17 +1121,20 @@ impl Launcher {
         let mojang = self.mojang();
         let instances = self.instances();
         let dl = self.download_ctx();
-        let ctx = self.content_ctx(&dl);
+        let sources = self.sources();
+        let ctx = self.content_ctx(&dl, &sources);
         let loader_ctx = LoaderCtx {
             mojang: Some(&mojang),
             ..self.loader_ctx(&dl, java.as_ref(), self.process_runner.as_deref())
         };
+        // Copied out, so the config's read lock is not held for the length of the import.
+        let game_defaults = self.read_config().game_defaults.clone();
         let outcome = self.block_on(crate::modpacks::import_plan(
             &ctx,
             &instances,
             &loader_ctx,
             &endpoints,
-            &self.config.game_defaults,
+            &game_defaults,
             format,
             plan,
             req,
@@ -962,14 +1177,18 @@ impl Launcher {
         Ok(self.block_on(async move { ensure_fresh(&ctx, account, now).await })?)
     }
 
-    /// A content context over this launcher's sources, root, event sink, and `dl`.
+    /// A content context over `sources`, this root, this event sink, and `dl`.
     ///
-    /// [`ContentCtx`] borrows the [`DownloadCtx`], which this launcher hands out by value,
-    /// so the caller keeps one alive and passes it in. [`Launcher::loader_ctx`] does the
-    /// same.
-    fn content_ctx<'a>(&'a self, dl: &'a DownloadCtx<'a>) -> ContentCtx<'a> {
+    /// [`ContentCtx`] borrows the [`DownloadCtx`] and the source list, both of which this
+    /// launcher hands out by value, so the caller keeps them alive and passes them in.
+    /// [`Launcher::loader_ctx`] does the same with the download context.
+    fn content_ctx<'a>(
+        &'a self,
+        dl: &'a DownloadCtx<'a>,
+        sources: &'a [BoxSource],
+    ) -> ContentCtx<'a> {
         ContentCtx {
-            sources: &self.sources,
+            sources,
             dl,
             root: &self.root,
             sink: &self.events,
@@ -1001,7 +1220,7 @@ impl Launcher {
     ) -> Result<JavaInstall, crate::Error> {
         match instance_java
             .map(Path::to_path_buf)
-            .or_else(|| self.config.jvm.java_path.clone())
+            .or_else(|| self.read_config().jvm.java_path.clone())
         {
             Some(path) => Ok(JavaInstall {
                 path,
@@ -1082,7 +1301,7 @@ impl std::fmt::Debug for Launcher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Launcher")
             .field("root", &self.root)
-            .field("config", &self.config)
+            .field("config", &*self.read_config())
             .finish_non_exhaustive()
     }
 }
@@ -1276,6 +1495,43 @@ mod tests {
         guard
     }
 
+    /// Compiles only for a type that can be shared across threads.
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    #[test]
+    fn launcher_is_send_and_sync() {
+        // The GUI hands one `Arc<Launcher>` to every worker thread, so this has to hold.
+        assert_send_sync::<Launcher>();
+    }
+
+    #[test]
+    fn update_config_persists_and_rebuilds_the_sources() {
+        let _guard = clean_key();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+        assert_eq!(launcher.sources().len(), 1, "no key, so Modrinth only");
+
+        launcher
+            .update_config(|config| {
+                config.keys.curseforge_api_key = Some("test-key".to_string());
+                config.parallel_downloads = 3;
+            })
+            .expect("update config");
+
+        let ids: Vec<SourceId> = launcher.sources().iter().map(|s| s.id()).collect();
+        assert_eq!(
+            ids,
+            vec![SourceId::Modrinth, SourceId::CurseForge],
+            "the cache was cleared, so the new key built a second source"
+        );
+        assert!(launcher.source(SourceId::CurseForge).is_ok());
+
+        let (again, _rx) =
+            Launcher::open_with_endpoints(dir.path().to_path_buf(), Endpoints::default())
+                .expect("second launcher");
+        assert_eq!(again.config().parallel_downloads, 3, "the file was written");
+    }
+
     #[test]
     fn new_creates_the_layout_and_a_default_config() {
         let _guard = clean_env();
@@ -1285,7 +1541,7 @@ mod tests {
         assert_eq!(launcher.root().path(), dir.path());
         assert!(launcher.root().instances_dir().is_dir());
         assert!(launcher.root().objects_dir().is_dir());
-        assert_eq!(launcher.config(), &crate::config::Config::default());
+        assert_eq!(*launcher.config(), crate::config::Config::default());
     }
 
     #[test]
@@ -1293,14 +1549,16 @@ mod tests {
         let _guard = clean_env();
         let dir = tempfile::tempdir().expect("tempdir");
         {
-            let (mut launcher, _rx) =
+            let (launcher, _rx) =
                 Launcher::new(Some(dir.path().to_path_buf())).expect("build launcher");
-            launcher.config_mut().parallel_downloads = 3;
             launcher
-                .config_mut()
-                .game_defaults
-                .insert("renderDistance".to_string(), "12".to_string());
-            launcher.save_config().expect("save config");
+                .update_config(|config| {
+                    config.parallel_downloads = 3;
+                    config
+                        .game_defaults
+                        .insert("renderDistance".to_string(), "12".to_string());
+                })
+                .expect("save config");
         }
         let (launcher, _rx) =
             Launcher::new(Some(dir.path().to_path_buf())).expect("build launcher");
@@ -1354,12 +1612,13 @@ mod tests {
             .save(&outer.path().join("config.toml"))
             .expect("save pointer config");
 
-        let (mut launcher, _rx) =
+        let (launcher, _rx) =
             Launcher::open(Root::from_path(outer.path()), false, Endpoints::default())
                 .expect("first launcher");
         assert_eq!(launcher.root().path(), target.path());
-        launcher.config_mut().jvm.max_mib = 8192;
-        launcher.save_config().expect("save config");
+        launcher
+            .update_config(|config| config.jvm.max_mib = 8192)
+            .expect("save config");
 
         let (again, _rx) =
             Launcher::open(Root::from_path(outer.path()), false, Endpoints::default())
@@ -1698,6 +1957,43 @@ mod tests {
     }
 
     #[test]
+    fn instance_summary_reports_the_install_state_and_the_configured_java() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+        let instance = launcher
+            .instances()
+            .create(
+                "Pack",
+                "1.20.1",
+                crate::instances::model::Loader::None,
+                None,
+                &std::collections::BTreeMap::new(),
+            )
+            .expect("create");
+
+        let summary = launcher.instance_summary(&instance.slug).expect("summary");
+        assert_eq!(summary.instance.slug, instance.slug);
+        assert_eq!(
+            summary.installed_version_id, None,
+            "nothing is cached yet, so the instance still needs an install"
+        );
+        assert!(summary.pending_manual.is_empty());
+        assert_eq!(summary.java, None);
+
+        let cached = launcher.root().versions_dir().join("1.20.1.json");
+        std::fs::create_dir_all(launcher.root().versions_dir()).expect("mkdir");
+        std::fs::write(&cached, b"{}").expect("write version json");
+        let java = dir.path().join("java");
+        launcher
+            .update_config(|config| config.jvm.java_path = Some(java.clone()))
+            .expect("update config");
+
+        let summary = launcher.instance_summary(&instance.slug).expect("summary");
+        assert_eq!(summary.installed_version_id.as_deref(), Some("1.20.1"));
+        assert_eq!(summary.java, Some(java));
+    }
+
+    #[test]
     fn sources_always_hold_modrinth() {
         let dir = tempfile::tempdir().expect("tempdir");
         let launcher = seamed(&dir);
@@ -1796,9 +2092,11 @@ mod tests {
             std::env::remove_var("GCL_MSA_CLIENT_ID");
         }
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut launcher = seamed(&dir);
+        let launcher = seamed(&dir);
         assert!(!launcher.msa_available());
-        launcher.config_mut().keys.msa_client_id = Some("client".to_string());
+        launcher
+            .update_config(|config| config.keys.msa_client_id = Some("client".to_string()))
+            .expect("update config");
         assert!(launcher.msa_available());
     }
 
@@ -1815,10 +2113,12 @@ mod tests {
     #[test]
     fn a_configured_java_path_is_used_without_probing() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut launcher = seamed(&dir);
+        let launcher = seamed(&dir);
         let fake = dir.path().join("java");
         std::fs::write(&fake, b"not really java").expect("write fake java");
-        launcher.config_mut().jvm.java_path = Some(fake.clone());
+        launcher
+            .update_config(|config| config.jvm.java_path = Some(fake.clone()))
+            .expect("update config");
 
         // The Mojang host of a `seamed` launcher is unreachable, so this can only return
         // without asking for a version, or a runtime.
