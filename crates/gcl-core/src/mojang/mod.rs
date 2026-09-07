@@ -355,10 +355,16 @@ fn merge_arguments(parent: Option<Arguments>, child: Option<Arguments>) -> Optio
 }
 
 /// Merges libraries by `group:artifact`. Forge profiles keep both versions on the classpath.
+///
+/// `keep_both` never keeps the *same* coordinate twice: a library the child repeats verbatim
+/// builds the one jar path, and a classpath that names it twice fails BootstrapLauncher's
+/// duplicate check.
 fn merge_libraries(parent: Vec<Library>, child: Vec<Library>, keep_both: bool) -> Vec<Library> {
     let mut out = parent;
     for lib in child {
-        let key = MavenCoord::parse(&lib.name).ok().map(|c| c.merge_key());
+        let coord = MavenCoord::parse(&lib.name).ok();
+        let key = coord.as_ref().map(|c| c.merge_key());
+        let exact = coord.as_ref().map(|c| c.exact_key());
         let existing = match (keep_both, &key) {
             (false, Some(key)) => out.iter().position(|l| {
                 MavenCoord::parse(&l.name)
@@ -366,6 +372,15 @@ fn merge_libraries(parent: Vec<Library>, child: Vec<Library>, keep_both: bool) -
                     .map(|c| c.merge_key())
                     .as_ref()
                     == Some(key)
+            }),
+            (true, _) => exact.as_ref().and_then(|exact| {
+                out.iter().position(|l| {
+                    MavenCoord::parse(&l.name)
+                        .ok()
+                        .map(|c| c.exact_key())
+                        .as_ref()
+                        == Some(exact)
+                })
             }),
             _ => None,
         };
@@ -922,6 +937,47 @@ mod merge_tests {
         assert_eq!(
             versions_of(&merged, "com.google.code.gson:gson"),
             ["2.10", "2.11"]
+        );
+    }
+
+    #[test]
+    fn a_forge_child_repeating_a_library_verbatim_keeps_one_copy() {
+        // NeoForge's profile lists some vanilla libraries again at the same version. Two
+        // entries with the same coordinate build the same jar path, and BootstrapLauncher
+        // refuses a classpath that names one jar twice.
+        let mut c = child("neoforge-21.1.250");
+        c.libraries = vec![
+            Library {
+                name: "com.google.code.gson:gson:2.10".to_string(),
+                downloads: None,
+                url: Some("https://maven.neoforged.net/releases/".to_string()),
+                sha1: None,
+                size: None,
+                rules: Vec::new(),
+                natives: None,
+                extract: None,
+            },
+            Library {
+                name: "org.apache.commons:commons-lang3:3.14.0".to_string(),
+                downloads: None,
+                url: Some("https://maven.neoforged.net/releases/".to_string()),
+                sha1: None,
+                size: None,
+                rules: Vec::new(),
+                natives: None,
+                extract: None,
+            },
+        ];
+        let merged = merge(parent(), c, true);
+        assert_eq!(
+            versions_of(&merged, "com.google.code.gson:gson"),
+            ["2.10"],
+            "the repeated coordinate stays one entry"
+        );
+        assert_eq!(
+            versions_of(&merged, "org.apache.commons:commons-lang3"),
+            ["3.12.0", "3.14.0"],
+            "a different version is still kept next to vanilla's"
         );
     }
 

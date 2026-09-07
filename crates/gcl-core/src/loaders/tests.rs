@@ -244,6 +244,18 @@ async fn fabric_install_of_an_unknown_version_is_no_such_version() {
     }
 }
 
+/// Fails when the planned classpath names the same jar twice: `BootstrapLauncher` throws
+/// `IllegalStateException: Duplicate key` on one, and no loader wants a repeat.
+fn assert_no_duplicate_classpath(cp: &[String]) {
+    let mut seen = std::collections::BTreeSet::new();
+    for entry in cp {
+        assert!(
+            seen.insert(entry.clone()),
+            "{entry} appears twice in {cp:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn fabric_profile_resolves_to_a_knot_classpath() {
     let server = mock_meta("v2", FABRIC_LIST, FABRIC_PROFILE, "0.19.5").await;
@@ -293,6 +305,7 @@ async fn fabric_profile_resolves_to_a_knot_classpath() {
         cp.iter().any(|p| p.contains("lwjgl")),
         "classpath lost the vanilla libraries: {cp:?}"
     );
+    assert_no_duplicate_classpath(&cp);
 }
 
 #[tokio::test]
@@ -347,6 +360,7 @@ async fn quilt_list_and_install_use_the_v3_api() {
         cp.iter().any(|p| p.contains("intermediary")),
         "classpath has no intermediary jar: {cp:?}"
     );
+    assert_no_duplicate_classpath(&cp);
 }
 
 #[tokio::test]

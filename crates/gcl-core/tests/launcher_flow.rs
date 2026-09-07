@@ -212,6 +212,15 @@ async fn install_instance_runs_a_forge_install_through_the_injected_process_runn
             "the jar extracted from the installer's maven/ is on the classpath: {:?}",
             plan.classpath
         );
+        let mut seen = std::collections::BTreeSet::new();
+        for jar in &plan.classpath {
+            assert!(
+                seen.insert(jar.clone()),
+                "{} is on the classpath twice: {:?}",
+                jar.display(),
+                plan.classpath
+            );
+        }
         assert_eq!(
             std::fs::read(libs.join(UNIVERSAL_PATH)).expect("universal jar"),
             common::UNIVERSAL_BYTES

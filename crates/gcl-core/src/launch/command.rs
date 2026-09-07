@@ -157,6 +157,7 @@ pub fn build(inputs: &LaunchInputs<'_>, sink: Option<&EventSink>) -> Result<Laun
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
     classpath.push(plan.client_jar.to_string_lossy().into_owned());
+    dedupe_keeping_order(&mut classpath);
 
     let mut vars: BTreeMap<String, String> = BTreeMap::new();
     let mut set = |k: &str, v: String| {
@@ -214,6 +215,7 @@ pub fn build(inputs: &LaunchInputs<'_>, sink: Option<&EventSink>) -> Result<Laun
             args.extend(expand_arguments(&legacy, &rules, &ctx, sink));
         }
     }
+    dedupe_path_list_args(&mut args);
     if let Some(config) = &plan.log_config
         && let Some(client) = plan
             .resolved
@@ -312,6 +314,40 @@ fn legacy_assets(inputs: &LaunchInputs<'_>, game_dir: &Path) -> Result<AssetPath
     })
 }
 
+/// Flags whose next argument is a separator-joined list of jar paths.
+const PATH_LIST_FLAGS: [&str; 5] = ["-cp", "-classpath", "--class-path", "-p", "--module-path"];
+
+/// Drops every repeated entry, keeping the first occurrence and the order of the rest.
+fn dedupe_keeping_order(entries: &mut Vec<String>) {
+    let mut seen = std::collections::HashSet::new();
+    entries.retain(|e| seen.insert(e.clone()));
+}
+
+/// Drops repeated jars from every classpath and module path on the command line.
+///
+/// The library merge already keeps one copy of a repeated coordinate; this is the guard for a
+/// path list a version JSON writes out by hand, such as NeoForge's literal `-p` value. Java's
+/// `BootstrapLauncher` throws `IllegalStateException: Duplicate key` on the first repeat.
+fn dedupe_path_list_args(args: &mut [String]) {
+    for i in 0..args.len() {
+        if !PATH_LIST_FLAGS.contains(&args[i].as_str()) {
+            continue;
+        }
+        let Some(value) = args.get(i + 1) else {
+            continue;
+        };
+        let mut entries: Vec<String> = value
+            .split(CLASSPATH_SEPARATOR)
+            .map(str::to_string)
+            .collect();
+        let before = entries.len();
+        dedupe_keeping_order(&mut entries);
+        if entries.len() != before {
+            args[i + 1] = entries.join(CLASSPATH_SEPARATOR);
+        }
+    }
+}
+
 /// A path as a command-line string. Non-UTF-8 bytes are replaced, as they are on the java side.
 fn path_string(p: &Path) -> String {
     p.to_string_lossy().into_owned()
@@ -326,6 +362,10 @@ mod tests {
 
     const V1_20_1: &str = include_str!("../../../../tests/fixtures/mojang/1.20.1.json");
     const V1_8_9: &str = include_str!("../../../../tests/fixtures/mojang/1.8.9.json");
+    const NEOFORGE_PROFILE: &str =
+        include_str!("../../../../tests/fixtures/neoforge/version_21.1.250.json");
+    const FORGE_PROFILE: &str =
+        include_str!("../../../../tests/fixtures/forge/version_1.20.1-47.4.10.json");
 
     struct Fixture {
         _dir: tempfile::TempDir,
@@ -346,10 +386,14 @@ mod tests {
     }
 
     fn fixture(version_json: &str) -> Fixture {
+        let resolved: VersionJson = serde_json::from_str(version_json).expect("fixture parses");
+        fixture_from(resolved)
+    }
+
+    fn fixture_from(resolved: VersionJson) -> Fixture {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = Root::from_path(dir.path());
         root.ensure_layout().expect("layout");
-        let resolved: VersionJson = serde_json::from_str(version_json).expect("fixture parses");
         let rules = linux_rules();
         let mut plan = plan_install(&resolved, &root, &rules, None).expect("plan");
         // A real install downloads the log4j config and records it; do the same here so the
@@ -453,6 +497,130 @@ mod tests {
         let main = index_of(&cmd.args, "net.minecraft.client.main.Main");
         assert!(main > cp + 1, "main class must follow the jvm args");
         assert!(user > main, "game args must follow the main class");
+    }
+
+    /// The `-cp` value, split back into entries.
+    fn classpath_entries(cmd: &LaunchCommand) -> Vec<String> {
+        let cp = index_of(&cmd.args, "-cp");
+        cmd.args[cp + 1]
+            .split(CLASSPATH_SEPARATOR)
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Fails when any path list on the command line names the same jar twice.
+    ///
+    /// `BootstrapLauncher` (Forge and NeoForge) throws `Duplicate key` on one, so this is a
+    /// launch failure, not a cosmetic problem.
+    fn assert_no_duplicate_paths(cmd: &LaunchCommand) {
+        let mut lists: Vec<Vec<String>> = vec![classpath_entries(cmd)];
+        for (i, arg) in cmd.args.iter().enumerate() {
+            if arg == "-p" || arg == "--module-path" {
+                let value = cmd.args.get(i + 1).expect("module path value");
+                lists.push(
+                    value
+                        .split(CLASSPATH_SEPARATOR)
+                        .map(str::to_string)
+                        .collect(),
+                );
+            }
+        }
+        for list in lists {
+            let mut seen = std::collections::BTreeSet::new();
+            for entry in &list {
+                assert!(
+                    seen.insert(entry.clone()),
+                    "{entry} appears twice in {list:?}"
+                );
+            }
+        }
+    }
+
+    /// The vanilla library object with this coordinate, straight out of the fixture.
+    fn vanilla_library(name: &str) -> serde_json::Value {
+        let v: serde_json::Value = serde_json::from_str(V1_20_1).expect("fixture parses");
+        v["libraries"]
+            .as_array()
+            .expect("libraries")
+            .iter()
+            .find(|l| l["name"] == name)
+            .unwrap_or_else(|| panic!("{name} is not in the fixture"))
+            .clone()
+    }
+
+    /// A loader profile over 1.20.1 that lists `libraries`.
+    fn loader_profile(libraries: serde_json::Value) -> VersionJson {
+        serde_json::from_value(serde_json::json!({
+            "id": "neoforge-test",
+            "inheritsFrom": "1.20.1",
+            "type": "release",
+            "mainClass": "cpw.mods.bootstraplauncher.BootstrapLauncher",
+            "libraries": libraries,
+        }))
+        .expect("profile parses")
+    }
+
+    #[test]
+    fn a_loader_repeating_a_vanilla_library_gets_one_classpath_entry() {
+        let vanilla: VersionJson = serde_json::from_str(V1_20_1).expect("fixture parses");
+        let gson = vanilla_library("com.google.code.gson:gson:2.10");
+        let profile = loader_profile(serde_json::json!([
+            gson,
+            {
+                "name": "cpw.mods:bootstraplauncher:2.0.2",
+                "url": "https://maven.neoforged.net/releases/",
+            },
+        ]));
+        let resolved = crate::mojang::merge(vanilla, profile, true);
+        let f = fixture_from(resolved);
+        let java = PathBuf::from("/usr/bin/java");
+        let cmd = build(&inputs(&f, &java, None), None).expect("build");
+
+        let entries = classpath_entries(&cmd);
+        let gson_entries: Vec<_> = entries
+            .iter()
+            .filter(|e| e.contains("gson-2.10.jar"))
+            .collect();
+        assert_eq!(gson_entries.len(), 1, "gson twice in {entries:?}");
+        assert_no_duplicate_paths(&cmd);
+    }
+
+    #[test]
+    fn a_neoforge_profile_over_vanilla_has_no_duplicate_classpath_entries() {
+        let vanilla: VersionJson = serde_json::from_str(V1_20_1).expect("fixture parses");
+        let profile: VersionJson =
+            serde_json::from_str(NEOFORGE_PROFILE).expect("neoforge fixture parses");
+        let resolved = crate::mojang::merge(vanilla, profile, true);
+        let f = fixture_from(resolved);
+        let java = PathBuf::from("/usr/bin/java");
+        let cmd = build(&inputs(&f, &java, None), None).expect("build");
+        assert_no_duplicate_paths(&cmd);
+    }
+
+    #[test]
+    fn a_forge_profile_over_vanilla_has_no_duplicate_classpath_entries() {
+        let vanilla: VersionJson = serde_json::from_str(V1_20_1).expect("fixture parses");
+        let profile: VersionJson =
+            serde_json::from_str(FORGE_PROFILE).expect("forge fixture parses");
+        let resolved = crate::mojang::merge(vanilla, profile, true);
+        let f = fixture_from(resolved);
+        let java = PathBuf::from("/usr/bin/java");
+        let cmd = build(&inputs(&f, &java, None), None).expect("build");
+        assert_no_duplicate_paths(&cmd);
+    }
+
+    #[test]
+    fn a_repeated_jar_on_a_literal_module_path_is_dropped() {
+        let sep = CLASSPATH_SEPARATOR;
+        let mut args = vec![
+            "-p".to_string(),
+            format!("/libs/a.jar{sep}/libs/b.jar{sep}/libs/a.jar"),
+            "--add-modules".to_string(),
+            "ALL-MODULE-PATH".to_string(),
+        ];
+        dedupe_path_list_args(&mut args);
+        assert_eq!(args[1], format!("/libs/a.jar{sep}/libs/b.jar"));
+        assert_eq!(args[3], "ALL-MODULE-PATH", "other args are untouched");
     }
 
     #[test]

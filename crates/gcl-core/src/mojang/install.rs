@@ -92,8 +92,13 @@ pub fn plan_install(
                 .is_none();
         if !natives_only {
             let (spec, dest) = library_spec(lib, root, override_all_library_urls)?;
-            classpath.push(dest);
-            specs.push(spec);
+            // A version JSON can name the same jar twice — a loader profile that repeats one
+            // of vanilla's libraries, most often. The first entry wins: the classpath must
+            // never carry a path twice, and downloading it twice is wasted work.
+            if !classpath.contains(&dest) {
+                classpath.push(dest);
+                specs.push(spec);
+            }
         }
         if let Some((spec, dest)) = native {
             let exclude = lib

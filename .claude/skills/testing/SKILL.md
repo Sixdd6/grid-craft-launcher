@@ -270,7 +270,8 @@ jar exists. It uses the network. Only the e2e-runner agent and humans run it.
 modrinth --project <pack>` (`GCL_E2E_PACK`, default `fabulously-optimized`), list content,
 dry-run launch, check the classpath. Both e2e scripts source `scripts/lib/classpath-check.sh`'s
 `check_classpath <launch-output-file>`, which reads the `-cp` line out of a dry-run launch and
-fails if any jar on it does not exist on disk — `crates/gcl-cli/tests/cli.rs` uses the same
+fails if any jar on it does not exist on disk or is named twice (BootstrapLauncher rejects a
+repeated jar) — `crates/gcl-cli/tests/cli.rs` uses the same
 function for its own dry-run assertions.
 
 `modpacks::ImportRequest::extra_hosts` is a test seam, not something either e2e script sets: it

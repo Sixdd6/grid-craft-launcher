@@ -32,5 +32,13 @@ check_classpath() {
     echo "FAIL: $count classpath entries, some missing"
     return 1
   fi
-  printf 'PASS check classpath files exist (%s entries)\n' "$count"
+  # BootstrapLauncher (Forge and NeoForge) throws `Duplicate key` when a jar is named twice.
+  local dups
+  dups="$(printf '%s' "$classpath" | tr "$sep" '\n' | sed '/^$/d' | sort | uniq -d)"
+  if [ -n "$dups" ]; then
+    echo "FAIL: the classpath names these jars twice:"
+    echo "$dups"
+    return 1
+  fi
+  printf 'PASS check classpath files exist, none twice (%s entries)\n' "$count"
 }

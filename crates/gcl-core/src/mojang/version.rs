@@ -300,6 +300,21 @@ impl MavenCoord {
         format!("{}:{}", self.group, self.artifact)
     }
 
+    /// Full identity: `group:artifact:version:classifier@ext`.
+    ///
+    /// Two libraries with this key build the same jar path, so only one of them belongs on a
+    /// classpath even when the merge is told to keep both versions of an artifact.
+    pub fn exact_key(&self) -> String {
+        format!(
+            "{}:{}:{}:{}@{}",
+            self.group,
+            self.artifact,
+            self.version,
+            self.classifier.as_deref().unwrap_or(""),
+            self.ext
+        )
+    }
+
     /// Key used to merge libraries: `group:artifact:classifier`, empty when there is none.
     ///
     /// The plain jar and each natives classifier are separate classpath entries, so they
