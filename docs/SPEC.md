@@ -94,9 +94,11 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 
 ## R13 GUI
 
-- R13.1 Screens: instances list, instance detail (content, settings, JVM, logs), content browser (search across sources with type and version filters), accounts, launcher settings.
-- R13.2 Progress for downloads and installs is visible per task.
-- R13.3 Dark theme by default. Native window, no web view.
+- R13.1 Screens: instances list, instance detail (content, settings, JVM, logs), content browser (search across sources with type and version filters), accounts, launcher settings. All five are delivered (`crates/gcl-ui`).
+- R13.2 Progress for downloads and installs is visible per task. Delivered: `App.tasks` shows one row per active task with a fraction and status, in the bottom panel.
+- R13.3 Dark theme by default. Native window, no web view. Delivered through `winit` + `renderer-femtovg`; `std-widgets` controls (combo boxes, text fields, spin boxes) keep the `fluent` style's light palette and sit on the dark shell rather than matching it — see the `slint-ui` skill's "Known limitations".
+- R13.4 Keyboard: every list is arrow-navigable, Enter activates a row, Escape closes the open dialog, digits 1-5 jump to a screen. Delivered and unit-tested at the pure-function level (`gcl-ui/src/keys.rs`); the `.slint` wiring is verified by compiling, not by a keyboard-driving test.
+- Known gaps: modpack discovery in the browser is install-by-id (source + project id), not a modpack search flow — `gcl-core` has no modpack search endpoint. `InstanceState.stop` is present but disabled: `gcl-core` cannot kill a running launch yet, so the button reports why instead of acting. The CurseForge search and the Microsoft device-code sign-in flows are implemented and unit-tested but unverified live on this machine.
 
 ## Later
 

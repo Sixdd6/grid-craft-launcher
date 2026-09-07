@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=GRID Craft Launcher
+Comment=A Minecraft launcher for Linux, Windows, and macOS
+Exec=grid-craft-launcher
+Icon=grid-craft-launcher
+Categories=Game;
+Terminal=false

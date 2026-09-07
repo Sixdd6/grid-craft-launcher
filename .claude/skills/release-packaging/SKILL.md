@@ -15,8 +15,14 @@ description: How releases are built and versioned — cargo-dist config, AppImag
 
 ## Linux AppImage
 
+- `packaging/` holds everything `linuxdeploy` consumes: `grid-craft-launcher.desktop` (Name,
+  `Exec=grid-craft-launcher`, `Icon=grid-craft-launcher`, `Categories=Game;`), `icon.png` (256x256,
+  the rasterized icon `linuxdeploy` copies into the AppImage), and `icon.svg` (the hand-written
+  source the PNG was rendered from — regenerate the PNG from it with
+  `magick -background none packaging/icon.svg -resize 256x256 packaging/icon.png` rather than
+  editing the PNG directly).
 - Build release, then `linuxdeploy --appdir AppDir --executable target/release/grid-craft-launcher --desktop-file packaging/grid-craft-launcher.desktop --icon-file packaging/icon.png --output appimage`.
-- Keep `packaging/` for the desktop file and icons. Follow the `grid-launcher` project's `build.sh` for the linuxdeploy download step.
+- Follow the `grid-launcher` project's `build.sh` for the linuxdeploy download step.
 - Slint with winit needs no bundled Qt; ensure `libxkbcommon`, `fontconfig`, and `wayland` client libs are system-provided (they are on any desktop).
 
 ## Windows and macOS

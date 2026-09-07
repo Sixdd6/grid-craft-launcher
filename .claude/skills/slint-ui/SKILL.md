@@ -7,37 +7,158 @@ description: Slint UI conventions for gcl-ui — file layout, theme tokens, mode
 
 ```
 crates/gcl-ui/
-  build.rs                  slint_build::compile("ui/app.slint")
-  ui/app.slint              AppWindow: imports screens, holds navigation state
-  ui/theme.slint            global Theme: colors, radius, gap, pad, font sizes
-  ui/components/            Button, Card, ListRow, ProgressBar, SearchBox, TabBar
-  ui/screens/               instances.slint, instance-detail.slint, browser.slint, accounts.slint, settings.slint
-  src/main.rs               builds the window, wires callbacks, starts core
-  src/models/               one file per screen: converts core structs to Slint structs and VecModel
-  src/events.rs             receives core events on a channel, forwards with invoke_from_event_loop
+  build.rs                  slint_build::compile_with_config("ui/app.slint", fluent style, embeds resources)
+  ui/app.slint               AppWindow: rail, one mounted screen, every dialog, the toast host
+  ui/theme.slint              global Theme: colors, radius, gap, pad, font sizes, row-height
+  ui/types.slint               exported structs crossing the Rust boundary
+  ui/state.slint               Shell global plus the per-screen *State globals
+  ui/components/               Button, Card, ListRow, ProgressBar, ProgressPanel, SearchBox,
+                                TabBar, Rail, ToastHost, Dialog and its Confirm/Prompt/Choice/
+                                DeviceCode/CreateInstance variants
+  ui/screens/                  instances.slint, instance.slint, browser.slint, accounts.slint,
+                                settings.slint
+  src/main.rs                  args, opens Launcher::new, builds the window, runs the event loop
+  src/app.rs                   builds AppWindow, wires App/Shell callbacks, starts the forwarder
+  src/bridge.rs                Bridge: runs a Launcher call off the UI thread
+  src/events.rs                forwarder thread: batches core Events onto the UI thread
+  src/state.rs                 RunState: which slugs have a game running
+  src/keys.rs                  pure keyboard rules
+  src/toasts.rs                the toast queue
+  src/models/                  pure converters from gcl-core structs to Slint structs
+  src/screens/*.rs              one module per screen, each exposing `wire(&window, &bridge, ...)`
 ```
 
 ## Rules
 
 - Every color, spacing, and font size comes from `Theme`. Add a token before you need a literal.
-- Screens are pure layout. They expose `in` properties for data and `callback`s for actions. No logic.
-- Data crosses the boundary as Slint `struct`s declared in `ui/types.slint` and exported. Rust builds `Rc<VecModel<T>>` in `src/models/`.
-- Long work never runs on the UI thread. Callbacks call a `Launcher` handle method that spawns on the tokio runtime and returns at once. Results arrive as events.
-- Event forwarding: the tokio task sends `Event` on an `mpsc` channel; a receiver task calls `slint::invoke_from_event_loop(move || { ... update models ... })`. Hold a `slint::Weak<AppWindow>` in the task, upgrade inside the closure.
-- Progress: one `TaskRow { id, label, fraction, status }` per active task in a `VecModel`. Update by id.
+- Screens are pure layout. They read a `*State` global (see below) and expose no logic beyond
+  binding properties and forwarding callbacks.
+- Data crosses the boundary as Slint `struct`s declared in `ui/types.slint` and exported. Rust
+  builds them with the pure converters in `src/models/` and wraps a list in `ModelRc::new(VecModel::from(vec))`.
+- No core call ever runs on the UI thread. A callback hands work to `Bridge::run` or
+  `Bridge::run_with_error`, which spawns a plain thread, calls `Launcher`, and posts the result
+  back with `upgrade_in_event_loop`.
+- Never hold a `Launcher::config()` guard (`ConfigRead`) across another `Launcher` call: a call
+  that needs the write lock — `update_config` or most instance and content methods — would
+  deadlock against a guard the caller still holds. Read what you need, drop the guard, then call.
+- `slint::Weak<AppWindow>` is the only handle a spawned closure captures. Never capture the strong
+  `AppWindow`/component handle inside its own callback: that is a reference cycle.
+- `ModelRc<T>` and `slint::Image` are UI-thread only. Build them inside the
+  `upgrade_in_event_loop` closure (or on the UI thread generally), never on a worker thread.
+- Progress: one `TaskRow { id, label, fraction, status, detail }` per active task in `App.tasks`.
+  Update by id; a finished or failed row is aged out later, not dropped by the batch that ended it.
+
+## State globals
+
+Each screen is mounted behind `if App.screen == Screen.x: XScreen { }` in `app.slint`, so Rust has
+no handle into it once mounted. The fix is a global per screen — `InstancesState`, `InstanceState`,
+`AccountsState`, `SettingsState`, declared in `ui/state.slint` or `ui/app.slint` — that both the
+screen and `src/screens/x.rs` reach: the screen binds its layout to the global, and `x.rs` calls
+`window.global::<XState>()` to read properties, set them, and answer callbacks. `Shell` (in
+`state.slint`) is the one global every screen may import directly, for the two services every
+screen needs: `Shell.toast(text, kind)` and `Shell.move_selection(current, delta, len)`. It cannot
+live in `app.slint` because `app.slint` imports the screens, and a screen importing `app.slint`
+back would cycle.
+
+Give every `*State` property a realistic default. That default is what `just ui-preview
+screens/x.slint` renders with no Rust running — it is the whole point of the preview workflow, so
+an empty or placeholder default defeats it.
+
+## Bridge
+
+`Bridge::new(launcher: Arc<Launcher>, weak: Weak<AppWindow>)` is cheap to clone and shared across
+screens. Two entry points:
+
+- `Bridge::run(label, job, done)`: `job(&Launcher) -> Result<T, gcl_core::Error>` runs on a new
+  thread; on `Ok`, `done(&AppWindow, T)` runs on the UI thread; on `Err`, the shared error dialog
+  opens with `label` as its title and `done` never runs.
+- `Bridge::run_with_error(label, job, done)`: the same threading, but `done(&AppWindow,
+  Result<T, Error>)` always runs, after the error dialog opens on the `Err` path. Use this
+  whenever a screen sets a "loading"/"busy" flag before the call — it needs to be cleared either
+  way.
+
+`bridge::error_chain(err)` joins an error and every `source()` under it with `": "`, the same
+shape the CLI prints. `bridge::warn(window, text)` appends a warning to `App.app_log` and stacks a
+toast — every warning a screen raises (a manual-download note, a launch that exited non-zero)
+goes through this one function.
+
+## Events and toasts
+
+`events::start_forwarder(rx, weak)` owns the receiver end of the core event channel. It blocks for
+the first event, sleeps 50 ms collecting the rest of the batch, then posts one closure that folds
+the whole batch into `App.tasks` and `App.app_log` in a single redraw (`events::apply` is the pure
+fold; test it directly, no window needed). A finished or failed row is stamped with its end time in
+a `thread_local!` map and pruned by the one-second `Timer` in `src/app.rs` once `KEEP_DONE` (5 s)
+has passed — not by the batch that ended it, so it stays visible briefly. `toasts.rs` follows the
+same push/prune split, `TTL` 6 s, `MAX` 3 live at once. `RunState` (`src/state.rs`) is the one
+piece of shared state that lives outside a `*State` global: an `Arc<Mutex<HashSet<String>>>` of
+running slugs, so the instances list and the detail screen agree on "Running" regardless of which
+one started the launch.
+
+## Keyboard
+
+A focused element sees a key first; the `FocusScope` in `app.slint` only gets what bubbles up, and
+only calls `App.key_pressed` while `any_dialog_open` is false. `keys::key_to_screen` maps digits 1
+to 5 to the five screens, matching the rail's own numbers. `keys::move_selection(current, delta,
+len)` is the pure function behind every arrow-navigable list: clamps to `[0, len)` rather than
+wrapping, so holding an arrow stops at an end; `-1` means no selection and a first press lands on
+the near end. Both are ordinary Rust, unit-tested with no Slint instance. The `.slint` wiring that
+calls them is checked by compiling the crate, not by a test that drives real key events.
 
 ## Preview
 
-`just ui-preview screens/instances.slint` opens slint-viewer with live reload. Give screens
-default property values so the preview shows realistic content. Describe what you saw in the report.
+`just ui-preview screens/instances.slint` opens slint-viewer with live reload against
+`ui/screens/instances.slint`, rendered with each `*State` global's default property values. Every
+screen file has one: `screens/instances.slint`, `screens/instance.slint`, `screens/browser.slint`,
+`screens/accounts.slint`, `screens/settings.slint`. Give a changed screen realistic defaults before
+previewing, and describe what you saw in your report — the tool has no snapshot output.
 
 ## Visual direction
 
-- Dark first. Dense rows, 32 to 36 px tall. Left rail for navigation, content on the right.
-- One accent color for primary actions and selection. Danger color for delete only.
-- Text over icons. No gradients, shadows kept to one level, radius from `Theme.radius`.
-- Show state in place: progress bars in the row that is installing, not in a modal.
-- Keyboard: every list is arrow-navigable, Enter activates, Escape closes panels.
+- Dark first: `Theme.bg` is a dark background; the shell, rail, and screens follow it. Dense
+  rows, sized from `Theme.row-height` (32 to 36 px). Left rail (`components/rail.slint`) for
+  navigation, screen content on the right.
+- One accent color for primary actions and selection. A separate danger color marks only
+  destructive actions (remove, delete).
+- Text over icons. No gradients; shadows kept to one level; corner radius from `Theme.radius`.
+- Show state in place: a task's progress bar lives in `ProgressPanel`, in the row for that task,
+  not in a modal. The instance list and detail screen mark a running game in place, through
+  `RunState`, rather than a separate "now playing" panel.
+- Every list is arrow-navigable through `Shell.move_selection`; Enter activates a selected row;
+  Escape closes the open dialog. See "Keyboard" above.
+- The one exception to the dark-first rule is `std-widgets` controls — see "Known limitations".
+
+## Known limitations
+
+- **Widget theme**: `std-widgets.slint` controls (`ComboBox`, `TextEdit`, `SpinBox`, ...) render
+  in the `fluent` style's light palette; they sit on the app's dark shell rather than matching it.
+  No token in `Theme` reaches into a std-widget's own colors. Left as-is for the MVP.
+- **No clipboard**: Slint 1.17 has no clipboard call reachable from a button here. Anywhere a user
+  might want to copy text (the error dialog's body, for one) uses a read-only, selectable
+  `TextEdit` instead — Ctrl+C on a selection is the whole copy story.
+- **Modpack discovery is install-by-id**: the browser installs a modpack once its source and
+  project id are known; there is no in-app modpack *search* flow, because `gcl-core` has no
+  modpack search endpoint, only project lookup and install.
+- **`stop()` is disabled**: `InstanceState.stop` exists so the button has a place to grow into, but
+  it is a no-op that only reports why — `gcl-core` has no way to kill a running launch.
+- **Verified by compile, not by hand**: keyboard routing is exercised through unit tests on the
+  pure functions and a passing build, not a live keyboard session. The CurseForge and Microsoft
+  sign-in flows in the accounts and browser screens are unverified live on this machine — they
+  compile and their pure logic is tested, but no one has clicked through a real CurseForge search
+  or a real Microsoft device-code login in the built app here.
+
+## Do not
+
+- Do not call a `Launcher` method directly from a callback body. Go through `Bridge::run` or
+  `Bridge::run_with_error`.
+- Do not hold a `ConfigRead` guard while making another `Launcher` call.
+- Do not build a `ModelRc` or `Image` outside the UI thread.
+- Do not capture a strong `AppWindow`/component handle inside one of its own callbacks.
+- Do not put logic in a `.slint` screen file. If it is not layout or a direct property/callback
+  binding, it belongs in `src/screens/*.rs`.
+- Do not add a color, spacing, or font literal outside `Theme`.
+- Do not skip a realistic default on a `*State` property — it breaks the preview workflow for
+  everyone after you.
 
 ## Docs
 

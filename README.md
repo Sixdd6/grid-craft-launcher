@@ -22,6 +22,27 @@ just run-cli debug verify-source modrinth
 just run-ui
 ```
 
+## Run the app
+
+```bash
+just run-ui              # opens the desktop UI
+just run-ui -- --smoke   # opens it, runs one synthetic task, quits — a quick sanity check
+```
+
+Screenshots: none yet. Add them here once the UI has a stable enough look to be worth capturing.
+
+Keyboard shortcuts:
+
+- `1`-`5`: jump to Instances, Instance, Browser, Accounts, Settings.
+- Arrow keys: move the selection in any list.
+- `Enter`: open or activate the selected row.
+- `Escape`: close the open dialog.
+
+The launcher's own controls (buttons, rows, panels) follow a dark theme. Standard form controls
+— combo boxes, text fields, spin boxes — come from Slint's `fluent` widget style and keep its
+light palette, so they look lighter than the rest of the window. This is a known limitation, not
+a bug; see the `slint-ui` skill for detail.
+
 ## Try it
 
 ```bash

@@ -275,8 +275,30 @@ adds hosts to the `.mrpack` download allowlist (`mrpack::ALLOWED_HOSTS`) for one
 unit or CLI test can serve a fake `.mrpack` from its own wiremock server without that host being
 one a real pack could ever use. Leave it empty in anything that talks to a real source.
 
+## gcl-ui
+
+- No display in CI, so nothing here builds a real `AppWindow` in a test. Instead, every module
+  that would otherwise need one splits its logic into a pure helper and tests that directly:
+  `events::apply` (folds a batch of core `Event`s into the task list and log, no window),
+  `events::prune_finished` and `toasts::prune`/`push` (age rows and toasts out by a given
+  `Instant`), `keys::key_to_screen` and `keys::move_selection` (keyboard rules), `state::RunState`
+  (the running-slugs set), and the converters in `src/models/` (`gcl-core` struct to Slint
+  struct). Each screen module (`src/screens/*.rs`) keeps its own `tests.rs` the same way.
+  `crates/gcl-ui/src/bridge/tests.rs` covers `Bridge`'s threading with `bridge::spawn_job`, the
+  windowless half of `Bridge::run`.
+- `just run-ui -- --smoke`: opens the real window, sends three synthetic events through the
+  event sink, waits 500 ms, then quits. It is the one thing that needs a display — run it by
+  hand or under `xvfb-run` locally, not in CI.
+- `just ui-preview screens/x.slint` is a manual visual check (slint-viewer, live reload), not an
+  automated test. Use it after changing a screen; there is no snapshot to assert on.
+- Add a test for new pure logic before wiring it into a callback. If a change can only be tested
+  by clicking through the built app, it usually means logic leaked into a `.slint` file or an
+  `app.rs` closure that should have stayed in a testable helper.
+
 ## What not to do
 
 - No network in unit or CLI tests.
 - No `sleep` to wait for async work; await the future.
 - No tests that depend on ordering or shared global state.
+- No gcl-ui test that builds a real `AppWindow` or opens a display; keep logic in a pure helper
+  and test that instead.

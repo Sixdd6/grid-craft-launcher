@@ -30,7 +30,7 @@ Add a row here when you add a module.
 | `auth` | offline accounts (`auth::offline`) and the account store (`auth::store`, `accounts.json`); `LaunchIdentity` placeholders. `auth::msa` (`Msa`, `MsaEndpoints`, the six-step login chain, `Error`); `auth::secrets` (`SecretStore` trait, `KeyringStore`, `FileStore`, `MemoryStore`, `open_default`); `auth::session` (`LoginCtx`, `login_device_code`, `complete_chain`, `refresh_account`, `ensure_fresh`) | `paths`, `http` |
 | `launch` | `launch::command::build` turns an `InstallPlan`, account, instance, and JVM settings into a `LaunchCommand`; `launch::spawn` starts and streams it | `instances`, `mojang`, `auth` |
 | `events` | `Progress` and `LogLine` event types and the channel | none |
-| `launcher` | `Launcher` handle: owns the tokio runtime, root, config, HttpClient, event channel, and cancellation token; every binary entry point goes through it. Orchestrates `install_loader`, `install_instance`, `launch_instance`, `java_for_version`, `apply_settings_overrides`, and the content and modpack flows below (`sources`, `search`, `add_content`, `list_content`, `remove_content`, `set_content_enabled`, `check_updates`, `apply_updates`, `pending_manual`, `import_manual_file`, `import_modpack_file`, `import_modpack`, `configured_or_detected_java`), plus `msa_available`, `msa_login(on_code)`, `msa_refresh(id_or_name)`, and `secrets()` (lazy: opens the OS keyring or falls back to a file on first use; `with_secret_store` overrides it for tests). `sources()` builds Modrinth always and CurseForge only when a `CURSEFORGE_API_KEY` was found when this launcher opened; the list is built once and cached, so changing the key needs a new `Launcher`. `Endpoints::from_env()` reads `GCL_MOJANG_BASE_URL`, `GCL_FABRIC_BASE_URL`, `GCL_QUILT_BASE_URL`, `GCL_FORGE_META_BASE_URL`, `GCL_FORGE_MAVEN_BASE_URL`, `GCL_NEOFORGE_BASE_URL`, `GCL_MODRINTH_BASE_URL`, `GCL_CURSEFORGE_BASE_URL`, and the six `Endpoints.msa` overrides `GCL_MSA_DEVICE_URL`, `GCL_MSA_TOKEN_URL`, `GCL_MSA_XBL_URL`, `GCL_MSA_XSTS_URL`, `GCL_MSA_MC_URL`, and `GCL_MSA_PROFILE_URL` (all test-only, and read in a debug build only: a release build returns `Endpoints::default()` whatever the environment holds). `GCL_NO_KEYRING=1` is the matching override for `secrets()`: it forces the file store, also debug-only, so tests never write to a developer's real keyring. `open_with_endpoints` is the test seam that takes `Endpoints` directly and reads no environment | `config`, `http`, `events`, `paths`, `download`, `mojang`, `java`, `instances`, `loaders`, `auth`, `launch`, `settings`, `sources`, `content`, `modpacks` |
+| `launcher` | `Launcher` handle: owns the tokio runtime, root, config, HttpClient, event channel, and cancellation token; every binary entry point goes through it. `Launcher` is `Send + Sync`, so a GUI can hold it in an `Arc` and call it from any worker thread. Orchestrates `install_loader`, `install_instance`, `launch_instance`, `launch_instance_async` (starts the game and returns a `RunningLaunch { pid, log_path, slug, wait }` at once, instead of blocking until it exits, so a caller can show the game as running and keep working; `wait` is a runtime task the caller awaits or drops), `java_for_version`, `apply_settings_overrides`, and the content and modpack flows below (`sources`, `search`, `add_content`, `list_content`, `remove_content`, `set_content_enabled`, `check_updates`, `apply_updates`, `pending_manual`, `import_manual_file`, `import_modpack_file`, `import_modpack`, `configured_or_detected_java`), plus `msa_available`, `msa_login(on_code)` (blocks on the shared cancel token), `msa_login_with_cancel(on_code, cancel)` (the same login watching a caller-supplied token, so a GUI's "cancel sign-in" button can end one login without cancelling every other download), `msa_refresh(id_or_name)`, and `secrets()` (lazy: opens the OS keyring or falls back to a file on first use; `with_secret_store` overrides it for tests). `config()` returns a `ConfigRead` guard (derefs to `Config`); hold it no longer than the read needs and never across another `Launcher` call, since a call that needs the write lock (`update_config`, most instance and content methods) would deadlock against a guard the caller is still holding. `update_config(f)` runs `f` under the write lock, saves `config.toml`, and clears the cached source list before returning, so a GUI settings screen never opens the file itself. `set_instance_override`/`unset_instance_override` edit one `options.txt` override and save `instance.toml`; `set_instance_jvm` replaces an instance's JVM overrides (rejects `min > max`); `instance_options` reads back what `options.txt` currently holds; `list_worlds` lists an instance's `saves/` folders; `instance_summary` returns everything a detail screen needs in one call (`InstanceSummary`: whether the resolved version is installed, the Java path that would be used, and so on). `sources()` builds Modrinth always and CurseForge only when a `CURSEFORGE_API_KEY` was found when this launcher opened; the list is built once and cached, so changing the key needs a new `Launcher`. `Endpoints::from_env()` reads `GCL_MOJANG_BASE_URL`, `GCL_FABRIC_BASE_URL`, `GCL_QUILT_BASE_URL`, `GCL_FORGE_META_BASE_URL`, `GCL_FORGE_MAVEN_BASE_URL`, `GCL_NEOFORGE_BASE_URL`, `GCL_MODRINTH_BASE_URL`, `GCL_CURSEFORGE_BASE_URL`, and the six `Endpoints.msa` overrides `GCL_MSA_DEVICE_URL`, `GCL_MSA_TOKEN_URL`, `GCL_MSA_XBL_URL`, `GCL_MSA_XSTS_URL`, `GCL_MSA_MC_URL`, and `GCL_MSA_PROFILE_URL` (all test-only, and read in a debug build only: a release build returns `Endpoints::default()` whatever the environment holds). `GCL_NO_KEYRING=1` is the matching override for `secrets()`: it forces the file store, also debug-only, so tests never write to a developer's real keyring. `open_with_endpoints` is the test seam that takes `Endpoints` directly and reads no environment | `config`, `http`, `events`, `paths`, `download`, `mojang`, `java`, `instances`, `loaders`, `auth`, `launch`, `settings`, `sources`, `content`, `modpacks` |
 
 Rules:
 
@@ -152,6 +152,92 @@ forwards them to the Slint event loop with `slint::invoke_from_event_loop` and u
 `gcl-core` builds one tokio runtime in `Launcher::new()`. Binaries call `Launcher` methods and
 never create a runtime. The UI runs on the main thread and talks to core through a `Launcher`
 handle that spawns tasks on the runtime.
+
+## gcl-ui structure
+
+```
+crates/gcl-ui/
+  build.rs                     slint_build::compile_with_config, fluent style, embeds resources
+  ui/app.slint                 AppWindow: rail, one screen mounted at a time, every dialog, toasts
+  ui/theme.slint                global Theme: colors, radius, gap, pad, font sizes, row-height
+  ui/types.slint                exported structs crossing the Rust boundary (InstanceRow, ContentRow, ...)
+  ui/state.slint                Shell global plus the per-screen *State globals (below)
+  ui/components/                Button, Card, ListRow, ProgressBar, ProgressPanel, SearchBox,
+                                 TabBar, Rail, ToastHost, Dialog and its Confirm/Prompt/Choice/
+                                 DeviceCode/CreateInstance variants
+  ui/screens/                   instances.slint, instance.slint, browser.slint, accounts.slint,
+                                 settings.slint — pure layout, no logic
+  src/main.rs                   parses args (`--smoke`, `-h`, `-V`), opens `Launcher::new`, builds
+                                 the window, runs the event loop
+  src/app.rs                    builds AppWindow, wires App/Shell callbacks, starts the forwarder
+                                 and the one-second ticker
+  src/bridge.rs                 Bridge: runs a Launcher call off the UI thread, posts the result back
+  src/events.rs                 forwarder thread: batches core Events, updates the task list and log
+  src/state.rs                  RunState: which instance slugs have a game running, shared by screens
+  src/keys.rs                   pure keyboard rules: key_to_screen, move_selection
+  src/toasts.rs                 the toast queue: push, prune, sync to the App.toasts model
+  src/models/                   pure converters from gcl-core structs to the Slint structs in types.slint
+  src/screens/*.rs               one module per screen; each exposes `wire(&window, &bridge, ...)`
+```
+
+### State globals
+
+Each screen sits behind `if App.screen == Screen.x: XScreen { }` in `app.slint`, so Rust cannot
+reach a mounted screen's properties directly — there is no handle to call `get_x`/`set_x` on. The
+fix is a global per screen (`InstancesState`, `InstanceState`, `AccountsState`, `SettingsState`,
+declared in `ui/state.slint` and `ui/app.slint`) that both the screen and `src/screens/*.rs` can
+reach: the screen binds its layout to the global's properties, and Rust calls
+`window.global::<XState>()` to read and write them and to answer its callbacks. `Shell` is the one
+global every screen may reach directly for two cross-cutting services: `Shell.toast(text, kind)`
+and `Shell.move_selection(current, delta, len)`. It lives in `state.slint` rather than `app.slint`
+because `app.slint` imports the screens, so a screen cannot import a global declared there.
+
+Each `*State` default carries realistic preview content, so `just ui-preview screens/x.slint`
+shows a filled screen with no Rust running.
+
+### Bridge and threading
+
+`Bridge` (`src/bridge.rs`) holds an `Arc<Launcher>` and a `slint::Weak<AppWindow>`. `Bridge::run`
+spawns a plain OS thread, calls the given closure with `&Launcher` there, and on completion posts
+the result to the UI thread with `weak.upgrade_in_event_loop`: `done` runs on success, the shared
+error dialog opens on failure. `Bridge::run_with_error` is the same shape but always calls `done`
+— with the whole `Result` — so a screen that set a "loading" flag can clear it on both paths; the
+error dialog still opens first. No core call ever runs on the UI thread, and a `Weak` is captured
+only inside a closure, never a strong `AppWindow` handle (that would be a reference cycle).
+
+### Events and toasts
+
+Core sends `Event`s (`TaskStarted`, `TaskProgress`, `TaskFinished`, `TaskFailed`, `Log`, `Warning`)
+on an `mpsc` channel. `events::start_forwarder` runs one thread that blocks for the first event of
+a batch, sleeps 50 ms collecting whatever else arrived, then posts one closure to the UI thread
+that folds the whole batch into the `App.tasks` and `App.app_log` models in a single redraw. A
+`Warning` both appends to the log and stacks a toast. A finished or failed row is not dropped by
+the batch that ended it: it is stamped in a `thread_local!` age map, and the one-second `Timer` in
+`src/app.rs` prunes anything older than `KEEP_DONE` (5 s). Toasts follow the same pattern in
+`src/toasts.rs`, aged out after `TTL` (6 s) and capped at `MAX` (3) live at once. `RunState`
+(`src/state.rs`) is the one piece of cross-screen state outside a `*State` global: an
+`Arc<Mutex<HashSet<String>>>` of slugs whose game is up, so the instances list and the detail
+screen agree on which rows show "Running" no matter which one started the launch.
+
+### Keyboard
+
+Slint delivers a key to the focused element first; only what it rejects bubbles up to the
+`FocusScope` in `app.slint`. That scope calls `App.key_pressed`, which is wired to `keys::key_to_screen`
+— digits 1 to 5 pick a screen, matching the numbers printed in the rail — but only while
+`any_dialog_open` is false, so a modal keeps the keyboard. `keys::move_selection` is the pure
+function behind every arrow-navigable list: it clamps to the list rather than wrapping, so holding
+an arrow key stops at an end. Both functions are plain Rust with no Slint instance involved, so
+they are covered by ordinary unit tests; the `.slint` wiring itself is verified by compiling, not
+by a keyboard-driving test.
+
+### `--smoke`
+
+`grid-craft-launcher --smoke` opens the real window, sends three synthetic events through the
+launcher's own event sink (a task that finishes, one that fails, and a warning), waits 500 ms so
+the forwarder and the ticker both run at least once, then calls `slint::quit_event_loop()`. It
+exercises the forwarder, the models, and window creation with no test harness of its own; `just
+run-ui -- --smoke` runs it and exits 0 on success. It still needs a display — see the `testing`
+skill for what that means in CI.
 
 ## App root layout
 
