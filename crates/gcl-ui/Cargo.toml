@@ -22,3 +22,7 @@ tokio-util.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true
+
+# `publish = false` hides these binaries from dist; opt back in.
+[package.metadata.dist]
+dist = true

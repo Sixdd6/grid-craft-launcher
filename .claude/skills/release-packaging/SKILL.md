@@ -10,8 +10,22 @@ description: How releases are built and versioned — cargo-dist config, AppImag
 
 ## cargo-dist
 
-- Install: `cargo install cargo-dist --locked`. Init once: `dist init` choosing GitHub CI, targets `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`, `x86_64-apple-darwin`, `aarch64-apple-darwin`. Commit `dist-workspace.toml` and the generated `.github/workflows/release.yml`.
-- Only `gcl-ui` and `gcl-cli` are published binaries.
+- Install: `cargo install cargo-dist --locked` (the command is `dist`). Init once with `dist init --yes`,
+  then edit `dist-workspace.toml`. Re-run `dist generate` after every config change and commit both
+  `dist-workspace.toml` and `.github/workflows/release.yml`.
+- Config lives in `dist-workspace.toml` under `[dist]`: `ci = "github"`, `installers = []`,
+  `pr-run-mode = "plan"`, and the four targets `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`,
+  `x86_64-apple-darwin`, `aarch64-apple-darwin`.
+- The workspace sets `publish = false`, which hides binaries from dist. `gcl-ui` and `gcl-cli`
+  therefore carry `[package.metadata.dist] dist = true`; `gcl-core` carries `dist = false`.
+- Slint's Linux system libraries come from the `[dist.dependencies.apt]` table. Keep that package
+  list equal to the apt list in `.github/workflows/ci.yml`. dist puts them in the release
+  workflow's `matrix.packages_install`, on the Linux runner only.
+- dist makes one archive per package, so a release carries `gcl-ui-<target>` and `gcl-cli-<target>`
+  archives with one binary each. It cannot put binaries from two packages in one archive. The
+  Linux AppImage is the artifact that ships both.
+- `just dist-plan` (`dist plan`) shows what a release would build. `dist build --artifacts local
+  --target <triple>` builds one target into `target/distrib/`.
 
 ## Linux AppImage
 

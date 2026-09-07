@@ -27,3 +27,7 @@ predicates.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 wiremock.workspace = true
+
+# `publish = false` hides these binaries from dist; opt back in.
+[package.metadata.dist]
+dist = true

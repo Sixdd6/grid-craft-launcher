@@ -36,3 +36,6 @@ zip.workspace = true
 tempfile.workspace = true
 insta.workspace = true
 wiremock.workspace = true
+
+[package.metadata.dist]
+dist = false
