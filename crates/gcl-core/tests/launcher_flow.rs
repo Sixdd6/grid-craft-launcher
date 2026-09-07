@@ -922,7 +922,7 @@ async fn an_override_with_a_bad_key_or_value_is_rejected_and_saves_nothing() {
         assert!(
             matches!(
                 err,
-                gcl_core::Error::Settings(gcl_core::settings::Error::BadValue(_))
+                gcl_core::Error::Settings(gcl_core::settings::Error::BadRawValue(_))
             ),
             "{err:?}"
         );

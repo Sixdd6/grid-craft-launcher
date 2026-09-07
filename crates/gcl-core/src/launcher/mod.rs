@@ -655,7 +655,11 @@ impl Launcher {
     ///
     /// The key and the value are checked first, by [`crate::settings::validate_key`] and
     /// [`crate::settings::validate_value`], so a pair that could not be written back as one
-    /// `key:value` line is rejected before anything is saved. The override reaches
+    /// `key:value` line is rejected before anything is saved. When `key` is in
+    /// [`crate::settings::catalog::CATALOG`], the value is also checked by
+    /// [`crate::settings::doc::validate`] against that setting's control (range, choice
+    /// membership); a key not in the catalog skips that check, since the Advanced editor is
+    /// meant to write anything `options.txt` itself would accept. The override reaches
     /// `options.txt` on the next launch, through [`Launcher::apply_settings_overrides`].
     pub fn set_instance_override(
         &self,
@@ -665,6 +669,9 @@ impl Launcher {
     ) -> Result<(), crate::Error> {
         crate::settings::validate_key(key)?;
         crate::settings::validate_value(value)?;
+        if let Some(setting) = crate::settings::catalog::find(key) {
+            crate::settings::doc::validate(setting, value)?;
+        }
         let mut instance = self.instances().get(slug)?;
         instance
             .config
@@ -716,6 +723,62 @@ impl Launcher {
             .pairs()
             .map(|(key, value)| (key.to_string(), value.to_string()))
             .collect())
+    }
+
+    /// The merged settings view for `config.toml`'s `game_defaults`, with no instance
+    /// override or `options.txt` layer: every row's source is either
+    /// [`crate::settings::doc::Layer::Preseed`] or
+    /// [`crate::settings::doc::Layer::Default`].
+    pub fn settings_rows_for_defaults(&self) -> Vec<crate::settings::doc::Row> {
+        crate::settings::doc::merged(&self.config().game_defaults, None, None)
+    }
+
+    /// The merged settings view for one instance: its overrides over the launcher's preseed
+    /// over what is already in its `options.txt` over the catalog default.
+    pub fn settings_rows_for_instance(
+        &self,
+        slug: &str,
+    ) -> Result<Vec<crate::settings::doc::Row>, crate::Error> {
+        let instance = self.instances().get(slug)?;
+        let current = crate::settings::read(&instance.game_dir().join(OPTIONS_FILE))?;
+        Ok(crate::settings::doc::merged(
+            &self.config().game_defaults,
+            Some(&instance.config.settings_overrides),
+            Some(&current),
+        ))
+    }
+
+    /// Sets one `options.txt` preseed default in `config.toml` and saves it.
+    ///
+    /// Checked the same way as [`Launcher::set_instance_override`]: [`crate::settings::validate_key`] /
+    /// [`crate::settings::validate_value`] always, plus [`crate::settings::doc::validate`]
+    /// against the catalog entry when `key` is known.
+    pub fn set_game_default(&self, key: &str, value: &str) -> Result<(), crate::Error> {
+        crate::settings::validate_key(key)?;
+        crate::settings::validate_value(value)?;
+        if let Some(setting) = crate::settings::catalog::find(key) {
+            crate::settings::doc::validate(setting, value)?;
+        }
+        let key = key.to_string();
+        let value = value.to_string();
+        self.update_config(move |config| {
+            config.game_defaults.insert(key, value);
+        })
+    }
+
+    /// Drops one `options.txt` preseed default from `config.toml` and saves it.
+    ///
+    /// Returns whether the key was set. New instances created after this stop getting the key
+    /// preseeded; it does not touch any existing instance's `options.txt`.
+    pub fn unset_game_default(&self, key: &str) -> Result<bool, crate::Error> {
+        let existed = self.config().game_defaults.contains_key(key);
+        if existed {
+            let key = key.to_string();
+            self.update_config(move |config| {
+                config.game_defaults.remove(&key);
+            })?;
+        }
+        Ok(existed)
     }
 
     /// The world folders under this instance's `saves/`, in name order.
@@ -2082,6 +2145,138 @@ mod tests {
             launcher.apply_settings_overrides(&instance).expect("apply"),
             0
         );
+    }
+
+    #[test]
+    fn set_instance_override_rejects_a_value_out_of_a_known_settings_range() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+        let instance = launcher
+            .instances()
+            .create(
+                "Pack",
+                "1.20.1",
+                crate::instances::model::Loader::None,
+                None,
+                &std::collections::BTreeMap::new(),
+            )
+            .expect("create");
+        let err = launcher
+            .set_instance_override(&instance.slug, "renderDistance", "999")
+            .expect_err("out of range");
+        assert!(
+            matches!(
+                err,
+                crate::Error::Settings(crate::settings::Error::OutOfRange { .. })
+            ),
+            "{err:?}"
+        );
+        assert!(
+            !launcher
+                .instances()
+                .get(&instance.slug)
+                .expect("reload")
+                .config
+                .settings_overrides
+                .contains_key("renderDistance"),
+            "a rejected override must not be saved"
+        );
+    }
+
+    #[test]
+    fn set_and_unset_game_default_round_trip_through_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+
+        launcher
+            .set_game_default("renderDistance", "16")
+            .expect("set");
+        assert_eq!(
+            launcher.config().game_defaults.get("renderDistance"),
+            Some(&"16".to_string())
+        );
+
+        assert!(
+            launcher
+                .unset_game_default("renderDistance")
+                .expect("unset")
+        );
+        assert!(
+            !launcher
+                .config()
+                .game_defaults
+                .contains_key("renderDistance")
+        );
+        assert!(
+            !launcher
+                .unset_game_default("renderDistance")
+                .expect("unset again")
+        );
+    }
+
+    #[test]
+    fn set_game_default_rejects_a_bad_choice() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+        let err = launcher
+            .set_game_default("mainHand", "sideways")
+            .expect_err("bad choice");
+        assert!(
+            matches!(
+                err,
+                crate::Error::Settings(crate::settings::Error::BadChoice { .. })
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn settings_rows_for_defaults_reflects_config_game_defaults() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+        launcher
+            .set_game_default("renderDistance", "20")
+            .expect("set");
+        let rows = launcher.settings_rows_for_defaults();
+        let row = rows
+            .iter()
+            .find(|r| r.key == "renderDistance")
+            .expect("row");
+        assert_eq!(row.value, "20");
+        assert_eq!(row.source, crate::settings::doc::Layer::Preseed);
+    }
+
+    #[test]
+    fn settings_rows_for_instance_layers_override_over_preseed_over_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+        launcher
+            .set_game_default("renderDistance", "16")
+            .expect("set default");
+        let instance = launcher
+            .instances()
+            .create(
+                "Pack",
+                "1.20.1",
+                crate::instances::model::Loader::None,
+                None,
+                &launcher.config().game_defaults,
+            )
+            .expect("create");
+        // The file has whatever the preseed wrote at instance creation.
+        launcher
+            .set_instance_override(&instance.slug, "renderDistance", "8")
+            .expect("override");
+
+        let rows = launcher
+            .settings_rows_for_instance(&instance.slug)
+            .expect("rows");
+        let row = rows
+            .iter()
+            .find(|r| r.key == "renderDistance")
+            .expect("row");
+        assert_eq!(row.value, "8");
+        assert_eq!(row.source, crate::settings::doc::Layer::Override);
     }
 
     #[test]

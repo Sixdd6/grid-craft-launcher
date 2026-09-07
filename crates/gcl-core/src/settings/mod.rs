@@ -9,6 +9,9 @@ use std::path::Path;
 
 use crate::paths::write_atomic;
 
+pub mod catalog;
+pub mod doc;
+
 /// File name of the settings file inside a game directory.
 const OPTIONS_FILE: &str = "options.txt";
 
@@ -26,9 +29,46 @@ pub enum Error {
     /// An override key could not be written as an `options.txt` key.
     #[error("not a valid options.txt key: {0:?}")]
     BadKey(String),
-    /// An override value could not be written as an `options.txt` value.
+    /// An override value could not be written as an `options.txt` value: it held a line break,
+    /// so it could not stay on one `key:value` line.
+    ///
+    /// Named `BadRawValue` to leave `BadValue` for [`crate::settings::catalog`]'s typed parse
+    /// error, which additionally carries the key that rejected the value.
     #[error("not a valid options.txt value: {0:?}")]
-    BadValue(String),
+    BadRawValue(String),
+    /// A key was validated against the catalog but is not in it.
+    #[error("{key:?} is not a known settings key")]
+    UnknownKey {
+        /// The key that was not found.
+        key: String,
+    },
+    /// A slider value fell outside its setting's `[min, max]` range.
+    #[error("{key:?} must be between {min} and {max}")]
+    OutOfRange {
+        /// The key whose value was out of range.
+        key: String,
+        /// The lower bound, inclusive.
+        min: f64,
+        /// The upper bound, inclusive.
+        max: f64,
+    },
+    /// A choice value did not match any of the setting's stored tokens.
+    #[error("{value:?} is not a valid choice for {key:?}")]
+    BadChoice {
+        /// The key whose value was rejected.
+        key: String,
+        /// The value that did not match any stored token.
+        value: String,
+    },
+    /// A value could not be parsed as its setting's control kind (not a number, not
+    /// `true`/`false`).
+    #[error("{value:?} is not a valid value for {key:?}")]
+    BadValue {
+        /// The key whose value was rejected.
+        key: String,
+        /// The value that could not be parsed.
+        value: String,
+    },
 }
 
 /// Checks that `key` can be written as an `options.txt` key and read back unchanged.
@@ -54,7 +94,7 @@ pub fn validate_key(key: &str) -> Result<(), Error> {
 /// one line.
 pub fn validate_value(value: &str) -> Result<(), Error> {
     if value.contains('\r') || value.contains('\n') {
-        return Err(Error::BadValue(value.to_string()));
+        return Err(Error::BadRawValue(value.to_string()));
     }
     Ok(())
 }
@@ -292,8 +332,8 @@ mod tests {
     fn validate_value_allows_a_colon_but_not_a_line_break() {
         assert!(validate_value("[\"a:b\"]").is_ok());
         assert!(validate_value("").is_ok());
-        assert!(matches!(validate_value("a\nb"), Err(Error::BadValue(_))));
-        assert!(matches!(validate_value("a\rb"), Err(Error::BadValue(_))));
+        assert!(matches!(validate_value("a\nb"), Err(Error::BadRawValue(_))));
+        assert!(matches!(validate_value("a\rb"), Err(Error::BadRawValue(_))));
     }
 
     #[test]
