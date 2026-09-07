@@ -58,3 +58,7 @@ appimage-smoke:
 # Show what cargo-dist would build for a release
 dist-plan:
     dist plan
+
+# Set the workspace version and roll the changelog, e.g. `just bump-version 0.2.0`
+bump-version version:
+    scripts/bump-version.sh {{version}}

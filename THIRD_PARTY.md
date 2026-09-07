@@ -1,7 +1,9 @@
 # Third-party code
 
-List every file or function ported from another project. One entry per source.
+No third-party code has been ported. Dependencies are listed in `Cargo.lock` and checked by
+cargo-deny (`just deny`).
 
-| Source project | License | URL | Where used |
-|---|---|---|---|
-| (none yet) | | | |
+Checked with `grep -rIn "ported from\|Copyright" --exclude-dir=.git --exclude=LICENSE .` (2026-09-06):
+the only matches are this file's own instructions, the README's statement of the policy, and the
+axodotdev copyright header inside the cargo-dist-generated `.github/workflows/release.yml`, which
+is that tool's own file, not launcher code.

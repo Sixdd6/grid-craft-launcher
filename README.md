@@ -4,6 +4,22 @@ A Minecraft launcher for Linux, Windows, and macOS. Rust core, Slint UI, command
 
 Features planned for the MVP are in [docs/SPEC.md](docs/SPEC.md).
 
+## Install
+
+**Linux (AppImage):**
+
+1. Download `grid-craft-launcher-<version>-x86_64.AppImage` from the
+   [Releases page](https://github.com/sixdd6/grid-craft-launcher/releases).
+2. `chmod +x grid-craft-launcher-<version>-x86_64.AppImage`
+3. Run it. It opens the desktop UI.
+
+Run `./grid-craft-launcher-<version>-x86_64.AppImage --cli <args>` to use the command line
+tool instead.
+
+**Windows and macOS:** download the archive built by cargo-dist from the same Releases page.
+
+**From source:** see Build below.
+
 ## Build
 
 Requires Rust stable (see `rust-toolchain.toml`) and these tools:
@@ -103,6 +119,27 @@ Without `GCL_MSA_CLIENT_ID`, Microsoft login is disabled and offline mode works
 - `crates/gcl-ui`: `grid-craft-launcher` binary. Slint UI.
 - `docs/`: spec, architecture research, design docs, plans.
 - `.claude/`: agents, skills, and hooks for Claude Code.
+
+## Release
+
+Checklist before tagging a release:
+
+```bash
+just check && just deny && just lint-claude
+just e2e
+just e2e-modpack
+just run-ui -- --smoke
+just appimage && just appimage-smoke
+just bump-version x.y.z
+git add -A
+git commit -m "release: vx.y.z"
+git tag vx.y.z
+git push origin vx.y.z
+```
+
+The pushed tag runs the release workflow, which builds the Windows and macOS archives through
+cargo-dist. cargo-dist does not build the AppImage; attach the file from `just appimage` to the
+GitHub release by hand.
 
 ## License
 

@@ -5,8 +5,14 @@ description: How releases are built and versioned — cargo-dist config, AppImag
 
 ## Versioning
 
-- Single `version` in `[workspace.package]`. Bump with a commit `release: v0.x.y` and a tag `v0.x.y`.
-- `gcl --version` and the UI show `gcl_core::VERSION`.
+- Single `version` in `[workspace.package]`. `gcl --version` and the UI show `gcl_core::VERSION`.
+- Bump with `just bump-version x.y.z` (`scripts/bump-version.sh`). It validates the version is
+  `x.y.z`, edits `[workspace.package] version` in `Cargo.toml`, runs `cargo update --workspace
+  --offline` so `Cargo.lock` matches, and renames `CHANGELOG.md`'s `## Unreleased` heading to
+  `## x.y.z - <date>` with a fresh `## Unreleased` above it. It runs no git command; it prints the
+  commit, tag, and push commands to run next.
+- After the script: `git add -A`, `git commit -m "release: vx.y.z"`, `git tag vx.y.z`,
+  `git push origin vx.y.z`.
 
 ## cargo-dist
 
@@ -55,7 +61,12 @@ description: How releases are built and versioned — cargo-dist config, AppImag
 
 ## Checklist before tagging
 
-1. `just check` and `just deny` pass.
-2. `just e2e` passes on Linux.
-3. `THIRD_PARTY.md` lists every ported file.
-4. Update `CHANGELOG.md` (create on first release).
+1. `just check && just deny && just lint-claude` pass.
+2. `just e2e` passes.
+3. `just e2e-modpack` passes.
+4. `just run-ui -- --smoke` opens the UI, runs one synthetic task, and quits cleanly.
+5. `just appimage && just appimage-smoke` build and start the AppImage.
+6. `just bump-version x.y.z` sets the version and rolls `CHANGELOG.md`.
+7. Commit, `git tag vx.y.z`, push the tag. The release workflow builds the Windows and macOS
+   archives. cargo-dist does not build the AppImage; attach it to the GitHub release by hand.
+8. `THIRD_PARTY.md` lists every ported file, or states that there are none.
