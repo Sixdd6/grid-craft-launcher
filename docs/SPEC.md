@@ -160,22 +160,22 @@ tests are there, but no live run has exercised it here).
 | R9.1 | Done | `config.toml` holds the preseed as key-value pairs. |
 | R9.2 | Done | A new instance gets the preseed written to `options.txt`. |
 | R9.3 | Done | Launch writes the instance's overrides into `options.txt`, replacing matching keys and appending the rest. |
-| R9.4 | Done | A typed editor over `settings::catalog` — slider, switch, choice box, or text field per key, grouped and searchable, showing the winning layer and offering Reset. `settings set` and `settings defaults set` route through the same validating `Launcher` methods. |
+| R9.4 | Done | A typed editor over `settings::catalog` — slider, switch, choice box, or text field per key, grouped and searchable, showing the winning layer and offering Reset. `settings set` and `settings defaults set` route through the same validating `Launcher` methods. The catalog is checked against a real 26.2 Fabric `options.txt`: `fov` shows in degrees over a stored float, choice tokens keep the quotes the file writes, and `gcl settings set` accepts a bare choice token. |
 | R10.1 | Done | `config jvm --min --max` sets the launcher-wide heap bounds. |
 | R10.2 | Done | Per-instance min and max override the defaults; the JVM tab edits them. |
 | R10.3 | Done | `instance.toml` carries extra JVM arguments per instance. |
 | R11.1 | Done | The classpath and arguments come from the merged version JSON, the account, the instance, and the JVM settings. |
 | R11.2 | Done | Overrides are applied before Java starts. |
-| R11.3 | Done | Java's stdout and stderr stream to `<root>/logs/<slug>-<timestamp>.log` and to events. |
+| R11.3 | Done | Java's stdout and stderr stream to `<root>/logs/<slug>-<timestamp>.log` and to events. Minecraft writes log4j XML; a streaming parser turns it into plain `[HH:MM:SS] [thread/LEVEL]: message` lines, in local time, before either destination sees it. |
 | R11.4 | Done | `--dry-run` prints the program, working directory, and every argument. |
-| R11.5 | Done | A non-zero game exit is reported with a crash hint. A stop the user asked for reports "Stopped" and raises no warning. |
+| R11.5 | Done | A non-zero game exit is reported with a crash hint. A stop the user asked for reports "Stopped" and raises no warning. The hint scans the whole log tail for each marker, in priority order, from the end, so a stack trace's real cause wins over an earlier benign error. |
 | R12.1 | Done | `instance`, `version`, `loader`, `java`, `account`, `content`, `modpack`, `settings`, `launch`, `config`, and `debug` cover the requirements above. |
 | R12.2 | Done | Every command prints text by default and JSON with `--json`. |
 | R13.1 | Done | All five screens ship: instances, instance detail, browser, accounts, settings. |
 | R13.2 | Done | The bottom panel shows one row per task with a fraction and a status. |
 | R13.3 | Done | The shell is dark and native (winit + FemtoVG), and `std-widgets` controls follow it: `Palette.color-scheme = ColorScheme.dark` in `AppWindow`'s `init`. |
 | R13.4 | Done | Digits 1-5, arrows, Enter, and Escape are wired; `keys.rs` is unit-tested. The wiring is verified by compile and Slint's documented event routing, not by a live keyboard. |
-| R13.5 | Done | Four headless flow binaries drive the real window over a real launcher: instances (create, install, launch, stop, rename, delete), settings, content, accounts. The GUI logs to `<root>/logs/gui.log.<date>`; `--screenshot <path>` saves a PNG. |
+| R13.5 | Done | Four headless flow binaries drive the real window over a real launcher: instances (create, install, launch, stop, rename, delete), settings, content, accounts. Each click goes through real pointer hit-testing rather than an accessible action. The GUI logs to `<root>/logs/gui.log.<date>`; `--screenshot <path>` saves a PNG. `just ui-xtest` drives the built app with real X input under Xvfb; verified: create via the dialog, a never-launched instance's Logs tab starts empty, a click after closing a dialog with Escape still lands, a number-key shortcut works after a screen change past a text field, and the browser starts empty on open. |
 
 ### Known limitations
 
@@ -188,8 +188,10 @@ tests are there, but no live run has exercised it here).
   in a read-only, selectable `TextEdit`, so Ctrl+C on a selection is the whole copy story.
 - **No file picker.** A pack archive already on disk is named by typing its path into a field.
   Modpack search itself works, in the browser's modpack kind.
-- **Keyboard routing is verified by compile.** The pure functions have unit tests, and the flow
-  tests press keys to drive a `ComboBox`; nobody has driven the whole window from a keyboard.
+- **Keyboard routing is verified by compile, plus one real-input pass.** The pure functions have
+  unit tests, the flow tests press keys to drive a `ComboBox`, and `just ui-xtest` has driven a
+  number-key shortcut through real X input after a screen change; no automated run covers the
+  whole window from a keyboard on every path.
 - **A debounce cannot be driven from a flow test.** `pump()` hands the event loop no time, and
   the system-time backend refuses `mock_elapsed_time` with a real duration, so a flow test drags
   a slider (which saves on release) and leaves the debounced path to a unit test.

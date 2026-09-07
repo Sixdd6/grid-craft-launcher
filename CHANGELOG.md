@@ -30,6 +30,12 @@ All notable changes to GRID Craft Launcher are documented here. Format follows
   adds the same lines on stderr. The error dialog names the file.
 - `grid-craft-launcher --screenshot <path>` saves a PNG of the window and quits.
 - Linux AppImage packaging and cargo-dist archives for Windows and macOS.
+- The game log and the Logs tab show plain text. Minecraft writes log4j XML events; a new
+  streaming parser turns each one into a normal `[HH:MM:SS] [thread/LEVEL]: message` line, with
+  every throwable line kept verbatim.
+- Log timestamps use local time, not UTC.
+- `just ui-xtest`: a real-input smoke test. It drives the desktop app with actual X pointer and
+  keyboard events under Xvfb, instead of the accessible actions the flow tests use.
 
 ### Changed
 
@@ -39,6 +45,13 @@ All notable changes to GRID Craft Launcher are documented here. Format follows
   a real launcher and clicks through it: create, install, launch, stop, rename and delete an
   instance; the settings editor; content add, disable, enable and remove; modpack search and
   install; and the account flows.
+- The flow test harness clicks and types through real pointer and keyboard events, with hit
+  testing, instead of firing callbacks through accessible actions.
+- The `options.txt` catalog was checked against a real 26.2 Fabric file: `fov` shows and edits
+  in degrees rather than the stored -1.0 to 1.0 float, `renderClouds` and `mainHand` keep the
+  quotes the file writes around their tokens, and several other keys and ranges were corrected.
+  New 26.2 keys were added, and `gcl settings set` now accepts a bare choice token (`fast`, not
+  only `"fast"`) and stores it quoted.
 
 ### Fixed
 
@@ -48,6 +61,21 @@ All notable changes to GRID Craft Launcher are documented here. Format follows
 - A game killed by a signal reports `128 + signal` instead of exit code -1.
 - The browser no longer lists its own preview rows before anything is searched.
 - A modpack installed from the browser now appears in the instance list at once.
+- The crash hint now names the real cause of a crash. It used to report the first exception
+  marker found from the start of the log tail, which could be a benign boot-time error; it now
+  searches each marker from the end, in priority order.
+- A dialog closed with Escape no longer eats the next click. Every dialog now exists only while
+  open, instead of staying mounted and invisible.
+- Number-key shortcuts stopped working after a screen change, because the focused field was
+  destroyed with its screen. Keyboard focus now returns to the navigation rail after every
+  navigation.
+- The Stop button is now hidden, not just disabled, while no game is running. It used to render
+  red and clickable-looking while inactive.
+- Every screen starts with the data the launcher has, not sample rows: a never-launched
+  instance's Logs tab, the browser's search box and results, and the accounts list all start
+  empty until a real read fills them in.
+- The instance list re-reads from disk every time it is opened, so an instance created or
+  changed elsewhere (the CLI, a modpack install) shows up without a manual Refresh.
 
 ### Known issues
 

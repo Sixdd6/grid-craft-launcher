@@ -1,6 +1,6 @@
 # Plan 8: real-input fixes
 
-Date: 2026-09-07. Status: in progress. Follows plan 7.
+Date: 2026-09-07. Status: merged pending. Follows plan 7.
 
 ## Why
 
@@ -32,3 +32,16 @@ enabled), keyboard once the window has focus, Wayland rendering under a nested K
    running; harness clicks through pointer events; verify with `scripts/ui-xtest.py`.
 3. ui: empty defaults in every global; `Preview*` components carry the sample data.
 4. docs, skills, e2e, merge.
+
+## Verified
+
+The final `just ui-xtest` pass, over the merged fix commits, covered:
+
+- Creating an instance through the Create dialog (name, version and loader combos, Create).
+- A never-launched instance's Logs tab shows no log lines and no sample status.
+- The click right after closing a dialog with Escape still lands on the next element, instead of
+  being eaten by a dialog that stayed mounted.
+- A number-key shortcut still reaches the navigation rail after a screen change that passed
+  through a focused text field.
+- The browser opens with an empty search box and no result rows, instead of a leftover preview
+  query and hits.

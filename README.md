@@ -79,6 +79,15 @@ keeps a raw row and is never dropped.
 The instance detail screen has a Stop button. It asks the game to exit, waits ten seconds, then
 kills it; a stop you asked for is reported as "Stopped", not as a crash.
 
+### Real-input smoke
+
+`just ui-xtest` drives the desktop app with real X pointer and keyboard events under Xvfb,
+instead of the accessible actions the flow tests use. It needs Xvfb, `xdpyinfo`, ImageMagick's
+`import`, the `python3-xlib` package, and network access. It checks that a dialog closed with
+Escape does not eat the next click, that a number-key shortcut still works after a screen
+change, and that an instance created from the CLI shows up in the GUI's instance list without a
+Refresh.
+
 ## Try it
 
 ```bash
