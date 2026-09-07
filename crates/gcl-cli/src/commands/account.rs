@@ -1,13 +1,14 @@
-//! `gcl account`: offline accounts, the active account, and removal.
+//! `gcl account`: offline accounts, Microsoft sign-in, the active account, and removal.
 
 use anyhow::Result;
 use clap::Subcommand;
 use gcl_core::Launcher;
+use gcl_core::auth::msa::DeviceCode;
 use gcl_core::auth::offline::offline_account;
 use gcl_core::auth::{Account, AccountKind};
 use serde::Serialize;
 
-use crate::output::{Format, print_json, print_table};
+use crate::output::{Format, print_json, print_json_line, print_table};
 
 /// Subcommands under `gcl account`.
 #[derive(Subcommand)]
@@ -16,6 +17,13 @@ pub enum AccountCommand {
     AddOffline {
         /// In-game name.
         name: String,
+    },
+    /// Sign in to a Microsoft account. Prints a code to enter, then waits for approval.
+    AddMsa,
+    /// Sign a saved Microsoft account in again from its stored refresh token.
+    Refresh {
+        /// Account id, or its exact name.
+        id_or_name: String,
     },
     /// List every saved account.
     List,
@@ -38,6 +46,19 @@ struct AccountRow {
     name: String,
     kind: String,
     active: bool,
+    /// RFC 3339 expiry of the Minecraft token. `None` for an offline account, which has
+    /// no token to expire.
+    expires: Option<String>,
+}
+
+/// The first line `account add-msa --json` prints: what to show the user, and nothing else.
+///
+/// The device code itself is a secret and is never printed. [`DeviceCode`] skips it when it
+/// serializes, and this struct does not carry it at all.
+#[derive(Serialize)]
+struct DeviceCodeRow<'a> {
+    user_code: &'a str,
+    verification_uri: &'a str,
 }
 
 impl AccountRow {
@@ -48,6 +69,7 @@ impl AccountRow {
             name: account.name.clone(),
             kind: kind_name(account.kind).to_string(),
             active: active == Some(account.id.as_str()),
+            expires: account.mc_token_expires.clone(),
         }
     }
 }
@@ -60,6 +82,34 @@ pub fn run(launcher: &Launcher, format: Format, command: AccountCommand) -> Resu
             let added = accounts.add(offline_account(&name))?;
             let active = accounts.active()?.map(|a| a.id);
             report_one(format, &AccountRow::new(&added, active.as_deref()))
+        }
+        AccountCommand::AddMsa => {
+            // The closure runs on the login thread, before the sign-in finishes, so it
+            // prints on its own instead of returning anything.
+            let added = launcher.msa_login(&move |code: &DeviceCode| show_code(format, code))?;
+            let active = accounts.active()?.map(|a| a.id);
+            let row = AccountRow::new(&added, active.as_deref());
+            match format {
+                // One line, so the code line above and this one are two JSON documents a
+                // caller can read line by line.
+                Format::Json => print_json_line(&row),
+                Format::Text => {
+                    println!("{} {}{}", row.id, row.name, suffix(row.active));
+                    Ok(())
+                }
+            }
+        }
+        AccountCommand::Refresh { id_or_name } => {
+            let refreshed = launcher.msa_refresh(&id_or_name)?;
+            let active = accounts.active()?.map(|a| a.id);
+            let row = AccountRow::new(&refreshed, active.as_deref());
+            match format {
+                Format::Json => print_json(&row),
+                Format::Text => {
+                    println!("refreshed {} (expires {})", row.name, expires_cell(&row));
+                    Ok(())
+                }
+            }
         }
         AccountCommand::List => {
             let active = accounts.active()?.map(|a| a.id);
@@ -79,10 +129,11 @@ pub fn run(launcher: &Launcher, format: Format, command: AccountCommand) -> Resu
                                 r.id.clone(),
                                 r.name.clone(),
                                 r.kind.clone(),
+                                expires_cell(r).to_string(),
                             ]
                         })
                         .collect();
-                    print_table(&["ACTIVE", "ID", "NAME", "KIND"], &cells);
+                    print_table(&["ACTIVE", "ID", "NAME", "KIND", "EXPIRES"], &cells);
                     Ok(())
                 }
             }
@@ -131,6 +182,38 @@ fn report_one(format: Format, row: &AccountRow) -> Result<()> {
     }
 }
 
+/// Prints the device code the user has to enter, in the format the command was asked for.
+///
+/// Text prints the link and the code on one line, then Microsoft's own instruction text.
+/// JSON prints one object, so it is the first of the two lines `--json` writes.
+fn show_code(format: Format, code: &DeviceCode) {
+    match format {
+        Format::Json => {
+            let row = DeviceCodeRow {
+                user_code: &code.user_code,
+                verification_uri: &code.verification_uri,
+            };
+            // A print failure would leave the user with no code, so it is reported here
+            // rather than ending the sign-in the user is already waiting on.
+            if let Err(err) = print_json_line(&row) {
+                eprintln!("error: could not print the login code: {err}");
+            }
+        }
+        Format::Text => {
+            println!(
+                "Open {} and enter code {}",
+                code.verification_uri, code.user_code
+            );
+            println!("{}", code.message);
+        }
+    }
+}
+
+/// The `EXPIRES` cell of a row: the timestamp, or empty for an account with no token.
+fn expires_cell(row: &AccountRow) -> &str {
+    row.expires.as_deref().unwrap_or_default()
+}
+
 /// Lowercase name of an account kind, matching how it is stored on disk.
 fn kind_name(kind: AccountKind) -> &'static str {
     match kind {
@@ -167,5 +250,26 @@ mod tests {
         assert!(AccountRow::new(&account, Some("abc")).active);
         assert!(!AccountRow::new(&account, Some("other")).active);
         assert!(!AccountRow::new(&account, None).active);
+    }
+
+    #[test]
+    fn an_account_with_no_token_has_an_empty_expires_cell() {
+        let mut account = Account {
+            id: "abc".to_string(),
+            name: "alice".to_string(),
+            kind: AccountKind::Offline,
+            mc_token: None,
+            mc_token_expires: None,
+            xuid: None,
+            refresh_store: None,
+        };
+        let row = AccountRow::new(&account, None);
+        assert_eq!(expires_cell(&row), "");
+
+        account.kind = AccountKind::Msa;
+        account.mc_token_expires = Some("2026-09-06T00:00:00Z".to_string());
+        let row = AccountRow::new(&account, None);
+        assert_eq!(expires_cell(&row), "2026-09-06T00:00:00Z");
+        assert_eq!(row.kind, "msa");
     }
 }

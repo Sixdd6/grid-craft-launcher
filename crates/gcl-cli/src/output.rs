@@ -33,6 +33,15 @@ pub fn print_json<T: Serialize>(value: &T) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Prints a value as one line of compact JSON on stdout.
+///
+/// Used where a command writes more than one JSON document, so a caller reads them line by
+/// line: `account add-msa --json` prints the login code, then the account.
+pub fn print_json_line<T: Serialize>(value: &T) -> anyhow::Result<()> {
+    println!("{}", serde_json::to_string(value)?);
+    Ok(())
+}
+
 /// Prints headers and rows on stdout, each column padded to its widest cell.
 pub fn print_table(headers: &[&str], rows: &[Vec<String>]) {
     let mut widths: Vec<usize> = headers.iter().map(|h| h.chars().count()).collect();

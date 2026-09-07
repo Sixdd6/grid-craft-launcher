@@ -26,14 +26,29 @@ pub struct LaunchArgs {
     pub dry_run: bool,
 }
 
+/// What a failed sign-in tells the user to do instead.
+const OFFLINE_HINT: &str = "hint: use --offline-user <name> to play offline";
+
 /// Runs `gcl launch`. Returns the exit code the CLI itself should end with.
+///
+/// An account failure is answered here rather than by `main`: the message is followed by
+/// [`OFFLINE_HINT`], so a user whose Microsoft token cannot be refreshed is told how to
+/// play anyway. Every other failure is returned and reported by `main`.
 pub fn run(launcher: &Launcher, format: Format, args: LaunchArgs) -> Result<ExitCode> {
-    let outcome = launcher.launch_instance(
+    let outcome = match launcher.launch_instance(
         &args.slug,
         args.account.as_deref(),
         args.offline_user.as_deref(),
         args.dry_run,
-    )?;
+    ) {
+        Ok(outcome) => outcome,
+        Err(err) if is_auth_error(&err) => {
+            eprintln!("error: {err}");
+            eprintln!("{OFFLINE_HINT}");
+            return Ok(ExitCode::FAILURE);
+        }
+        Err(err) => return Err(err.into()),
+    };
     match outcome {
         LaunchOutcome::DryRun(cmd) => {
             match format {
@@ -64,6 +79,11 @@ pub fn run(launcher: &Launcher, format: Format, args: LaunchArgs) -> Result<Exit
             Ok(ExitCode::from(exit_code(code)))
         }
     }
+}
+
+/// Whether a launch failure came from the account: no account, or a refused sign-in.
+fn is_auth_error(err: &gcl_core::Error) -> bool {
+    matches!(err, gcl_core::Error::Auth(_))
 }
 
 /// Prints the program, the working directory, and one argument per line.

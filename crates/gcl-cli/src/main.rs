@@ -95,7 +95,7 @@ enum Command {
 enum DebugCommand {
     /// Fetch live responses from a source and run them through our parsers.
     VerifySource {
-        /// One of: mojang, fabric, quilt, forge, neoforge, modrinth, curseforge
+        /// One of: mojang, fabric, quilt, forge, neoforge, modrinth, curseforge, msa
         source: String,
     },
 }
@@ -176,7 +176,9 @@ fn dispatch(launcher: &mut Launcher, format: Format, command: Command) -> Result
             command: DebugCommand::VerifySource { source },
         } => {
             // `main` has already turned away every source we cannot verify.
-            let passed = if let Some(loader) = commands::debug::loader_for(&source) {
+            let passed = if source == "msa" {
+                commands::debug::verify_msa(launcher)
+            } else if let Some(loader) = commands::debug::loader_for(&source) {
                 commands::debug::verify_loader(launcher, loader)?
             } else if let Some(id) = commands::debug::source_for(&source) {
                 commands::debug::verify_content_source(launcher, id)?

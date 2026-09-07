@@ -16,6 +16,7 @@ const IMPLEMENTED: &[&str] = &[
     "neoforge",
     "modrinth",
     "curseforge",
+    "msa",
 ];
 
 /// The Minecraft version most loader checks list builds for.
@@ -192,6 +193,20 @@ pub fn verify_content_source(launcher: &Launcher, id: SourceId) -> Result<bool> 
     }
 }
 
+/// Reports whether Microsoft login is configured. Makes no request.
+///
+/// `SKIP` when no client id is set, so a machine without one is not a failure. Otherwise
+/// `PASS`: the rest of the chain needs a person to approve a device code, which this command
+/// cannot do without blocking, so `gcl account add-msa` is the live check. Always `true`.
+pub fn verify_msa(launcher: &Launcher) -> bool {
+    if launcher.msa_available() {
+        println!("PASS msa (client id configured; run 'gcl account add-msa' to test the login)");
+    } else {
+        println!("SKIP msa (no GCL_MSA_CLIENT_ID)");
+    }
+    true
+}
+
 /// Fetches Mojang's manifest and its latest release version JSON, and parses both.
 ///
 /// Returns `false` when any endpoint failed.
@@ -339,6 +354,7 @@ mod tests {
         assert!(is_implemented("neoforge"));
         assert!(is_implemented("modrinth"));
         assert!(is_implemented("curseforge"));
+        assert!(is_implemented("msa"));
         assert!(!is_implemented("nowhere"));
     }
 
