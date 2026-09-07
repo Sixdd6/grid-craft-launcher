@@ -34,7 +34,7 @@ sha2 = "0.11"
 md-5 = "0.11"
 murmur2 = "0.1"
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
-time = { version = "0.3", default-features = false, features = ["std", "formatting", "macros"] }
+time = { version = "0.3", default-features = false, features = ["std", "formatting", "parsing", "macros"] }
 tempfile = "3.27"
 assert_cmd = "2.2"
 predicates = "3.1"

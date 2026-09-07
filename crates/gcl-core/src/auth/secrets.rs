@@ -30,7 +30,8 @@ pub const NO_KEYRING_ENV: &str = "GCL_NO_KEYRING";
 const FILE_NAME: &str = "secrets.json";
 
 /// Which backing store a [`SecretStore`] uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SecretStoreKind {
     /// The operating system's credential store.
     Keyring,

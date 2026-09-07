@@ -162,6 +162,7 @@ mod tests {
             mc_token: None,
             mc_token_expires: None,
             xuid: None,
+            refresh_store: None,
         };
         assert!(AccountRow::new(&account, Some("abc")).active);
         assert!(!AccountRow::new(&account, Some("other")).active);

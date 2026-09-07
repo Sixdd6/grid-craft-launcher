@@ -153,6 +153,7 @@ mod tests {
             mc_token: None,
             mc_token_expires: None,
             xuid: None,
+            refresh_store: None,
         }
     }
 

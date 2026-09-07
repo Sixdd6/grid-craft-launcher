@@ -7,9 +7,14 @@
 pub mod msa;
 pub mod offline;
 pub mod secrets;
+pub mod session;
 pub mod store;
 
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
+
+use self::secrets::SecretStoreKind;
 
 /// Errors loading, saving, or resolving accounts.
 #[derive(Debug, thiserror::Error)]
@@ -30,6 +35,17 @@ pub enum Error {
         path: std::path::PathBuf,
         /// The underlying JSON error.
         source: serde_json::Error,
+    },
+    /// The account has no stored refresh token, so it cannot be signed in again.
+    #[error("this account has no saved sign-in: remove it and sign in again")]
+    NoRefreshToken,
+    /// A refresh returned a profile for a different account than the one being refreshed.
+    #[error("the refreshed sign-in is for account {actual}, not {expected}")]
+    AccountMismatch {
+        /// The id of the account being refreshed.
+        expected: String,
+        /// The id the refreshed profile carried.
+        actual: String,
     },
     /// No account matches the given id or name.
     #[error("no account matching {0}")]
@@ -121,6 +137,9 @@ pub struct Account {
     /// The Xbox user id, for a Microsoft account.
     #[serde(default)]
     pub xuid: Option<String>,
+    /// Where this account's refresh token was saved, for a Microsoft account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_store: Option<SecretStoreKind>,
 }
 
 impl std::fmt::Debug for Account {
@@ -139,6 +158,7 @@ impl std::fmt::Debug for Account {
             )
             .field("mc_token_expires", &self.mc_token_expires)
             .field("xuid", &self.xuid)
+            .field("refresh_store", &self.refresh_store)
             .finish()
     }
 }
@@ -168,6 +188,16 @@ impl Account {
     /// filled in from its stored token and xuid (the client id is filled in by the caller
     /// that holds it, in a later plan).
     pub fn launch_identity(&self) -> LaunchIdentity {
+        self.launch_identity_with("")
+    }
+
+    /// Builds the launch placeholders, filling `${clientid}` in for a Microsoft account.
+    ///
+    /// `client_id` is what the caller wants substituted for `${clientid}`; it is ignored for
+    /// an offline account, which always launches with an empty client id. A Microsoft
+    /// account with no cached token falls back to `"0"`, so a launch fails inside the game
+    /// rather than building a command line with an empty token.
+    pub fn launch_identity_with(&self, client_id: &str) -> LaunchIdentity {
         let uuid_undashed = self.id.replace('-', "");
         match self.kind {
             AccountKind::Offline => LaunchIdentity {
@@ -181,13 +211,31 @@ impl Account {
             AccountKind::Msa => LaunchIdentity {
                 name: self.name.clone(),
                 uuid_undashed,
-                access_token: self.mc_token.clone().unwrap_or_default(),
+                access_token: self.mc_token.clone().unwrap_or_else(|| "0".to_string()),
                 user_type: "msa".to_string(),
                 xuid: self.xuid.clone().unwrap_or_default(),
-                client_id: String::new(),
+                client_id: client_id.to_string(),
             },
         }
     }
+}
+
+/// True when a cached token is missing, unreadable, or expires within `margin` of `now`.
+///
+/// An absent or unparsable timestamp counts as expiring: the launcher refreshes rather than
+/// launching with a token it cannot date.
+pub fn token_expires_soon(
+    expires_rfc3339: Option<&str>,
+    now: OffsetDateTime,
+    margin: std::time::Duration,
+) -> bool {
+    let Some(text) = expires_rfc3339 else {
+        return true;
+    };
+    let Ok(expires) = OffsetDateTime::parse(text, &Rfc3339) else {
+        return true;
+    };
+    expires <= now + margin
 }
 
 #[cfg(test)]
@@ -202,6 +250,7 @@ mod tests {
             mc_token: None,
             mc_token_expires: None,
             xuid: None,
+            refresh_store: None,
         }
     }
 
@@ -221,6 +270,93 @@ mod tests {
         let account = offline_account("b50ad385-829d-3141-a216-7e7d7539ba7f", "Notch");
         let debug = format!("{account:?}");
         assert!(debug.contains("<unset>"));
+    }
+
+    fn msa_account(expires: Option<&str>) -> Account {
+        Account {
+            id: "b50ad385-829d-3141-a216-7e7d7539ba7f".to_string(),
+            name: "Notch".to_string(),
+            kind: AccountKind::Msa,
+            mc_token: Some("mc-token".to_string()),
+            mc_token_expires: expires.map(str::to_string),
+            xuid: Some("2535".to_string()),
+            refresh_store: Some(secrets::SecretStoreKind::Memory),
+        }
+    }
+
+    #[test]
+    fn msa_launch_identity_carries_the_token_xuid_and_client_id() {
+        let identity = msa_account(None).launch_identity_with("client-id-base64");
+        assert_eq!(identity.name, "Notch");
+        assert_eq!(identity.uuid_undashed, "b50ad385829d3141a2167e7d7539ba7f");
+        assert_eq!(identity.access_token, "mc-token");
+        assert_eq!(identity.user_type, "msa");
+        assert_eq!(identity.xuid, "2535");
+        assert_eq!(identity.client_id, "client-id-base64");
+    }
+
+    #[test]
+    fn msa_launch_identity_without_a_token_falls_back_to_zero() {
+        let account = Account {
+            mc_token: None,
+            ..msa_account(None)
+        };
+        assert_eq!(account.launch_identity_with("id").access_token, "0");
+    }
+
+    #[test]
+    fn launch_identity_leaves_the_client_id_empty() {
+        assert_eq!(msa_account(None).launch_identity().client_id, "");
+    }
+
+    #[test]
+    fn an_offline_account_ignores_the_client_id() {
+        let account = offline_account("b50ad385-829d-3141-a216-7e7d7539ba7f", "Notch");
+        assert_eq!(account.launch_identity_with("client-id").client_id, "");
+    }
+
+    #[test]
+    fn a_missing_or_unreadable_expiry_counts_as_expiring() {
+        let now = OffsetDateTime::UNIX_EPOCH;
+        let margin = std::time::Duration::from_secs(300);
+        assert!(token_expires_soon(None, now, margin));
+        assert!(token_expires_soon(Some("not a timestamp"), now, margin));
+    }
+
+    #[test]
+    fn an_expiry_inside_the_margin_counts_as_expiring() {
+        let now = OffsetDateTime::UNIX_EPOCH;
+        let margin = std::time::Duration::from_secs(300);
+        assert!(token_expires_soon(
+            Some("1970-01-01T00:04:00Z"),
+            now,
+            margin
+        ));
+        assert!(token_expires_soon(
+            Some("1970-01-01T00:05:00Z"),
+            now,
+            margin
+        ));
+        assert!(!token_expires_soon(
+            Some("1970-01-01T00:06:00Z"),
+            now,
+            margin
+        ));
+    }
+
+    #[test]
+    fn refresh_store_is_left_out_of_the_json_when_unset() {
+        let account = offline_account("b50ad385-829d-3141-a216-7e7d7539ba7f", "Notch");
+        let json = serde_json::to_string(&account).expect("serializes");
+        assert!(!json.contains("refresh_store"), "{json}");
+    }
+
+    #[test]
+    fn refresh_store_round_trips_as_a_lowercase_name() {
+        let json = serde_json::to_string(&msa_account(None)).expect("serializes");
+        assert!(json.contains(r#""refresh_store":"memory""#), "{json}");
+        let back: Account = serde_json::from_str(&json).expect("parses");
+        assert_eq!(back.refresh_store, Some(secrets::SecretStoreKind::Memory));
     }
 
     #[test]
