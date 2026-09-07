@@ -83,8 +83,19 @@ export component CreateInstanceDialog inherits Rectangle {
         }
     }
 
-    // The form starts on the name, which is the only field that has no default.
+    // The form starts on the name, which is the only field that has no default. The window
+    // mounts the form already open, so `init` is the handler that runs; `changed open` covers
+    // a caller that keeps it mounted, as the previews do.
+    init => {
+        root.take-keyboard();
+    }
+
     changed open => {
+        root.take-keyboard();
+    }
+
+    // Puts the keyboard in the name field, when the form is up.
+    function take-keyboard() {
         if (root.open) {
             name_field.focus();
         }

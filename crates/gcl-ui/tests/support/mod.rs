@@ -364,7 +364,14 @@ impl TestApp {
         ids
     }
 
-    /// Presses the element with this id through its default accessible action.
+    /// Clicks the middle of the element with this id, with real pointer events.
+    ///
+    /// The accessible action skips hit-testing, so it presses a button that no pointer could
+    /// reach: one under a modal overlay, or one whose `TouchArea` still holds a grab from an
+    /// earlier click. Those are the defects these flows exist to catch, so a click here is a
+    /// move, a press, and a release at the element's centre, exactly as a mouse sends them.
+    /// [`TestApp::activate`] is the accessible action, for the few controls hit-testing
+    /// cannot reach.
     ///
     /// A disabled control fails the flow rather than doing nothing: "the button does nothing"
     /// is the bug these tests are looking for.
@@ -375,10 +382,10 @@ impl TestApp {
             Some(false),
             "`{id}` is showing but disabled"
         );
-        element.invoke_accessible_default_action();
+        self.click_element(&element);
     }
 
-    /// Presses the nth element with this id, for a control inside a repeater.
+    /// Clicks the nth element with this id, for a control inside a repeater.
     pub fn click_nth(&self, id: &str, index: usize) {
         let element = self.el_nth(id, index);
         assert_ne!(
@@ -386,7 +393,97 @@ impl TestApp {
             Some(false),
             "`{id}` row {index} is showing but disabled"
         );
+        self.click_element(&element);
+    }
+
+    /// Presses the element with this id through its default accessible action.
+    ///
+    /// For a control a pointer cannot land on: a row inside a `ComboBox` popup, which is not
+    /// laid out in the window's own coordinate space.
+    pub fn activate(&self, id: &str) {
+        let element = self.el(id);
+        assert_ne!(
+            element.accessible_enabled(),
+            Some(false),
+            "`{id}` is showing but disabled"
+        );
         element.invoke_accessible_default_action();
+    }
+
+    /// The same, for the nth element with this id.
+    pub fn activate_nth(&self, id: &str, index: usize) {
+        let element = self.el_nth(id, index);
+        assert_ne!(
+            element.accessible_enabled(),
+            Some(false),
+            "`{id}` row {index} is showing but disabled"
+        );
+        element.invoke_accessible_default_action();
+    }
+
+    /// Sends a move, a press, and a release at the middle of `element`.
+    ///
+    /// The middle has to be inside every scroll viewport the element sits in, or the pointer
+    /// lands on the clipped-away part and nothing is pressed. That is a harness fault, not a
+    /// UI one, so it fails here with the two rectangles rather than as a silent no-op later:
+    /// the caller wanted a [`TestApp::scroll_to`] first.
+    fn click_element(&self, element: &ElementHandle) {
+        let position = center_of(element);
+        for (at, size) in self.viewports() {
+            let overlaps = at.x < element.absolute_position().x + element.size().width
+                && at.x + size.width > element.absolute_position().x
+                && at.y < element.absolute_position().y + element.size().height
+                && at.y + size.height > element.absolute_position().y;
+            let inside = position.x >= at.x
+                && position.x <= at.x + size.width
+                && position.y >= at.y
+                && position.y <= at.y + size.height;
+            assert!(
+                !overlaps || inside,
+                "the middle of `{}` is at {position:?}, outside the scroll viewport at \
+                 {at:?} sized {size:?}; scroll it into view first",
+                element.id().unwrap_or_default()
+            );
+        }
+        let window = self.window.window();
+        let button = slint::platform::PointerEventButton::Left;
+        window.dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+        pump();
+        window.dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
+        pump();
+        window.dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+        pump();
+        window.dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
+        pump();
+    }
+
+    /// The scroll viewports the window is showing, as position and size.
+    ///
+    /// A `ScrollView` clips its content, so an element the element tree still reports may be
+    /// scrolled past the edge and unreachable by a pointer. [`TestApp::scroll_to`] and
+    /// [`TestApp::click_element`] both measure against these.
+    fn viewports(&self) -> Vec<(slint::LogicalPosition, slint::LogicalSize)> {
+        self.all("ScrollView::flickable")
+            .iter()
+            .map(|view| (view.absolute_position(), view.size()))
+            .collect()
+    }
+
+    /// Whether every corner of `element` is inside each scroll viewport it overlaps.
+    fn fully_in_view(&self, element: &ElementHandle) -> bool {
+        let at = element.absolute_position();
+        let size = element.size();
+        self.viewports().iter().all(|(view_at, view_size)| {
+            let overlaps = view_at.x < at.x + size.width
+                && view_at.x + view_size.width > at.x
+                && view_at.y < at.y + size.height
+                && view_at.y + view_size.height > at.y;
+            let contained = at.x >= view_at.x
+                && at.y >= view_at.y
+                && at.x + size.width <= view_at.x + view_size.width
+                && at.y + size.height <= view_at.y + view_size.height;
+            !overlaps || contained
+        })
     }
 
     /// Types `text` into the field with this id.
@@ -477,20 +574,23 @@ impl TestApp {
         pump();
     }
 
-    /// Scrolls down until an element with this id is showing.
+    /// Scrolls down until an element with this id is completely inside its scroll viewport.
     ///
-    /// Only what is inside a scroll view's viewport is in the element tree, so a control
-    /// further down the page cannot be found, let alone clicked, until it is scrolled to.
+    /// Being in the element tree is not enough: a `ScrollView` clips what it draws, so a row
+    /// that is only half past the bottom edge is still found, still reports a position, and
+    /// still swallows a pointer click aimed at its middle. The loop therefore runs until
+    /// [`TestApp::fully_in_view`] holds, not until [`TestApp::has`] does.
     pub fn scroll_to(&self, id: &str) {
         for _ in 0..SCROLL_STEPS {
-            if self.has(id) {
+            if let Some(element) = self.all(id).first()
+                && self.fully_in_view(element)
+            {
                 return;
             }
             self.scroll(-SCROLL_STEP);
         }
-        assert!(
-            self.has(id),
-            "`{id}` never came into view. Showing: {:?}",
+        panic!(
+            "`{id}` never came fully into view. Showing: {:?}",
             self.ids()
         );
     }
@@ -539,6 +639,13 @@ impl TestApp {
             yield_to_loop(Duration::from_millis(20)).await;
         }
     }
+}
+
+/// The middle of an element, in window coordinates.
+fn center_of(element: &ElementHandle) -> slint::LogicalPosition {
+    let at = element.absolute_position();
+    let size = element.size();
+    slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0)
 }
 
 /// Instantiates whatever the last property change made visible and runs change handlers.

@@ -26,8 +26,19 @@ export component PromptDialog inherits Rectangle {
     callback cancel();
 
     // Opening the prompt puts the keyboard straight in the field: the whole modal exists to
-    // collect one line of text.
+    // collect one line of text. The window mounts the prompt already open, so `init` is the
+    // handler that runs; `changed open` covers a caller that keeps it mounted, as the
+    // previews do.
+    init => {
+        root.take-keyboard();
+    }
+
     changed open => {
+        root.take-keyboard();
+    }
+
+    // Puts the keyboard in the field, when the prompt is up.
+    function take-keyboard() {
         if (root.open) {
             name_field.focus();
         }

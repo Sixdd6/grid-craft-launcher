@@ -31,16 +31,29 @@ export component Dialog inherits Rectangle {
     background: Colors.black.with-alpha(0.55);
     forward-focus: keys;
 
-    // A closed dialog stays mounted but must never hold the keyboard. A dialog whose body
-    // starts with a field leaves the focus to that field instead.
+    // The window mounts a dialog only while it is up, so the keyboard is taken on the way in,
+    // from `init`. A dialog whose body starts with a field leaves the focus to that field
+    // instead. `changed open` covers the other way in: a caller that keeps the component
+    // mounted and flips `open`, which is what the previews do.
+    init => {
+        root.take-keyboard();
+    }
+
     changed open => {
+        root.take-keyboard();
+    }
+
+    // Puts the keyboard inside the panel, unless the body owns it.
+    function take-keyboard() {
         if (root.open && !root.focus-first-field) {
             keys.focus();
         }
     }
 
-    // Click outside the panel closes the dialog.
+    // Click outside the panel closes the dialog. Disabled while the dialog is down so a
+    // component a caller keeps mounted cannot swallow a click meant for the screen.
     TouchArea {
+        enabled: root.open;
         clicked => {
             root.close();
         }
@@ -55,7 +68,9 @@ export component Dialog inherits Rectangle {
         border-color: Theme.border;
 
         // Swallows clicks so they do not reach the overlay behind the panel.
-        TouchArea { }
+        TouchArea {
+            enabled: root.open;
+        }
 
         keys := FocusScope {
             enabled: root.open;

@@ -119,10 +119,12 @@ export component InstanceScreen inherits Rectangle {
                 alignment: center;
                 horizontal-stretch: 0;
                 stop_button := Button {
-                    // Only a running game can be stopped, so the button is live exactly while
-                    // Launch is not.
+                    // Only a running game can be stopped, so the button is there exactly
+                    // while Launch is not. A disabled red button still reads as one to press,
+                    // so it is taken out of the row instead of dimmed.
                     text: "Stop";
                     kind: "danger";
+                    visible: InstanceState.running;
                     enabled: InstanceState.running;
                     clicked => {
                         InstanceState.stop();

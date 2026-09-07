@@ -210,6 +210,19 @@ export component AppWindow inherits Window {
         }
     }
 
+    // The screen on show. A screen change destroys whatever field held the keyboard — the
+    // Switch, Slider or LineEdit the user last touched went with the old screen — and nothing
+    // else takes it, so the shortcuts below would stop working until a dialog closed. Taking
+    // the focus back here is what keeps them alive. A dialog owns the keyboard while it is
+    // up, so a screen change under one leaves it alone.
+    property <Screen> shown_screen: App.screen;
+
+    changed shown_screen => {
+        if (!root.any_dialog_open) {
+            nav.focus();
+        }
+    }
+
     forward-focus: nav;
 
     // Shell shortcuts. A focused field sees a key first and only what it rejects reaches
@@ -295,8 +308,11 @@ export component AppWindow inherits Window {
         toasts: App.toasts;
     }
 
-    // New-instance form. Always mounted; it paints nothing while `open` is false.
-    CreateInstanceDialog {
+    // New-instance form. It exists only while it is up: a closed dialog that stayed in the
+    // tree would keep an overlay `TouchArea` over the whole window, and that area holds the
+    // pointer grab it took when the dialog opened, so the first click after an Escape would
+    // land on it and never reach the screen. Every dialog below is mounted the same way.
+    if InstancesState.create_open: CreateInstanceDialog {
         width: root.width;
         height: root.height;
         open: InstancesState.create_open;
@@ -326,7 +342,7 @@ export component AppWindow inherits Window {
     }
 
     // Yes/no modal, currently used by the delete action.
-    ConfirmDialog {
+    if InstancesState.confirm_open: ConfirmDialog {
         width: root.width;
         height: root.height;
         open: InstancesState.confirm_open;
@@ -344,7 +360,7 @@ export component AppWindow inherits Window {
 
     // The detail screen's one-field prompt: the offline name a launch needs, and the new name
     // a rename takes. `InstanceState.prompt_mode` says which, and Rust reads it back.
-    PromptDialog {
+    if InstanceState.prompt_open: PromptDialog {
         width: root.width;
         height: root.height;
         open: InstanceState.prompt_open;
@@ -361,7 +377,7 @@ export component AppWindow inherits Window {
     }
 
     // New-instance name prompt, used when a modpack is installed from the browser.
-    PromptDialog {
+    if BrowserState.name_open: PromptDialog {
         width: root.width;
         height: root.height;
         open: BrowserState.name_open;
@@ -379,7 +395,7 @@ export component AppWindow inherits Window {
     }
 
     // World chooser, used when a data pack is added from the browser.
-    ChoiceDialog {
+    if BrowserState.choice_open: ChoiceDialog {
         width: root.width;
         height: root.height;
         open: BrowserState.choice_open;
@@ -398,7 +414,7 @@ export component AppWindow inherits Window {
 
     // Microsoft sign-in. The status line is the newest log line, which is where the login's
     // own progress lands; it is only read while the sign-in is running.
-    DeviceCodeDialog {
+    if AccountsState.device_open: DeviceCodeDialog {
         width: root.width;
         height: root.height;
         open: AccountsState.device_open;
@@ -412,7 +428,7 @@ export component AppWindow inherits Window {
     }
 
     // Offline-account name prompt, opened by the accounts screen's Add offline button.
-    PromptDialog {
+    if AccountsState.prompt_open: PromptDialog {
         width: root.width;
         height: root.height;
         open: AccountsState.prompt_open;
@@ -429,7 +445,7 @@ export component AppWindow inherits Window {
     }
 
     // Remove-account confirmation.
-    ConfirmDialog {
+    if AccountsState.confirm_open: ConfirmDialog {
         width: root.width;
         height: root.height;
         open: AccountsState.confirm_open;
@@ -446,7 +462,7 @@ export component AppWindow inherits Window {
     }
 
     // Error dialog. Rust sets the three error properties; dismiss_error clears them.
-    error_dialog := Dialog {
+    if App.error_open: error_dialog := Dialog {
         width: root.width;
         height: root.height;
         open: App.error_open;

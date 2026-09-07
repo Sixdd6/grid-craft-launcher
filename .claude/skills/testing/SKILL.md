@@ -312,6 +312,11 @@ clicks through it. `tests/support/mod.rs` is the harness:
 - `app.click(id)`, `app.type_into(id, text)`, `app.select_combo(id, index)`, `app.el(id)`. Ids are
   `<Component>::<name>` from `docs/research/2026-09-07-ui-element-ids.md`; either `_` or `-`
   works. `click` fails when the control is disabled, which is the whole point.
+- `click` and `click_nth` send real pointer events — a move, a press, and a release at the
+  element's middle — so the press goes through hit-testing the way a mouse does. That is what
+  catches a control under a modal overlay or behind a stale pointer grab. `activate(id)` and
+  `activate_nth(id, n)` press through the accessible action instead, for the few controls a
+  pointer cannot land on, such as a row inside a `ComboBox` popup.
 - `app.wait_until(what, pred, timeout)` / `wait_for(id)` yield to the event loop, so the bridge's
   worker threads post their results back exactly as they do in the app.
 - `support::run(flow)` starts the event loop, runs the flow, quits, and re-raises any panic.
@@ -350,12 +355,44 @@ Rules:
 - **A flow that waits forever must not hang the run.** `.config/nextest.toml` gives every
   `flow_*` binary a slow timeout of five 60-second periods, after which nextest terminates the
   binary and reports the test as timed out.
+- **A clipped element cannot be clicked.** A `ScrollView` draws only its viewport, but the
+  element tree still reports a row half past the bottom edge, with a position and a size. A
+  pointer aimed at its middle then lands on nothing. `scroll_to(id)` therefore scrolls until
+  the element sits completely inside every `ScrollView::flickable` it overlaps, and
+  `click` fails with both rectangles when it is asked to press something outside one.
 - No flow test opens a display, reaches the network, or touches the keyring.
+
+### Real X input: `just ui-xtest`
+
+The flow tests drive the window through the Slint testing backend, which has no X server, no
+window manager, and no pointer grabs. Three defects lived in exactly that gap: a dialog whose
+overlay ate the click after an Escape, shortcuts that died with the screen that held the focus,
+and a button that only looked pressable. `just ui-xtest` is the check that sees them.
+
+It builds `gcl-ui`, starts `Xvfb :97` at 1200x760, runs the debug GUI over a throwaway root
+with `GCL_LOG=info`, drives it with `scripts/ui-xtest.py`, and prints PASS or FAIL by reading
+the GUI log for the jobs the run must have raised. The temp root keeps the log and the PNGs;
+the recipe prints its path.
+
+`scripts/ui-xtest.py` sends every event through the XTest extension, so the app sees them as a
+user's. Steps, applied in order: `focus[:wm-class]`, `click:X,Y`, `drag:X1,Y1,X2,Y2`,
+`type:TEXT`, `key:NAME`, `sleep:SECONDS`, `shot:PATH`. The display comes from
+`GCL_XTEST_DISPLAY`, else `DISPLAY`.
+
+- **`focus` first, always.** A bare Xvfb runs no window manager, so nothing hands out the input
+  focus and every key goes to the root window. The step finds the window by its WM class
+  (`grid-craft-launcher`) and calls `set_input_focus` itself. Without it no `type` or `key`
+  step reaches the app.
+- Coordinates are literal pixels at 1200x760 with the fluent style. Take a `shot` and read it
+  before trusting a coordinate: a dialog grows a row when a loader is chosen, and everything
+  below it moves.
+- Never `pkill -f` a pattern that also matches your own shell. Kill by pid.
 
 ## What not to do
 
 - No network in unit or CLI tests.
 - No `sleep` to wait for async work; await the future.
 - No tests that depend on ordering or shared global state.
-- No gcl-ui test that opens a display. A flow test builds a real `AppWindow` on the Slint testing
+- No gcl-ui test that opens a display, apart from `just ui-xtest`, which is run by hand and is
+  not part of `just check`. A flow test builds a real `AppWindow` on the Slint testing
   backend, which draws nothing; keep everything else in a pure helper and test that instead.

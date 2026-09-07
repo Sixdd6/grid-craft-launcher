@@ -33,6 +33,7 @@ fn the_instances_screen_creates_launches_and_removes_an_instance() {
         creating_a_fabric_instance_installs_the_loader(app).await;
         launching_a_row_runs_the_game_until_stop(app).await;
         a_launch_that_cannot_start_opens_the_error_dialog(app).await;
+        the_click_after_escape_still_lands(app).await;
         renaming_and_deleting_an_instance(app).await;
     });
 }
@@ -307,6 +308,47 @@ async fn a_launch_that_cannot_start_opens_the_error_dialog(app: &TestApp) {
 
     std::fs::set_permissions(&java, std::fs::Permissions::from_mode(0o755))
         .expect("give the stand-in java back");
+}
+
+/// (d3) A dialog closed with Escape does not eat the next click.
+///
+/// A dialog that stays mounted while closed leaves its overlay `TouchArea` in the tree, and
+/// that area keeps the pointer grab it took when the dialog opened, so the first click after
+/// an Escape is swallowed and the rail entry under it never navigates. The step opens the
+/// rename prompt, presses Escape, and clicks the Accounts entry exactly once.
+async fn the_click_after_escape_still_lands(app: &TestApp) {
+    app.click("InstanceScreen::rename_button");
+    app.wait_until(
+        "the rename prompt to open",
+        |window| window.global::<InstanceState>().get_prompt_open(),
+        QUICK,
+    )
+    .await;
+
+    app.press_key(slint::platform::Key::Escape);
+    app.wait_until(
+        "the rename prompt to close",
+        |window| !window.global::<InstanceState>().get_prompt_open(),
+        QUICK,
+    )
+    .await;
+
+    app.click("Rail::rail_accounts");
+    app.wait_until(
+        "the accounts screen to open after one click",
+        |window| window.global::<App>().get_screen() == Screen::Accounts,
+        QUICK,
+    )
+    .await;
+
+    // Back to the detail screen, which is where the next step starts.
+    app.click("Rail::rail_instance");
+    app.wait_until(
+        "the detail screen to come back",
+        |window| window.global::<App>().get_screen() == Screen::Instance,
+        QUICK,
+    )
+    .await;
 }
 
 /// (e) Rename from the detail screen, then delete from the list.

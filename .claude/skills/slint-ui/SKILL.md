@@ -151,6 +151,30 @@ the `ListView` inside it. A `Dialog` takes focus when it opens, unless `focus-fi
 caller focuses its own text field instead; Escape bubbles from that field to the dialog's scope
 either way.
 
+Two things keep the shell's shortcuts alive. `AppWindow` mirrors `App.screen` into its own
+`shown_screen` property and calls `nav.focus()` from `changed shown_screen`, because a screen
+change destroys whatever field held the keyboard and nothing else takes it back. And
+`changed any_dialog_open` does the same when the last dialog closes. A dialog owns the keyboard
+while it is up, so the screen handler leaves it alone.
+
+## Dialogs
+
+Every dialog in `app.slint` is mounted inside an `if <State>.xxx_open:`, so a closed dialog has
+no element in the tree at all. A dialog that stayed mounted kept a full-window overlay
+`TouchArea`, and that area holds the pointer grab it took when the dialog opened, so the first
+click after an Escape landed on it instead of the screen. `visible: root.open` is not enough:
+`Dialog` also gates both of its touch areas on `enabled: root.open`, for a caller that keeps the
+component mounted, which is what the previews do.
+
+Being mounted only while open changes how a dialog takes the keyboard: it is created already
+open, so `changed open` never fires. `Dialog`, `PromptDialog`, and `CreateInstanceDialog` each
+call the same one-line `take-keyboard()` function from `init` and from `changed open`. Write a
+new dialog the same way — an `init` handler alone breaks the preview, a `changed open` handler
+alone breaks the app.
+
+A control that says "no" must be gone, not dimmed: the Stop button on the instance screen is
+`visible: InstanceState.running`. A disabled red button still reads as one to press.
+
 ## Element ids
 
 Every interactive element carries a `snake_case := ` name, because the Slint testing backend
