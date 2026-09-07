@@ -46,3 +46,15 @@ record-fixture source name url:
 # Check agent and skill files have frontmatter
 lint-claude:
     scripts/lint-claude-files.sh
+
+# Build the Linux AppImage into dist/
+appimage:
+    packaging/build-appimage.sh
+
+# Run the built AppImage's UI smoke test
+appimage-smoke:
+    dist/grid-craft-launcher-*-x86_64.AppImage --appimage-extract-and-run --smoke
+
+# Show what cargo-dist would build for a release
+dist-plan:
+    dist plan

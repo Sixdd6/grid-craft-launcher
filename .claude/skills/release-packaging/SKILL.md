@@ -15,14 +15,23 @@ description: How releases are built and versioned — cargo-dist config, AppImag
 
 ## Linux AppImage
 
-- `packaging/` holds everything `linuxdeploy` consumes: `grid-craft-launcher.desktop` (Name,
+- `packaging/` holds everything the AppImage build consumes: `grid-craft-launcher.desktop` (Name,
   `Exec=grid-craft-launcher`, `Icon=grid-craft-launcher`, `Categories=Game;`), `icon.png` (256x256,
-  the rasterized icon `linuxdeploy` copies into the AppImage), and `icon.svg` (the hand-written
+  the rasterized icon copied into the AppImage), and `icon.svg` (the hand-written
   source the PNG was rendered from — regenerate the PNG from it with
   `magick -background none packaging/icon.svg -resize 256x256 packaging/icon.png` rather than
   editing the PNG directly).
-- Build release, then `linuxdeploy --appdir AppDir --executable target/release/grid-craft-launcher --desktop-file packaging/grid-craft-launcher.desktop --icon-file packaging/icon.png --output appimage`.
-- Follow the `grid-launcher` project's `build.sh` for the linuxdeploy download step.
+- Build with `just appimage` (`packaging/build-appimage.sh`). The script builds both release
+  binaries, assembles `AppDir/`, downloads `appimagetool-x86_64.AppImage` into `packaging/tools/`
+  when it is absent, and writes `dist/grid-craft-launcher-<version>-x86_64.AppImage`.
+- `packaging/AppRun` starts the UI. `--cli` starts `gcl` with the remaining arguments, so one
+  AppImage carries both binaries.
+- The AppImage embeds update information
+  (`gh-releases-zsync|sixdd6|grid-craft-launcher|latest|grid-craft-launcher-*-x86_64.AppImage.zsync`).
+  The companion `.zsync` file needs `zsyncmake` (package `zsync`); the script prints a note and
+  continues when it is missing.
+- Smoke test the result with `just appimage-smoke`.
+- `AppDir/`, `dist/`, and `packaging/tools/` are build output. They stay out of git.
 - Slint with winit needs no bundled Qt; ensure `libxkbcommon`, `fontconfig`, and `wayland` client libs are system-provided (they are on any desktop).
 
 ## Windows and macOS

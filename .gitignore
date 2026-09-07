@@ -4,3 +4,6 @@
 .claude/settings.local.json
 /tests/e2e-root/
 /.superpowers/
+/AppDir/
+/dist/
+/packaging/tools/
