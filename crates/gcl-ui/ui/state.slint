@@ -361,8 +361,6 @@ export global SettingsState {
     // Set one raw `options.txt` default, from the Advanced editor. Carries the key and the
     // value. Everything the catalog knows is set through `SettingsEditorState` instead.
     callback default_set(string /* key */, string /* value */);
-    // Drop one `options.txt` default. Carries the key.
-    callback default_unset(string);
     // Check every configured source and the Mojang manifest. Talks to the network.
     callback verify_sources();
 }

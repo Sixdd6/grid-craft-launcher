@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use gcl_core::settings::doc::{Layer, Row};
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::bridge::Bridge;
 use crate::models::settings::{choice_token, stored_value, visible_rows};
@@ -59,8 +59,17 @@ impl Editor {
     }
 
     /// Shows `target`'s settings: remembers the layer, then reads its rows.
+    ///
+    /// The search box and the status line are emptied first. Both belong to the target that
+    /// was open before, and one editor serves the settings screen and every instance, so a
+    /// left-over search would hide most of the rows the new target just read.
     pub fn open(&self, bridge: &Bridge, target: EditTarget) {
         *self.lock_target() = target;
+        if let Some(window) = bridge.weak().upgrade() {
+            let state = window.global::<SettingsEditorState>();
+            state.set_search(SharedString::new());
+            state.set_status(SharedString::new());
+        }
         self.reload(bridge);
     }
 

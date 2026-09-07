@@ -49,8 +49,20 @@ fn a_float_slider_keeps_its_decimals_and_clamps_a_value_outside_the_range() {
     // A file can hold anything; the slider still has to land inside its own range.
     let high = setting_row(&row("gamma", "9", Layer::File), Layer::Override);
     assert_eq!(high.number, 1.0);
-    let unparsable = setting_row(&row("gamma", "bright", Layer::File), Layer::Override);
-    assert_eq!(unparsable.number, 0.0);
+}
+
+#[test]
+fn a_slider_value_that_does_not_parse_stays_a_text_row() {
+    // `bright` is not a number, so no slider position stands for it. The row falls back to
+    // the text control, where the value a file really holds is on screen and editable.
+    let model = setting_row(&row("gamma", "bright", Layer::File), Layer::Override);
+    assert_eq!(model.control, "text");
+    assert_eq!(model.value, "bright");
+    assert_eq!(
+        model.label, "Brightness",
+        "it is still the catalog's setting"
+    );
+    assert_eq!(model.group, "Video");
 }
 
 #[test]
@@ -68,10 +80,17 @@ fn a_choice_row_finds_the_position_of_the_stored_token() {
     assert_eq!(model.control, "choice");
     assert_eq!(choices(&model), vec!["Fast", "Fancy", "Fabulous"]);
     assert_eq!(model.choice_index, 2);
+}
 
-    // A token the catalog does not know picks nothing rather than the first entry.
-    let unknown = setting_row(&row("graphicsMode", "7", Layer::File), Layer::Preseed);
-    assert_eq!(unknown.choice_index, -1);
+#[test]
+fn a_choice_token_outside_the_catalog_stays_a_text_row() {
+    // A ComboBox on index -1 shows an empty box, and the first arrow key would write over
+    // `7` without the user ever seeing it. The text control keeps the token readable.
+    let model = setting_row(&row("graphicsMode", "7", Layer::File), Layer::Preseed);
+    assert_eq!(model.control, "text");
+    assert_eq!(model.value, "7");
+    assert_eq!(model.choice_index, -1);
+    assert!(choices(&model).is_empty());
 }
 
 #[test]

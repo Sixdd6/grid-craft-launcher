@@ -75,33 +75,41 @@ pub fn setting_row(row: &Row, edited: Layer) -> SettingRowModel {
     };
     model.label = setting.label.into();
     match setting.control {
+        // A stored value the catalog's own range cannot hold is left on the text control:
+        // a slider has nowhere to put it, and silently snapping it to `min` would hide a
+        // value the file really holds.
         Control::Slider {
             min,
             max,
             step,
             decimals,
         } => {
+            let Ok(parsed) = row.value.parse::<f64>() else {
+                return model;
+            };
             model.control = "slider".into();
             model.minimum = min as f32;
             model.maximum = max as f32;
             model.step = step as f32;
             model.decimals = i32::from(decimals);
-            let parsed: f64 = row.value.parse().unwrap_or(min);
             model.number = parsed.clamp(min, max) as f32;
         }
         Control::Toggle => {
             model.control = "toggle".into();
             model.checked = row.value == "true";
         }
+        // The same rule for a token no option in the catalog holds: a ComboBox on `-1`
+        // shows an empty box, and the first arrow key would overwrite the real token, so
+        // the row keeps the text control and the token stays readable.
         Control::Choice(values) => {
+            let Some(index) = values.iter().position(|(stored, _)| *stored == row.value) else {
+                return model;
+            };
             model.control = "choice".into();
             let labels: Vec<SharedString> =
                 values.iter().map(|(_, label)| (*label).into()).collect();
             model.choices = ModelRc::new(VecModel::from(labels));
-            model.choice_index = values
-                .iter()
-                .position(|(stored, _)| *stored == row.value)
-                .map_or(-1, |index| index as i32);
+            model.choice_index = index as i32;
         }
         Control::Text => model.control = "text".into(),
     }

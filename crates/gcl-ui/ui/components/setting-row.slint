@@ -12,7 +12,8 @@ import { Button } from "button.slint";
 //
 // A slider saves when the drag ends, or `commit_delay` after the last change when no release
 // follows — an arrow key, or a screen reader's increment — so one drag is one save and not
-// one save per pixel.
+// one save per pixel. A choice waits the same delay before it saves, because a ComboBox
+// reports every arrow step and every wheel tick as a pick: one save after the picking stops.
 export component SettingRow inherits Rectangle {
     in property <SettingRowModel> entry;
     // False while a save is running: every control is dead until the rows come back.
@@ -21,8 +22,10 @@ export component SettingRow inherits Rectangle {
     callback chose(string /* key */, int /* index */);
     callback reset(string /* key */);
 
-    // How long after the last slider change the value is saved, when no release follows.
-    property <duration> commit_delay: 250ms;
+    // How long after the last change a value is saved, when no release follows.
+    property <duration> commit_delay: 500ms;
+    // The position the choice combo last reported, saved when `choice_commit` fires.
+    property <int> pending_choice: -1;
 
     height: Theme.row-height + Theme.gap;
     // The row itself is what a test and a screen reader find the setting by: the key names
@@ -62,8 +65,11 @@ export component SettingRow inherits Rectangle {
                     enabled: root.enabled;
                     horizontal-stretch: 1;
                     changed(value) => {
-                        commit.running = false;
+                        // `restart()` is what puts the delay back: assigning `running` the
+                        // value it already holds changes nothing and the timer would fire
+                        // `commit_delay` after the *first* change instead of the last.
                         commit.running = true;
+                        commit.restart();
                     }
                     released(value) => {
                         commit.running = false;
@@ -120,8 +126,19 @@ export component SettingRow inherits Rectangle {
                     enabled: root.enabled;
                     width: 2 * Theme.label-width;
                     selected => {
-                        root.chose(root.entry.key, self.current-index);
+                        root.pending_choice = self.current-index;
+                        choice_commit.running = true;
+                        choice_commit.restart();
                     }
+                }
+            }
+
+            choice_commit := Timer {
+                interval: root.commit_delay;
+                running: false;
+                triggered => {
+                    self.running = false;
+                    root.chose(root.entry.key, root.pending_choice);
                 }
             }
         }
@@ -136,6 +153,13 @@ export component SettingRow inherits Rectangle {
                     horizontal-stretch: 1;
                     accepted(value) => {
                         root.changed(root.entry.key, value);
+                    }
+                    // Leaving the field is the other way a typed value is finished: without
+                    // this, text edited and then clicked away from is silently dropped.
+                    changed has-focus => {
+                        if !self.has-focus && self.text != root.entry.value {
+                            root.changed(root.entry.key, self.text);
+                        }
                     }
                 }
             }

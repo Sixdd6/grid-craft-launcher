@@ -106,11 +106,6 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, editor: &Editor) {
     }
 
     {
-        let (bridge, editor) = (bridge.clone(), editor.clone());
-        state.on_default_unset(move |key| default_unset(&bridge, &editor, key.as_str()));
-    }
-
-    {
         let bridge = bridge.clone();
         state.on_verify_sources(move || verify_sources(&bridge));
     }
@@ -334,30 +329,6 @@ fn default_set(bridge: &Bridge, editor: &Editor, key: &str, value: &str) {
                 window
                     .global::<SettingsState>()
                     .set_status(format!("default {shown} saved").into());
-            }
-            done(window, &after.0, &after.1, result.is_ok());
-        },
-    );
-}
-
-/// Drops one `options.txt` default.
-fn default_unset(bridge: &Bridge, editor: &Editor, key: &str) {
-    let key = key.to_string();
-    let shown = key.clone();
-    let after = (bridge.clone(), editor.clone());
-    busy(bridge, true);
-    bridge.run_with_error(
-        "Remove game default",
-        move |launcher| {
-            launcher.update_config(|config| {
-                config.game_defaults.remove(&key);
-            })
-        },
-        move |window, result| {
-            if result.is_ok() {
-                window
-                    .global::<SettingsState>()
-                    .set_status(format!("default {shown} removed").into());
             }
             done(window, &after.0, &after.1, result.is_ok());
         },

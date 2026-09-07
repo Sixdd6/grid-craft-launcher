@@ -86,9 +86,18 @@ async fn search(app: &TestApp, query: &str, key: &str) {
     .await;
 }
 
-/// What `config.toml` holds for one game default.
+/// What `config.toml` holds for one game default, as the launcher has it in memory.
 fn saved_default(app: &TestApp, key: &str) -> Option<String> {
     app.launcher.config().game_defaults.get(key).cloned()
+}
+
+/// `config.toml`, read off the disk.
+///
+/// `Launcher::config()` would answer from the copy the process already holds, which proves
+/// only that the editor called the launcher. Reading the file proves the save landed.
+fn config_file(app: &TestApp) -> String {
+    let path = app.launcher.root().path().join("config.toml");
+    std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
 }
 
 /// What `instance.toml` holds for one settings override.
@@ -144,7 +153,10 @@ async fn a_slider_saves_a_launcher_default(app: &TestApp) {
 
     idle(app).await;
     app.scroll_to("SettingRow::setting_slider");
-    app.drag_slider("SettingRow::setting_slider", 0.75);
+    // The press is a click on the track, not on the thumb: renderDistance starts at 12 of
+    // 2..32, so the thumb sits near a third of the way across and 0.9 is well clear of it.
+    // A press that lands on the thumb only picks it up, and the value never moves.
+    app.drag_slider("SettingRow::setting_slider", 0.9);
     app.wait_until(
         "the new render distance to reach config.toml",
         |_| saved_default(app, "renderDistance").is_some(),
@@ -170,6 +182,13 @@ async fn a_slider_saves_a_launcher_default(app: &TestApp) {
     let row = line(&app.window, "renderDistance").expect("the row");
     assert!(row.resettable, "a value this layer holds offers Reset");
     assert!(!row.inherited);
+
+    let on_disk = config_file(app);
+    let expected = format!("renderDistance = \"{saved}\"");
+    assert!(
+        on_disk.contains(&expected),
+        "config.toml on disk holds `{expected}`. It holds:\n{on_disk}"
+    );
 }
 
 /// (c) Flip the fullscreen switch: `true` is saved.
@@ -257,7 +276,9 @@ async fn an_instance_overrides_a_default_and_resets_it(app: &TestApp) {
 
     idle(app).await;
     app.scroll_to("SettingRow::setting_slider");
-    app.drag_slider("SettingRow::setting_slider", 0.25);
+    // The instance inherited the value the first drag saved, so the thumb is near 0.9 now.
+    // 0.1 is the far end of the track, clear of it.
+    app.drag_slider("SettingRow::setting_slider", 0.1);
     app.wait_until(
         "the override to reach instance.toml",
         |_| saved_override(app, "renderDistance").is_some(),
