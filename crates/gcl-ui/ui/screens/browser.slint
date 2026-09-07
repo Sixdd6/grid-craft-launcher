@@ -1,14 +1,487 @@
+import { ComboBox, LineEdit, ListView } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
 import { SearchRow } from "../types.slint";
+import { Button } from "../components/button.slint";
 import { EmptyState } from "../components/empty-state.slint";
+import { ListRow } from "../components/list-row.slint";
+import { SearchBox } from "../components/search-box.slint";
 
-// Content browser. Filled in by task 5.
+// Everything the content browser reads and reports.
+//
+// The screen lives inside an `if` in `app.slint`, so Rust cannot reach its properties. This
+// global is the seam, the same way `InstancesState` is for the list: `src/screens/browser.rs`
+// binds it, and the screen reads it directly.
+//
+// Two lists are paired with an index each: `source_labels`/`source_index` and
+// `target_labels`/`target_index`. Rust owns the ids behind those labels, so the screen only
+// ever reports which row was picked. `kind_labels` is rebuilt per source, because a source
+// that cannot serve a kind must not offer it.
+//
+// Every default here is preview content: `just ui-preview screens/browser.slint` shows it.
+export global BrowserState {
+    // What the user typed into the search box. For the modpack kind this is the project id
+    // or slug to install, because a modpack is not searchable content.
+    in-out property <string> query: "sodium";
+    // Sources that are enabled, in ComboBox order.
+    in-out property <[string]> source_labels: ["modrinth", "curseforge"];
+    // Index into `source_labels`.
+    in-out property <int> source_index: 0;
+    // Content kinds the chosen source serves, in ComboBox order.
+    in-out property <[string]> kind_labels: [
+        "mod", "resourcepack", "shader", "datapack", "modpack"
+    ];
+    // Index into `kind_labels`.
+    in-out property <int> kind_index: 0;
+    // Minecraft version filter, empty for any.
+    in-out property <string> minecraft: "1.20.1";
+    // Loader filter: `any`, or one loader slug.
+    in-out property <string> loader: "fabric";
+
+    // Slug of the instance an Add installs into, empty when none is chosen yet.
+    in-out property <string> target_slug: "fabric-perf";
+    // Display name of that instance, for the button label.
+    in-out property <string> target_name: "Fabric Performance";
+    // Every instance that could be the target, in ComboBox order. Only used when the browser
+    // was opened from the rail, with no instance already on screen.
+    in-out property <[string]> target_labels: [];
+    // Index into `target_labels`, or -1 when nothing is chosen.
+    in-out property <int> target_index: -1;
+    // Whether the target ComboBox is shown, which it is when no instance was already open.
+    in-out property <bool> choose_target: false;
+
+    // The current page of hits, in the source's own order.
+    in-out property <[SearchRow]> rows: [
+        {
+            source: "modrinth",
+            project_id: "AANobbMI",
+            slug: "sodium",
+            title: "Sodium",
+            description: "A modern rendering engine for Minecraft which greatly improves performance.",
+            author: "jellysquid3",
+            kind: "mod",
+            downloads: "45.2M",
+            page_url: "https://modrinth.com/mod/sodium",
+        },
+        {
+            source: "modrinth",
+            project_id: "gvQqBUqZ",
+            slug: "lithium",
+            title: "Lithium",
+            description: "No-compromises game logic and server optimisation mod.",
+            author: "jellysquid3",
+            kind: "mod",
+            downloads: "31.8M",
+            page_url: "https://modrinth.com/mod/lithium",
+        },
+    ];
+    // Which page is shown, counting from zero.
+    in-out property <int> page: 0;
+    // How many hits one page asks for.
+    in-out property <int> page_size: 20;
+    // Whether the source has hits past this page.
+    in-out property <bool> has_more: true;
+    // True while a search or an install is running.
+    in-out property <bool> loading: false;
+    // One line about the last thing that happened here.
+    in-out property <string> status: "2 result(s)";
+
+    // Whether the new-instance name prompt is up, for a modpack install.
+    in-out property <bool> name_open: false;
+    // What the user typed into it.
+    in-out property <string> name_value: "";
+    // Whether the world chooser is up, for a data pack install.
+    in-out property <bool> choice_open: false;
+    // Worlds that chooser offers.
+    in-out property <[string]> choice_options: [];
+    // Index into `choice_options`.
+    in-out property <int> choice_index: 0;
+
+    // The screen was shown: load the sources, the instances, and the prefilled filters.
+    callback open();
+    // Run the search the filters describe, from page zero.
+    callback search();
+    // Show the next page of the same search.
+    callback next_page();
+    // Show the previous page of the same search.
+    callback prev_page();
+    // A row's Add button was pressed. Carries the project id.
+    callback add(string /* project_id */);
+    // A modpack is to be installed as a new instance. Carries the project id or slug.
+    callback install_pack(string /* project_id */);
+    // The source ComboBox changed. Carries its new index.
+    callback set_source(int);
+    // The kind ComboBox changed. Carries its new index.
+    callback set_kind(int);
+    // The target ComboBox changed. Carries its new index.
+    callback set_target(int);
+    // A data pack row's Add button was pressed: ask which world it goes into. Carries the
+    // project id.
+    callback pick_world(string /* project_id */);
+    // The world chooser was accepted. Carries the world picked.
+    callback choice_ok(string /* world */);
+    // The world chooser was dismissed.
+    callback choice_cancel();
+    // The new-instance name prompt was accepted. Carries the name typed.
+    callback name_ok(string);
+    // The new-instance name prompt was dismissed.
+    callback name_cancel();
+}
+
+// The content browser: filters on top, one page of hits under them, a pager at the bottom.
+//
+// Pure layout. Every value comes from [`BrowserState`] and every action is reported through
+// it, so `src/screens/browser.rs` is the only place that knows what any of this means.
 export component BrowserScreen inherits Rectangle {
-    in property <[SearchRow]> rows;
-    in property <string> query;
+    // Loader filters the ComboBox offers. `any` means the search is not filtered by loader.
+    property <[string]> loader_options: ["any", "fabric", "quilt", "forge", "neoforge"];
 
-    EmptyState {
-        title: "Browse";
-        message: "Modrinth and CurseForge search lands in task 5.";
+    // The kind the filters name, empty when the source offers none.
+    property <string> kind_name: BrowserState.kind_index >= 0
+        && BrowserState.kind_index < BrowserState.kind_labels.length
+        ? BrowserState.kind_labels[BrowserState.kind_index]
+        : "";
+    // A modpack is not content: it is imported as its own instance, and no source search
+    // returns one, so that kind swaps the results list for an install-by-id panel.
+    property <bool> modpack_mode: root.kind_name == "modpack";
+    // Whether an Add has somewhere to install into.
+    property <bool> has_target: BrowserState.target_slug != "";
+
+    background: Theme.bg;
+
+    VerticalLayout {
+        padding: Theme.pad;
+        spacing: Theme.gap;
+
+        // Header: title, the search field, and the button that runs the search.
+        HorizontalLayout {
+            spacing: Theme.gap;
+            height: Theme.row-height;
+
+            Text {
+                text: "Browse";
+                color: Theme.text;
+                font-size: Theme.font-size-h1;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+
+            SearchBox {
+                placeholder: root.modpack_mode
+                    ? "Modpack id or slug"
+                    : "Search Modrinth or CurseForge";
+                text <=> BrowserState.query;
+                horizontal-stretch: 1;
+                accepted(text) => {
+                    if (root.modpack_mode) {
+                        BrowserState.install_pack(text);
+                    } else {
+                        BrowserState.search();
+                    }
+                }
+            }
+
+            if !root.modpack_mode: Button {
+                text: "Search";
+                kind: "primary";
+                enabled: !BrowserState.loading;
+                clicked => {
+                    BrowserState.search();
+                }
+            }
+        }
+
+        // Filters: source, kind, Minecraft version, loader, and the target instance.
+        HorizontalLayout {
+            spacing: Theme.gap;
+            height: Theme.row-height;
+
+            Text {
+                text: "Source";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+
+            ComboBox {
+                width: 130px;
+                model: BrowserState.source_labels;
+                current-index: BrowserState.source_index;
+                enabled: BrowserState.source_labels.length > 1;
+                selected => {
+                    BrowserState.set_source(self.current-index);
+                }
+            }
+
+            Text {
+                text: "Type";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+
+            ComboBox {
+                width: 140px;
+                model: BrowserState.kind_labels;
+                current-index: BrowserState.kind_index;
+                selected => {
+                    BrowserState.set_kind(self.current-index);
+                }
+            }
+
+            Text {
+                text: "Minecraft";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+
+            LineEdit {
+                width: 100px;
+                placeholder-text: "any";
+                text <=> BrowserState.minecraft;
+                accepted => {
+                    BrowserState.search();
+                }
+            }
+
+            Text {
+                text: "Loader";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+
+            ComboBox {
+                width: 120px;
+                model: root.loader_options;
+                current-value <=> BrowserState.loader;
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            // A modpack becomes its own instance, so it has no target to choose.
+            if BrowserState.choose_target && !root.modpack_mode: Text {
+                text: "Add to";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+
+            if BrowserState.choose_target && !root.modpack_mode: ComboBox {
+                width: 200px;
+                model: BrowserState.target_labels;
+                current-index: BrowserState.target_index;
+                enabled: BrowserState.target_labels.length > 0;
+                selected => {
+                    BrowserState.set_target(self.current-index);
+                }
+            }
+        }
+
+        // Modpack install panel. Search cannot reach a modpack, so it is named by hand.
+        if root.modpack_mode: Rectangle {
+            vertical-stretch: 1;
+            background: Theme.surface;
+            border-radius: Theme.radius;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            VerticalLayout {
+                alignment: center;
+                padding: Theme.pad;
+                spacing: Theme.gap;
+
+                Text {
+                    text: "Install a modpack";
+                    color: Theme.text;
+                    font-size: Theme.font-size-title;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "A modpack becomes its own instance, so it is not added to one. "
+                        + "Type its project id or slug above, then press Install modpack.";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    alignment: center;
+
+                    Button {
+                        text: "Install modpack";
+                        kind: "primary";
+                        enabled: BrowserState.query != "" && !BrowserState.loading;
+                        clicked => {
+                            BrowserState.install_pack(BrowserState.query);
+                        }
+                    }
+                }
+            }
+        }
+
+        if !root.modpack_mode && BrowserState.loading: Text {
+            text: "Searching…";
+            color: Theme.text-muted;
+            font-size: Theme.font-size;
+            height: Theme.row-height;
+            vertical-alignment: center;
+        }
+
+        if !root.modpack_mode && !BrowserState.loading && BrowserState.rows.length == 0: EmptyState {
+            vertical-stretch: 1;
+            title: "Nothing to show yet";
+            message: "Type what you are looking for and press Search.";
+        }
+
+        if !root.modpack_mode && !BrowserState.loading && BrowserState.rows.length > 0: ListView {
+            vertical-stretch: 1;
+
+            for row in BrowserState.rows: ListRow {
+                height: 3 * Theme.font-size + 3 * Theme.gap + Theme.pad;
+
+                VerticalLayout {
+                    padding-top: Theme.gap;
+                    padding-bottom: Theme.gap;
+                    spacing: Theme.gap / 2;
+                    horizontal-stretch: 1;
+
+                    // Title line: name, kind badge, author, and the download count.
+                    HorizontalLayout {
+                        spacing: Theme.gap;
+
+                        Text {
+                            text: row.title;
+                            color: Theme.text;
+                            font-size: Theme.font-size;
+                            horizontal-stretch: 0;
+                            overflow: elide;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 0;
+                            width: badge.preferred-width + Theme.gap;
+                            background: Theme.surface-raised;
+                            border-radius: Theme.radius;
+                            border-width: 1px;
+                            border-color: Theme.border;
+
+                            badge := Text {
+                                text: row.kind;
+                                color: Theme.text-muted;
+                                font-size: Theme.font-size-small;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        Text {
+                            text: "by " + row.author;
+                            color: Theme.text-muted;
+                            font-size: Theme.font-size-small;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+
+                        Text {
+                            text: row.downloads + " downloads";
+                            color: Theme.text-muted;
+                            font-size: Theme.font-size-small;
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                            horizontal-stretch: 0;
+                        }
+                    }
+
+                    Text {
+                        text: row.description;
+                        color: Theme.text-muted;
+                        font-size: Theme.font-size-small;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: row.page_url;
+                        color: Theme.accent;
+                        font-size: Theme.font-size-small;
+                        overflow: elide;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+
+                    Button {
+                        text: row.kind == "modpack"
+                            ? "Install modpack"
+                            : (root.has_target
+                                ? "Add to " + BrowserState.target_name
+                                : "Pick an instance");
+                        kind: "primary";
+                        enabled: !BrowserState.loading
+                            && (row.kind == "modpack" || root.has_target);
+                        clicked => {
+                            if (row.kind == "modpack") {
+                                BrowserState.install_pack(row.project_id);
+                            } else if (row.kind == "datapack") {
+                                // A data pack lives inside one world, so it needs one named
+                                // before anything is downloaded.
+                                BrowserState.pick_world(row.project_id);
+                            } else {
+                                BrowserState.add(row.project_id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pager and status line.
+        HorizontalLayout {
+            spacing: Theme.gap;
+            height: Theme.row-height;
+
+            if !root.modpack_mode: Button {
+                text: "Prev";
+                enabled: BrowserState.page > 0 && !BrowserState.loading;
+                clicked => {
+                    BrowserState.prev_page();
+                }
+            }
+
+            if !root.modpack_mode: Button {
+                text: "Next";
+                enabled: BrowserState.has_more && !BrowserState.loading;
+                clicked => {
+                    BrowserState.next_page();
+                }
+            }
+
+            if !root.modpack_mode: Text {
+                text: "Page " + (BrowserState.page + 1);
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+
+            Text {
+                text: BrowserState.status;
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+        }
     }
 }

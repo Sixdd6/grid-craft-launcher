@@ -1,0 +1,104 @@
+import { ListView } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Dialog } from "dialog.slint";
+
+// A pick-one-of-a-list modal built on [`Dialog`]: a title, a scrolling list, OK and Cancel.
+//
+// Like [`PromptDialog`] it does not close itself: the owner sets `open` back to false from
+// `accept` or `cancel`, so an accept that starts background work can keep the panel up.
+export component ChoiceDialog inherits Rectangle {
+    // Whether the modal is visible.
+    in-out property <bool> open: true;
+    // Headline of the panel.
+    in property <string> title: "Choose a world";
+    // One line above the list, empty to leave it out.
+    in property <string> label: "The data pack is installed into this world.";
+    // The options offered, in display order.
+    in property <[string]> options: ["New World", "Hardcore Attempt 4", "Creative Sandbox"];
+    // Index of the chosen option, or -1 when nothing is chosen.
+    in-out property <int> index: 0;
+    // Label of the accepting button.
+    in property <string> accept_label: "OK";
+
+    // The user accepted. Carries the option chosen.
+    callback accept(string);
+    // The user cancelled, or clicked outside the panel.
+    callback cancel();
+
+    // The option `index` names, empty when it names none.
+    property <string> chosen: root.index >= 0 && root.index < root.options.length
+        ? root.options[root.index]
+        : "";
+
+    Dialog {
+        width: root.width;
+        height: root.height;
+        open: root.open;
+        title: root.title;
+        close-text: "Cancel";
+        confirm-text: root.accept_label;
+        // Nothing chosen is what the caller was trying to avoid, so it cannot be sent.
+        confirm-enabled: root.chosen != "";
+        close => {
+            root.cancel();
+        }
+        confirm => {
+            root.accept(root.chosen);
+        }
+
+        VerticalLayout {
+            spacing: Theme.gap;
+
+            if root.label != "": Text {
+                text: root.label;
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+                wrap: word-wrap;
+            }
+
+            Rectangle {
+                // Four rows before the list starts scrolling, so a long world list stays
+                // inside the panel.
+                height: min(root.options.length, 4) * (Theme.row-height + 2px) + Theme.gap;
+                background: Theme.bg;
+                border-radius: Theme.radius;
+                border-width: 1px;
+                border-color: Theme.border;
+
+                ListView {
+                    x: Theme.gap / 2;
+                    y: Theme.gap / 2;
+                    width: parent.width - Theme.gap;
+                    height: parent.height - Theme.gap;
+
+                    for option[i] in root.options: Rectangle {
+                        height: Theme.row-height;
+                        border-radius: Theme.radius;
+                        background: i == root.index
+                            ? Theme.accent.with-alpha(0.18)
+                            : (touch.has-hover ? Theme.surface-hover : Colors.transparent);
+
+                        touch := TouchArea {
+                            clicked => {
+                                root.index = i;
+                            }
+                        }
+
+                        Text {
+                            x: Theme.gap;
+                            width: parent.width - 2 * Theme.gap;
+                            height: parent.height;
+                            text: option;
+                            color: Theme.text;
+                            font-size: Theme.font-size;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+
+                        animate background { duration: 100ms; }
+                    }
+                }
+            }
+        }
+    }
+}

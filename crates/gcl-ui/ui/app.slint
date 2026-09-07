@@ -5,6 +5,7 @@ import {
 } from "types.slint";
 import { InstanceState } from "state.slint";
 import { Rail } from "components/rail.slint";
+import { ChoiceDialog } from "components/choice-dialog.slint";
 import { ConfirmDialog } from "components/confirm-dialog.slint";
 import { CreateInstanceDialog } from "components/create-instance-dialog.slint";
 import { Dialog } from "components/dialog.slint";
@@ -12,14 +13,14 @@ import { PromptDialog } from "components/prompt-dialog.slint";
 import { ProgressBar } from "components/progress-bar.slint";
 import { InstancesScreen } from "screens/instances.slint";
 import { InstanceScreen } from "screens/instance.slint";
-import { BrowserScreen } from "screens/browser.slint";
+import { BrowserScreen, BrowserState } from "screens/browser.slint";
 import { AccountsScreen } from "screens/accounts.slint";
 import { SettingsScreen } from "screens/settings.slint";
 
 // Re-exported so the generated Rust module has every struct the screens will need.
 export {
-    AccountRow, ContentRow, InstanceRow, InstanceState, LoaderVersionRow, LogLine, PendingRow,
-    Screen, SearchRow, SettingRow, TaskRow, Theme, VersionRow
+    AccountRow, BrowserState, ContentRow, InstanceRow, InstanceState, LoaderVersionRow, LogLine,
+    PendingRow, Screen, SearchRow, SettingRow, TaskRow, Theme, VersionRow
 }
 
 // Shell state and the callbacks Rust wires up. Screens read from here, never from each other.
@@ -134,6 +135,17 @@ export component AppWindow inherits Window {
     changed shown_slug => {
         if (self.shown_slug != "") {
             InstanceState.load(self.shown_slug);
+        }
+    }
+
+    // Whether the browser is up. The browser loads its sources, its instance list, and its
+    // prefilled filters when it is shown, for the same reason the detail screen does: Rust
+    // cannot watch a property, so navigating to the screen is what triggers the load.
+    property <bool> browser_open: App.screen == Screen.browser;
+
+    changed browser_open => {
+        if (self.browser_open) {
+            BrowserState.open();
         }
     }
 
@@ -317,6 +329,42 @@ export component AppWindow inherits Window {
         }
         cancel => {
             InstanceState.prompt_cancel();
+        }
+    }
+
+    // New-instance name prompt, used when a modpack is installed from the browser.
+    PromptDialog {
+        width: root.width;
+        height: root.height;
+        open: BrowserState.name_open;
+        title: "Install modpack";
+        label: "Instance name";
+        placeholder: "My modpack";
+        value <=> BrowserState.name_value;
+        accept_label: "Install";
+        accept(name) => {
+            BrowserState.name_ok(name);
+        }
+        cancel => {
+            BrowserState.name_cancel();
+        }
+    }
+
+    // World chooser, used when a data pack is added from the browser.
+    ChoiceDialog {
+        width: root.width;
+        height: root.height;
+        open: BrowserState.choice_open;
+        title: "Choose a world";
+        label: "The data pack is installed into this world's datapacks folder.";
+        options: BrowserState.choice_options;
+        index <=> BrowserState.choice_index;
+        accept_label: "Add";
+        accept(world) => {
+            BrowserState.choice_ok(world);
+        }
+        cancel => {
+            BrowserState.choice_cancel();
         }
     }
 

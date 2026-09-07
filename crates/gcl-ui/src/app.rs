@@ -29,7 +29,14 @@ pub fn build(
     let weak = window.as_weak();
     app.on_navigate(move |screen| {
         if let Some(window) = weak.upgrade() {
-            window.global::<App>().set_screen(screen);
+            let app = window.global::<App>();
+            // The rail is the only caller, and it names no instance. Clearing the slug is
+            // what tells the browser it was opened on its own, so it offers the whole
+            // instance list as targets instead of adding to whatever was last open.
+            if screen != Screen::Instance {
+                app.set_current_slug("".into());
+            }
+            app.set_screen(screen);
         }
     });
 
@@ -57,6 +64,7 @@ pub fn build(
     let run = RunState::new();
     crate::screens::instances::wire(&window, &bridge, &run);
     crate::screens::instance::wire(&window, &bridge, &run);
+    crate::screens::browser::wire(&window, &bridge);
 
     start_forwarder(rx, window.as_weak());
     Ok(window)
