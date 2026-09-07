@@ -107,3 +107,134 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 - Server instances.
 - Per-instance Java download from Adoptium.
 - Skins and capes.
+
+## MVP status (2026-09-06)
+
+Status values: **Done** (works in the CLI and the GUI), **Done (CLI only)** (no GUI surface),
+**Partial** (part of the requirement is missing), **Not verified live** (the code and its unit
+tests are there, but no live run has exercised it here).
+
+| Id | Status | Note |
+|---|---|---|
+| R1.1 | Done | Root defaults to the platform data dir plus `grid-craft-launcher`. |
+| R1.2 | Done | `gcl config root <dir>` and the settings screen change it; nothing moves, and both say the old root stays. |
+| R1.3 | Done | `config.toml` holds the root, JVM defaults, Java path, API keys, and the `options.txt` preseed. |
+| R1.4 | Done | `Config::curseforge_api_key` and `msa_client_id` read env first, then `config.toml`. |
+| R1.5 | Done | `GCL_ROOT` overrides the root; both e2e scripts run under it. |
+| R1.6 | Done | `accounts.json` holds accounts and cached tokens; refresh tokens go to the keyring. |
+| R2.1 | Done | `instance create --minecraft --loader --loader-version`; the GUI has the same dialog. |
+| R2.2 | Done | List, rename, delete. The CLI needs `--yes` to delete; the GUI confirms. The slug never changes. |
+| R2.3 | Done | Each instance owns `.minecraft/` with mods, resourcepacks, shaderpacks, saves, options.txt, logs. |
+| R2.4 | Done | `instance.toml` records every field the spec lists. |
+| R2.5 | Done | A `ContentEntry` carries source, project id, version id, file name, sha1, kind, and the enabled flag. |
+| R2.6 | Done | Enable and disable rename the file to and from `.disabled`. |
+| R3.1 | Done | The piston-meta manifest is fetched and cached with its ETag. |
+| R3.2 | Done | Version JSON, client jar, libraries, asset index, and assets live under `cache/` and are shared. |
+| R3.3 | Done | Every download verifies sha1, else size, and retries three times. |
+| R3.4 | Done | The queue runs 8 downloads at once; `config.toml` changes the number. |
+| R3.5 | Done | The object store is content-addressed; a hash already present is never fetched again. |
+| R4.1 | Done | Fabric, Quilt, Forge (1.13+), and NeoForge install. All four ran live today. |
+| R4.2 | Done | `loader list <mc> --loader <name>` lists the builds, newest first. |
+| R4.3 | Done | A loader writes `cache/versions/<id>.json` once and every instance reuses it. |
+| R4.4 | Done | Forge and NeoForge run the installer processors headlessly with the launcher's Java. |
+| R4.5 | Done | Installers and processor outputs stay in `cache/installers/` and the version cache. |
+| R5.1 | Done | `java list` detects runtimes and reports each major version. |
+| R5.2 | Done | The Mojang runtime component named by the version JSON downloads when no Java matches. |
+| R5.3 | Done | `instance.toml` takes a Java path override; the GUI JVM tab edits it. |
+| R6.1 | Not verified live | The device-code chain and the keyring store are written and unit-tested. No live sign-in has run here: the repo ships no `GCL_MSA_CLIENT_ID`. |
+| R6.2 | Done | Offline accounts derive the UUID from `OfflinePlayer:<name>`. |
+| R6.3 | Done | Many accounts, one active; `account select` and the accounts screen switch. |
+| R6.4 | Done | An `Auth` failure prints `use --offline-user <name> to play offline`. |
+| R6.5 | Done | Without a client id, Microsoft login is hidden and offline mode works. |
+| R7.1 | Partial | Modrinth search runs live with text, type, version, and loader filters. CurseForge search is written and unit-tested against synthetic fixtures, never run live: no API key here. |
+| R7.2 | Partial | Mods, modpacks, resource packs, shaders, data packs, and worlds are modeled. Modrinth has no world project type. The CurseForge class list is unverified. |
+| R7.3 | Done | Files land in `mods/`, `resourcepacks/`, `shaderpacks/`, `saves/<world>/datapacks/`, and `saves/`. |
+| R7.4 | Done | `content add` walks required dependencies breadth-first, depth 10. |
+| R7.5 | Not verified live | A file with no download URL becomes a pending manual download; `content import-file` verifies it and the command exits 3. Only CurseForge serves such files, so this path has no live run. |
+| R7.6 | Done | Without `CURSEFORGE_API_KEY`, CurseForge is hidden and Modrinth works. |
+| R7.7 | Done | `content update` lists newer compatible versions; `--apply` installs them. |
+| R8.1 | Done | `.mrpack` imports from the catalog and from a file. `just e2e-modpack` imported Fabulously Optimized live today: 50 content entries. |
+| R8.2 | Not verified live | The CurseForge pack parser and importer are written and unit-tested against synthetic fixtures. No key here, so no live import. |
+| R8.3 | Done | The new instance takes the pack's Minecraft version, loader, files, and overrides. |
+| R9.1 | Done | `config.toml` holds the preseed as key-value pairs. |
+| R9.2 | Done | A new instance gets the preseed written to `options.txt`. |
+| R9.3 | Done | Launch writes the instance's overrides into `options.txt`, replacing matching keys and appending the rest. |
+| R9.4 | Done | `settings set`, `settings defaults set`, and the GUI settings tabs edit both. |
+| R10.1 | Done | `config jvm --min --max` sets the launcher-wide heap bounds. |
+| R10.2 | Done | Per-instance min and max override the defaults; the JVM tab edits them. |
+| R10.3 | Done | `instance.toml` carries extra JVM arguments per instance. |
+| R11.1 | Done | The classpath and arguments come from the merged version JSON, the account, the instance, and the JVM settings. |
+| R11.2 | Done | Overrides are applied before Java starts. |
+| R11.3 | Done | Java's stdout and stderr stream to `<root>/logs/<slug>-<timestamp>.log` and to events. |
+| R11.4 | Done | `--dry-run` prints the program, working directory, and every argument. |
+| R11.5 | Done | A non-zero game exit is reported with a crash hint. |
+| R12.1 | Done | `instance`, `version`, `loader`, `java`, `account`, `content`, `modpack`, `settings`, `launch`, `config`, and `debug` cover the requirements above. |
+| R12.2 | Done | Every command prints text by default and JSON with `--json`. |
+| R13.1 | Done | All five screens ship: instances, instance detail, browser, accounts, settings. |
+| R13.2 | Done | The bottom panel shows one row per task with a fraction and a status. |
+| R13.3 | Partial | The shell is dark and native (winit + FemtoVG). `std-widgets` controls keep the `fluent` style's light palette. |
+| R13.4 | Partial | Digits 1-5, arrows, Enter, and Escape are wired. `keys.rs` is unit-tested; the `.slint` wiring is verified by compiling, not by a keyboard session. |
+
+### Known limitations
+
+- **CurseForge is unverified live.** This machine has no `CURSEFORGE_API_KEY`. Search, install,
+  fingerprint lookup, and pack import compile and pass unit tests against synthetic fixtures
+  built from the public docs. `debug verify-source curseforge` prints SKIP.
+- **Microsoft login is unverified live.** The repo ships no `GCL_MSA_CLIENT_ID`, so the six-step
+  device-code chain has run against wiremock only. `debug verify-source msa` prints SKIP.
+- **Widget palette.** `std-widgets` controls (`ComboBox`, `TextEdit`, `SpinBox`) render in the
+  `fluent` style's light palette on the dark shell. No `Theme` token reaches their colors.
+- **No clipboard.** Slint 1.17 exposes no clipboard call here. Text a user may want to copy sits
+  in a read-only, selectable `TextEdit`, so Ctrl+C on a selection is the whole copy story.
+- **Modpack discovery is by id.** The browser installs a pack from a source and a project id, or
+  from a typed path to an archive. There is no modpack search, because `gcl-core` has no modpack
+  search endpoint, and no file picker.
+- **No Stop button.** `InstanceState.stop` reports why it did nothing: `gcl-core` cannot kill a
+  running launch yet.
+- **Keyboard routing is verified by compile.** The pure functions have unit tests; nobody has
+  driven the built window from a keyboard in a test.
+- **Forge before 1.13 is unsupported.** The installer format changed at 1.13; older Forge
+  versions are out of scope for the MVP.
+- **NeoForge has no 1.20.1 build.** That release line shipped as `net.neoforged:forge` 47.1.x.
+  `verify-source neoforge` and the NeoForge e2e run use 1.20.2, the first version the `neoforge`
+  artifact covers.
+- **CurseForge pack data packs are skipped.** A pack file whose project class is a data pack is
+  skipped with a warning: a data pack needs `saves/<world>/datapacks/`, and a pack manifest names
+  no world.
+
+### Verification record
+
+Every command below ran on 2026-09-06 on Linux (Fedora/Nobara, kernel 7.2.3), against the live
+services where the command talks to one. `.env` holds no CurseForge key and no Microsoft client
+id on this machine.
+
+| Command | Result | Key line |
+|---|---|---|
+| `just check` | PASS | `Summary [3.530s] 708 tests run: 708 passed, 0 skipped` |
+| `just deny` | PASS | `advisories ok, bans ok, licenses ok, sources ok` |
+| `just lint-claude` | PASS | `PASS: claude files have frontmatter` |
+| `just e2e` (Fabric, MC 1.20.1) | PASS | `PASS create instance`, `PASS install loader`, `PASS content add`, `PASS dry-run launch`, `PASS check classpath files exist (60 entries)` |
+| `just e2e-modpack` (Fabulously Optimized) | PASS | `PASS install modpack`, `50 content entries`, `PASS dry-run launch`, `PASS check classpath files exist (68 entries)` |
+| `GCL_E2E_LOADER=quilt just e2e` (MC 1.20.1) | PASS | `PASS install loader`, `PASS content add`, `PASS check classpath files exist (66 entries)` |
+| `GCL_E2E_LOADER=neoforge just e2e` (MC 1.20.2) | FAIL at `content add` | `PASS install loader`, then `error: AANobbMI has no version for Minecraft 1.20.2 on loader neoforge` |
+| `GCL_E2E_LOADER=forge just e2e` (MC 1.20.1) | FAIL at `content add` | `PASS install loader`, then `error: AANobbMI has no version for Minecraft 1.20.1 on loader forge` |
+| `just run-ui -- --smoke` | PASS | exit 0 |
+| `just appimage-smoke` | PASS | exit 0 |
+| `./dist/grid-craft-launcher-0.1.0-x86_64.AppImage --appimage-extract-and-run --cli --version` | PASS | `gcl 0.1.0` |
+| `just verify-api mojang` | PASS | `PASS manifest (910 versions)`, `PASS version 26.2 (131 libraries)` |
+| `just verify-api fabric` | PASS | `PASS list fabric 1.20.1 (253 versions)`, `PASS profile fabric-loader-0.19.5-1.20.1` |
+| `just verify-api quilt` | PASS | `PASS list quilt 1.20.1 (307 versions)`, `PASS profile quilt-loader-0.20.0-beta.9-1.20.1` |
+| `just verify-api forge` | PASS | `PASS list forge 1.20.1 (132 versions)`, `PASS installer 47.4.10 (10 processors)` |
+| `just verify-api neoforge` | PASS | `PASS list neoforge 1.20.2 (79 versions)`, `PASS installer 20.2.93 (10 processors)` |
+| `just verify-api modrinth` | PASS | `PASS search sodium (5 hits)`, `PASS versions sodium 1.20.1 fabric (13)`, `PASS hash lookup ...` |
+| `just verify-api curseforge` | SKIP | `SKIP curseforge (no CURSEFORGE_API_KEY)` |
+| `just verify-api msa` | SKIP | `SKIP msa (no GCL_MSA_CLIENT_ID)` |
+
+The two failing e2e runs are a test-data problem, not a launcher fault. `scripts/e2e.sh` adds the
+same mod for every loader: Sodium (`AANobbMI`). Modrinth publishes Sodium for `fabric` and
+`quilt` only, at both 1.20.1 and 1.20.2, so the Forge and NeoForge runs correctly find no
+compatible version and stop. Both runs installed their loader first, which is the step those two
+loaders exist to prove: Forge 47.4.10 and NeoForge 20.2.93 each ran their ten installer
+processors headlessly and passed. `content::compatible_loaders` behaves as specified; the
+NeoForge-loads-Forge fallback applies at 1.20.1 only, and the NeoForge run uses 1.20.2. A later
+change to `scripts/e2e.sh` should pick the mod per loader.

@@ -4,6 +4,8 @@ A Minecraft launcher for Linux, Windows, and macOS. Rust core, Slint UI, command
 
 Features planned for the MVP are in [docs/SPEC.md](docs/SPEC.md).
 
+What each MVP requirement delivers: [MVP status table](docs/SPEC.md#mvp-status-2026-09-06).
+
 ## Install
 
 **Linux (AppImage):**
