@@ -7,7 +7,7 @@
 use gcl_core::instances::model::Loader;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use crate::bridge::{Bridge, show_error};
+use crate::bridge::Bridge;
 use crate::launch_flow;
 use crate::models::{instance_row, loader_version_row, version_row};
 use crate::state::RunState;
@@ -260,17 +260,18 @@ fn load_loader_versions(bridge: &Bridge, mc: &str, loader: &str) {
             .set_loading_loader_versions(true);
     }
     let mc = mc.to_string();
+    let reporter = bridge.clone();
     bridge.run(
         "Load loader versions",
         // The error is carried, not returned, so the spinner is cleared either way.
         move |launcher| Ok(launcher.list_loader_versions(loader, &mc)),
-        |window, result| {
+        move |window, result| {
             let state = window.global::<InstancesState>();
             state.set_loading_loader_versions(false);
             let versions = match result {
                 Ok(versions) => versions,
                 Err(err) => {
-                    show_error(window, "Load loader versions", &err);
+                    reporter.show_error(window, "Load loader versions", &err);
                     return;
                 }
             };
@@ -340,7 +341,7 @@ fn create_instance(
                 Err(err) => {
                     // Nothing was written. The form stays up with what the user typed, under
                     // the error dialog.
-                    show_error(window, "Create instance", &err);
+                    after.show_error(window, "Create instance", &err);
                     return;
                 }
             };

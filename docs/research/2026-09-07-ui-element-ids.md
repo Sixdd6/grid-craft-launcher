@@ -136,7 +136,7 @@ Every `Button`, `ListRow`, rail entry, tab entry, and the task panel's chevron a
 | `crates/gcl-ui/ui/screens/instances.slint` | `InstancesScreen::row_delete` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::root_path_field` | `LineEdit` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::root_change_button` | `Button` |
-| `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::parallel` | `SpinBox` |
+| `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::parallel_spin` | `SpinBox` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::parallel_apply_button` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::memory_min_field` | `LineEdit` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::memory_max_field` | `LineEdit` |

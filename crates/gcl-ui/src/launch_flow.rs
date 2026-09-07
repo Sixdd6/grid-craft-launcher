@@ -16,7 +16,7 @@ use std::time::Duration;
 use gcl_core::launcher::LaunchOutcome;
 use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
 
-use crate::bridge::{Bridge, show_error, warn};
+use crate::bridge::{Bridge, warn};
 use crate::state::RunState;
 use crate::{App, AppWindow, InstanceState, InstancesState, LogLine, Screen};
 
@@ -45,6 +45,9 @@ pub fn launch(bridge: &Bridge, run: &RunState, slug: String, offline_user: Optio
 
     let launcher = Arc::clone(bridge.launcher());
     let weak = bridge.weak().clone();
+    // The launch thread reports the outcome, so it needs the bridge: it is what knows the
+    // log path the error dialog names.
+    let reporter = bridge.clone();
     let run = run.clone();
     std::thread::spawn(move || {
         let started = launcher.launch_instance_async(&slug, None, offline_user.as_deref());
@@ -65,7 +68,7 @@ pub fn launch(bridge: &Bridge, run: &RunState, slug: String, offline_user: Optio
             Err(err) => Err(err),
         };
         run.finish(&slug);
-        finish(&weak, &run, &slug, outcome);
+        finish(&reporter, &run, &slug, outcome);
     });
 }
 
@@ -84,14 +87,15 @@ fn mark_started(window: &AppWindow, run: &RunState, slug: &str) {
 
 /// Reports what the game did and refreshes both screens. Runs on the launch thread.
 fn finish(
-    weak: &Weak<AppWindow>,
+    bridge: &Bridge,
     run: &RunState,
     slug: &str,
     outcome: Result<LaunchOutcome, gcl_core::Error>,
 ) {
     let run = run.clone();
     let slug = slug.to_string();
-    let _ = weak.upgrade_in_event_loop(move |window| {
+    let reporter = bridge.clone();
+    let _ = bridge.weak().upgrade_in_event_loop(move |window| {
         match outcome {
             Ok(LaunchOutcome::Exited { code, hint, .. }) if code != 0 => {
                 let hint = hint.unwrap_or_else(|| "see the instance log".to_string());
@@ -118,7 +122,7 @@ fn finish(
             }
             Err(err) => {
                 status(&window, &slug, "Launch failed");
-                show_error(&window, "Launch", &err);
+                reporter.show_error(&window, "Launch", &err);
             }
         }
         // The running flag and the last-launched stamp both changed.

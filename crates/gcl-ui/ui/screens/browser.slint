@@ -458,6 +458,7 @@ export component BrowserScreen inherits Rectangle {
                 height: 100%;
 
                 for row[i] in BrowserState.rows: row_open := ListRow {
+                    title: row.title;
                     height: 3 * Theme.font-size + 3 * Theme.gap + Theme.pad;
                     selected: i == root.selected;
                     clicked => {

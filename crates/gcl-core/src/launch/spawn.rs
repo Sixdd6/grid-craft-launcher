@@ -130,14 +130,16 @@ impl RunningGame {
 
 /// Asks the game to exit.
 ///
-/// Unix sends `SIGTERM` to `pid`, which the JVM turns into a clean shutdown; a process that
-/// has already gone is not an error. Other platforms have no signal, so the child is killed
-/// through its handle, the same as [`force_stop`].
+/// Unix sends `SIGTERM` to the child, which the JVM turns into a clean shutdown; a process
+/// that has already gone is not an error. Other platforms have no signal, so the child is
+/// killed through its handle, the same as [`force_stop`].
+///
+/// This is [`Error::AlreadyExited`] once [`wait`] has reaped the child, so no signal ever
+/// reaches a pid the system has handed to something else.
 pub async fn request_stop(child: &ChildHandle, pid: Option<u32>) -> Result<(), Error> {
     #[cfg(unix)]
     {
-        let _ = child;
-        signal(pid, nix::sys::signal::Signal::SIGTERM)
+        signal_live(child, pid, nix::sys::signal::Signal::SIGTERM).await
     }
     #[cfg(not(unix))]
     {
@@ -147,11 +149,13 @@ pub async fn request_stop(child: &ChildHandle, pid: Option<u32>) -> Result<(), E
 }
 
 /// Kills the game outright: `SIGKILL` on unix, a kill through the handle elsewhere.
+///
+/// This is [`Error::AlreadyExited`] once [`wait`] has reaped the child, the same as
+/// [`request_stop`].
 pub async fn force_stop(child: &ChildHandle, pid: Option<u32>) -> Result<(), Error> {
     #[cfg(unix)]
     {
-        let _ = child;
-        signal(pid, nix::sys::signal::Signal::SIGKILL)
+        signal_live(child, pid, nix::sys::signal::Signal::SIGKILL).await
     }
     #[cfg(not(unix))]
     {
@@ -160,11 +164,27 @@ pub async fn force_stop(child: &ChildHandle, pid: Option<u32>) -> Result<(), Err
     }
 }
 
+/// Signals the game only while the child is still ours.
+///
+/// The handle lock is held across the signal, so [`wait`] cannot reap the child in between.
+/// An empty handle means the child is reaped and its pid is free for reuse: nothing is
+/// signalled and the call is [`Error::AlreadyExited`].
+#[cfg(unix)]
+async fn signal_live(
+    child: &ChildHandle,
+    pid: Option<u32>,
+    sig: nix::sys::signal::Signal,
+) -> Result<(), Error> {
+    let guard = child.lock().await;
+    let running = guard.as_ref().ok_or(Error::AlreadyExited)?;
+    let pid = running.id().or(pid).ok_or(Error::AlreadyExited)?;
+    signal(pid, sig)
+}
+
 /// Sends one signal to `pid`. A pid that is already gone (`ESRCH`) is a success: the
 /// caller wanted the process stopped, and it is.
 #[cfg(unix)]
-fn signal(pid: Option<u32>, signal: nix::sys::signal::Signal) -> Result<(), Error> {
-    let pid = pid.ok_or(Error::AlreadyExited)?;
+fn signal(pid: u32, signal: nix::sys::signal::Signal) -> Result<(), Error> {
     match nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), signal) {
         Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
         Err(errno) => Err(Error::Stop {
@@ -310,6 +330,38 @@ mod tests {
         let written = std::fs::read_to_string(&log_path).expect("read log");
         assert!(written.contains("out\n"), "{written}");
         assert!(written.contains("err\n"), "{written}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_stop_after_the_child_is_reaped_signals_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cmd = LaunchCommand {
+            program: PathBuf::from("sh"),
+            args: vec!["-c".to_string(), "exit 0".to_string()],
+            cwd: dir.path().to_path_buf(),
+            env: Vec::new(),
+        };
+        let game = spawn(
+            &cmd,
+            dir.path().join("logs/latest.log"),
+            crate::events::null_sink(),
+        )
+        .await
+        .expect("spawn");
+        let child = game.child();
+        // The pid the launcher registry would have kept. The system is free to hand it to
+        // another process once `wait` reaps the child.
+        let pid = game.pid;
+        assert_eq!(wait(game).await.expect("wait"), 0);
+        assert!(child.lock().await.is_none(), "wait should drop the child");
+
+        let err = request_stop(&child, pid)
+            .await
+            .expect_err("nothing to stop");
+        assert!(matches!(err, Error::AlreadyExited), "{err:?}");
+        let err = force_stop(&child, pid).await.expect_err("nothing to kill");
+        assert!(matches!(err, Error::AlreadyExited), "{err:?}");
     }
 
     #[cfg(unix)]

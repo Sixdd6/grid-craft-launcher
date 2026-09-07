@@ -108,6 +108,7 @@ export component AccountsScreen inherits Rectangle {
             height: 100%;
 
                 for row[i] in AccountsState.rows: row_open := ListRow {
+                    title: row.name;
                     // The active account and the keyboard row are both highlighted; while
                     // nothing is chosen with the keyboard only the active one is.
                     selected: row.active || i == root.selected;

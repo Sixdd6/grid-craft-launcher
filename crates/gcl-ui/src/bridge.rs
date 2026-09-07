@@ -38,6 +38,15 @@ impl Bridge {
         crate::logging::log_file(self.launcher.root())
     }
 
+    /// Opens the error dialog for `err`, with the GUI log path in its last line.
+    ///
+    /// The one way a screen should report an error. A bare [`show_error_with_log`] with no
+    /// path drops the log line, and inside a `done` closure it overwrites the text
+    /// [`Bridge::run_with_error`] already put up.
+    pub fn show_error(&self, window: &AppWindow, label: &str, err: &gcl_core::Error) {
+        show_error_with_log(window, label, err, Some(&self.log_path()));
+    }
+
     /// Runs `job` on its own thread. On success `done` runs on the UI thread; on failure the
     /// error dialog opens with `label` as its title.
     pub fn run<T: Send + 'static>(
@@ -139,16 +148,9 @@ pub fn spawn_job<T: Send + 'static>(
 
 /// Opens the error dialog with `label` as the title and the error's full chain as the body.
 ///
-/// The body ends with the path of the GUI log, so a user reading the dialog knows where the
-/// rest of the story is. `logs_path` is the whole reason `show_error` needs the bridge.
-pub fn show_error(window: &AppWindow, label: &str, err: &gcl_core::Error) {
-    show_error_with_log(window, label, err, None);
-}
-
-/// [`show_error`], with the log path a caller already knows.
-///
-/// `Bridge` has the launcher and so the root; a bare `show_error` call from a screen does not,
-/// and passes `None`.
+/// With a `log_path` the body ends with the path of the GUI log, so a user reading the dialog
+/// knows where the rest of the story is. A screen has no launcher and so no path: it calls
+/// [`Bridge::show_error`], which fills the path in.
 pub fn show_error_with_log(
     window: &AppWindow,
     label: &str,

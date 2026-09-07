@@ -101,7 +101,7 @@ export component SettingsScreen inherits Rectangle {
                             horizontal-stretch: 0;
                         }
 
-                        parallel := SpinBox {
+                        parallel_spin := SpinBox {
                             minimum: 1;
                             maximum: 32;
                             value: SettingsState.parallel;
@@ -114,7 +114,7 @@ export component SettingsScreen inherits Rectangle {
                             text: "Apply";
                             enabled: !SettingsState.busy;
                             clicked => {
-                                SettingsState.save_downloads(parallel.value);
+                                SettingsState.save_downloads(parallel_spin.value);
                             }
                         }
                     }

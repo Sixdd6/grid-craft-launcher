@@ -20,7 +20,7 @@ use gcl_core::auth::{Account, AccountKind};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use tokio_util::sync::CancellationToken;
 
-use crate::bridge::{Bridge, show_error};
+use crate::bridge::Bridge;
 use crate::models::account_row;
 use crate::{AccountRow, AccountsState, AppWindow};
 
@@ -331,7 +331,7 @@ fn finish_sign_in(window: &AppWindow, bridge: &Bridge, result: Result<Account, g
         Err(err) if is_cancelled(&err) => state.set_status("Sign-in cancelled".into()),
         Err(err) => {
             state.set_status("Sign-in failed".into());
-            show_error(window, "Sign in with Microsoft", &err);
+            bridge.show_error(window, "Sign in with Microsoft", &err);
         }
     }
 }

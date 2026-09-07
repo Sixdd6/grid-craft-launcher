@@ -819,7 +819,7 @@ fn some_text(text: &str) -> Option<String> {
 
 /// Opens the shell's error dialog with a message of our own.
 ///
-/// [`crate::bridge::show_error`] needs a `gcl_core::Error`; this is for the cases the browser refuses before
+/// [`crate::bridge::Bridge::show_error`] needs a `gcl_core::Error`; this is for the cases the browser refuses before
 /// core is ever called, such as a data pack with no world to go into.
 fn error_dialog(window: &AppWindow, title: &str, text: &str) {
     let app = window.global::<App>();

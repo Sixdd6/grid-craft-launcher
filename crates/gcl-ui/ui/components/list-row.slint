@@ -3,6 +3,8 @@ import { Theme } from "../theme.slint";
 // One dense row in a list. Hover and selection are drawn here, content comes from children.
 export component ListRow inherits Rectangle {
     in property <bool> selected: false;
+    // What a screen reader says the row is. Set it to the row's primary text.
+    in property <string> title;
     callback clicked();
 
     height: Theme.row-height;
@@ -12,6 +14,7 @@ export component ListRow inherits Rectangle {
         : (row_touch.has-hover ? Theme.surface-hover : Colors.transparent);
 
     accessible-role: button;
+    accessible-label: root.title;
     accessible-action-default => {
         root.clicked();
     }

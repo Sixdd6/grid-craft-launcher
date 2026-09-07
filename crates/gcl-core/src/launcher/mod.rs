@@ -175,6 +175,9 @@ impl Endpoints {
 /// How long [`Launcher::stop_instance`] lets the game save and exit before it kills it.
 pub const STOP_GRACE: Duration = Duration::from_secs(10);
 
+/// How long [`Launcher::stop_instance`] waits for the game to go after it kills it.
+pub const STOP_KILL_WAIT: Duration = Duration::from_secs(5);
+
 /// How often [`Launcher::stop_instance`] checks whether the game has exited.
 const STOP_POLL: Duration = Duration::from_millis(250);
 
@@ -1178,7 +1181,11 @@ impl Launcher {
     ///
     /// It asks first: `SIGTERM` on unix, a kill through the child handle elsewhere. The game
     /// then has [`STOP_GRACE`] to save and exit; the registry entry disappearing is the
-    /// signal that it did. A game still there at the deadline is killed outright.
+    /// signal that it did. A game still there at the deadline is killed outright, and the
+    /// call then waits up to [`STOP_KILL_WAIT`] for the entry to disappear.
+    ///
+    /// A game that exits on its own between the registry read and the signal is a success:
+    /// the caller wanted it stopped, and it is.
     ///
     /// This is [`crate::launch::Error::NotRunning`] when this launcher started no game for
     /// `slug`, which includes a game started by another process.
@@ -1192,23 +1199,41 @@ impl Launcher {
             .cloned()
             .ok_or_else(|| crate::launch::Error::NotRunning(slug.to_string()))?;
         self.block_on(async move {
-            crate::launch::request_stop(&entry.child, entry.pid).await?;
-            let deadline = std::time::Instant::now() + STOP_GRACE;
-            while std::time::Instant::now() < deadline {
-                tokio::time::sleep(STOP_POLL).await;
-                if !self
-                    .running
-                    .lock()
-                    .unwrap_or_else(|err| err.into_inner())
-                    .contains_key(slug)
-                {
-                    return Ok(());
-                }
+            match crate::launch::request_stop(&entry.child, entry.pid).await {
+                Ok(()) => {}
+                Err(crate::launch::Error::AlreadyExited) => return Ok(()),
+                Err(err) => return Err(crate::Error::from(err)),
+            }
+            if self.wait_until_gone(slug, STOP_GRACE).await {
+                return Ok(());
             }
             tracing::warn!(slug, "the game ignored the stop request; killing it");
-            crate::launch::force_stop(&entry.child, entry.pid).await?;
+            match crate::launch::force_stop(&entry.child, entry.pid).await {
+                Ok(()) | Err(crate::launch::Error::AlreadyExited) => {}
+                Err(err) => return Err(crate::Error::from(err)),
+            }
+            if !self.wait_until_gone(slug, STOP_KILL_WAIT).await {
+                tracing::warn!(slug, "the killed game is still in the running registry");
+            }
             Ok(())
         })
+    }
+
+    /// Waits up to `limit` for `slug` to leave the running registry. `true` if it did.
+    async fn wait_until_gone(&self, slug: &str, limit: Duration) -> bool {
+        let deadline = std::time::Instant::now() + limit;
+        while std::time::Instant::now() < deadline {
+            tokio::time::sleep(STOP_POLL).await;
+            if !self
+                .running
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .contains_key(slug)
+            {
+                return true;
+            }
+        }
+        false
     }
 
     /// Installs a project into an instance, following its required dependencies. Blocks.
