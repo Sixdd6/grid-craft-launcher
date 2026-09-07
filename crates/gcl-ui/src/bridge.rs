@@ -99,7 +99,10 @@ pub fn show_error(window: &AppWindow, label: &str, err: &gcl_core::Error) {
     app.set_error_open(true);
 }
 
-/// Appends a warning to the app log, which the window shows as a toast.
+/// Appends a warning to the app log and stacks it as a toast.
+///
+/// Every warning a screen raises goes through here, so the browser's manual-download note and
+/// a bad launch outcome both reach the toast host without either caller knowing about it.
 pub fn warn(window: &AppWindow, text: &str) {
     let app = window.global::<App>();
     let mut log: Vec<LogLine> = app.get_app_log().iter().collect();
@@ -108,6 +111,7 @@ pub fn warn(window: &AppWindow, text: &str) {
         text: text.into(),
     });
     app.set_app_log(ModelRc::new(VecModel::from(log)));
+    crate::toasts::show(window, text, "warning");
 }
 
 /// Joins an error and every source under it with `: `, the way the CLI prints `{:#}`.

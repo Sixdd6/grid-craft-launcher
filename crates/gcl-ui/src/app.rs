@@ -1,16 +1,21 @@
 //! Builds the window and wires the `App` global's callbacks to the bridge.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use gcl_core::Launcher;
 use gcl_core::events::Event;
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Timer, TimerMode};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::bridge::Bridge;
 use crate::events::start_forwarder;
+use crate::keys::{key_to_screen, move_selection};
 use crate::state::RunState;
-use crate::{App, AppWindow, Screen};
+use crate::{App, AppWindow, Screen, Shell, events, toasts};
+
+/// How often finished tasks and spent toasts are aged out.
+const TICK: Duration = Duration::from_secs(1);
 
 /// Creates the window, wires the shell callbacks, and starts the event forwarder.
 ///
@@ -47,6 +52,41 @@ pub fn build(
         }
     });
 
+    // Rail shortcuts. `app.slint` only sends keys nothing else took and no dialog wanted.
+    let weak = window.as_weak();
+    app.on_key_pressed(move |key| {
+        let Some(screen) = key_to_screen(key.as_str()) else {
+            return false;
+        };
+        let Some(window) = weak.upgrade() else {
+            return false;
+        };
+        let app = window.global::<App>();
+        // The browser reached from the keyboard names no instance, the same as the rail's own
+        // entry, so it offers every instance as a target.
+        if screen == Screen::Browser {
+            window
+                .global::<crate::BrowserState>()
+                .set_fixed_target(false);
+        }
+        app.set_screen(screen);
+        true
+    });
+
+    let shell = window.global::<Shell>();
+
+    // Both shell services a screen may reach. They live on `Shell` rather than `App` because
+    // `App` is declared in `app.slint`, which imports the screens and so cannot be imported
+    // back by one.
+    let weak = window.as_weak();
+    shell.on_toast(move |text, kind| {
+        if let Some(window) = weak.upgrade() {
+            toasts::show(&window, text.as_str(), kind.as_str());
+        }
+    });
+
+    shell.on_move_selection(move_selection);
+
     let weak = window.as_weak();
     app.on_dismiss_error(move || {
         if let Some(window) = weak.upgrade() {
@@ -65,5 +105,20 @@ pub fn build(
     crate::screens::settings::wire(&window, &bridge);
 
     start_forwarder(rx, window.as_weak());
+
+    // One repeated timer ages both lists out: a finished task five seconds after its own end,
+    // a toast six seconds after it was pushed. `Timer` stops when it is dropped, so it is
+    // leaked on purpose: it has to outlive `build` and lives as long as the process does.
+    let ticker: &'static Timer = Box::leak(Box::new(Timer::default()));
+    let weak = window.as_weak();
+    ticker.start(TimerMode::Repeated, TICK, move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let now = Instant::now();
+        events::tick(&window, now);
+        toasts::tick(&window, now);
+    });
+
     Ok(window)
 }

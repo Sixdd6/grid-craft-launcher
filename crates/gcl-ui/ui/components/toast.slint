@@ -1,0 +1,74 @@
+import { Theme } from "../theme.slint";
+import { ToastRow } from "../types.slint";
+
+// One transient message. The border says what kind it is; the body wraps to any height.
+export component Toast inherits Rectangle {
+    in property <string> text: "No CurseForge key configured.";
+    // warning, error, or anything else, which reads as a plain note.
+    in property <string> kind: "warning";
+
+    // The accent is the note color, so a plain message never looks like a problem.
+    property <color> edge: root.kind == "error"
+        ? Theme.danger
+        : (root.kind == "warning" ? Theme.warning : Theme.accent);
+
+    width: Theme.toast-width;
+    height: body.preferred-height + 2 * Theme.gap;
+    background: Theme.surface-raised;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: root.edge;
+
+    // Left edge stripe, so the kind is readable without reading the border.
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: 3px;
+        height: parent.height;
+        background: root.edge;
+    }
+
+    body := Text {
+        x: Theme.pad;
+        y: Theme.gap;
+        width: parent.width - 2 * Theme.pad;
+        text: root.text;
+        color: Theme.text;
+        font-size: Theme.font-size-small;
+        wrap: word-wrap;
+    }
+}
+
+// The toast stack.
+//
+// Fills whatever area the owner gives it and pins the toasts to its bottom right corner,
+// newest last. It holds no input of its own, so clicks fall through to the screen behind it.
+// Rust owns the queue: it pushes, ages, and drops entries, and never sends more than
+// `max_toasts` of them.
+export component ToastHost inherits Rectangle {
+    // Messages to show, oldest first.
+    in property <[ToastRow]> toasts: [
+        { text: "No CurseForge key configured. Set one in Settings.", kind: "warning" },
+        { text: "3 file(s) must be downloaded by hand.", kind: "warning" },
+    ];
+    // Most toasts drawn at once. A longer queue is clipped, not scrolled.
+    in property <int> max_toasts: 3;
+
+    background: Colors.transparent;
+    visible: root.toasts.length > 0;
+
+    VerticalLayout {
+        padding: Theme.pad;
+        spacing: Theme.gap;
+        alignment: end;
+
+        for row[i] in root.toasts: HorizontalLayout {
+            alignment: end;
+
+            if i < root.max_toasts: Toast {
+                text: row.text;
+                kind: row.kind;
+            }
+        }
+    }
+}

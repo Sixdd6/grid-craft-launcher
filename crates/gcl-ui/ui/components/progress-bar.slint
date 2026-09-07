@@ -6,8 +6,8 @@ export component ProgressBar inherits Rectangle {
 
     property <float> clamped: max(0.0, min(1.0, root.fraction));
 
-    height: 6px;
-    border-radius: 3px;
+    height: Theme.bar-height;
+    border-radius: Theme.bar-height / 2;
     background: Theme.surface-raised;
 
     Rectangle {

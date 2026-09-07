@@ -55,6 +55,12 @@ export struct TaskRow {
     detail: string,
 }
 
+// One transient message stacked over the shell. `kind` is warning, error, or info.
+export struct ToastRow {
+    text: string,
+    kind: string,
+}
+
 // One line in the app log.
 export struct LogLine {
     level: string,

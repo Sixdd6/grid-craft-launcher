@@ -1,9 +1,10 @@
 import { Theme } from "theme.slint";
 import {
     AccountRow, ContentRow, InstanceRow, LoaderVersionRow, LogLine, PendingRow,
-    Screen, SearchRow, SettingRow, TaskRow, VersionRow
+    Screen, SearchRow, SettingRow, TaskRow, ToastRow, VersionRow
 } from "types.slint";
-import { AccountsState, InstanceState, SettingsState } from "state.slint";
+import { AccountsState, InstanceState, SettingsState, Shell } from "state.slint";
+import { TextEdit } from "std-widgets.slint";
 import { Rail } from "components/rail.slint";
 import { ChoiceDialog } from "components/choice-dialog.slint";
 import { ConfirmDialog } from "components/confirm-dialog.slint";
@@ -11,7 +12,8 @@ import { DeviceCodeDialog } from "components/device-code-dialog.slint";
 import { CreateInstanceDialog } from "components/create-instance-dialog.slint";
 import { Dialog } from "components/dialog.slint";
 import { PromptDialog } from "components/prompt-dialog.slint";
-import { ProgressBar } from "components/progress-bar.slint";
+import { ProgressPanel } from "components/progress-panel.slint";
+import { ToastHost } from "components/toast.slint";
 import { InstancesScreen } from "screens/instances.slint";
 import { InstanceScreen } from "screens/instance.slint";
 import { BrowserScreen, BrowserState } from "screens/browser.slint";
@@ -21,8 +23,8 @@ import { SettingsScreen } from "screens/settings.slint";
 // Re-exported so the generated Rust module has every struct the screens will need.
 export {
     AccountRow, AccountsState, BrowserState, ContentRow, InstanceRow, InstanceState,
-    LoaderVersionRow, LogLine, PendingRow, Screen, SearchRow, SettingRow, SettingsState, TaskRow,
-    Theme, VersionRow
+    LoaderVersionRow, LogLine, PendingRow, Screen, SearchRow, SettingRow, SettingsState, Shell,
+    TaskRow, Theme, ToastRow, VersionRow
 }
 
 // Shell state and the callbacks Rust wires up. Screens read from here, never from each other.
@@ -31,7 +33,13 @@ export global App {
     in-out property <string> current_slug;
     in-out property <string> status_text: "Ready";
     in-out property <bool> busy: false;
+    // Tracked tasks, oldest first. Rust drops a finished row five seconds after it ended.
     in-out property <[TaskRow]> tasks;
+    // Whether the task panel is open. The chevron in the strip writes it.
+    in-out property <bool> panel_expanded: false;
+    // Live toasts, oldest first and never more than three. Rust ages them out after six
+    // seconds; the app log keeps the text for good.
+    in-out property <[ToastRow]> toasts;
     in-out property <[LogLine]> app_log;
     in-out property <string> error_title;
     in-out property <string> error_text;
@@ -40,6 +48,9 @@ export global App {
     callback navigate(Screen);
     callback open_instance(string);
     callback dismiss_error();
+    // A key the shell may own was pressed. Carries the key text; returns whether it was used,
+    // so the caller knows whether to let it bubble further.
+    callback key_pressed(string) -> bool;
 }
 
 // Everything the instances screen and its two modals read and report.
@@ -175,128 +186,103 @@ export component AppWindow inherits Window {
         ? App.app_log[App.app_log.length - 1].text
         : "";
 
-    // The newest log line, shown as a toast while it is a warning.
-    property <string> toast_text: App.app_log.length > 0
-        && App.app_log[App.app_log.length - 1].level == "warning"
-        ? App.app_log[App.app_log.length - 1].text
-        : "";
+    // Whether any modal is up. Two things read it: the shell shortcuts, which stay out of the
+    // way while a dialog owns the keyboard, and the handler below, which gives the keyboard
+    // back to the rail once the last dialog closes.
+    property <bool> any_dialog_open: InstancesState.create_open || InstancesState.confirm_open
+        || InstanceState.prompt_open || BrowserState.name_open || BrowserState.choice_open
+        || AccountsState.device_open || AccountsState.prompt_open || AccountsState.confirm_open
+        || App.error_open;
 
-    HorizontalLayout {
-        Rail {
-            current: App.screen;
-            navigate(target) => {
-                // The rail names no instance, so the browser reached from it offers every
-                // instance as a target. Only the detail screen's Add content sets this.
-                if (target == Screen.browser) {
-                    BrowserState.fixed_target = false;
-                }
-                App.navigate(target);
+    changed any_dialog_open => {
+        if (!self.any_dialog_open) {
+            nav.focus();
+        }
+    }
+
+    forward-focus: nav;
+
+    // Shell shortcuts. A focused field sees a key first and only what it rejects reaches
+    // here, so typing "1" into a search box still types a 1.
+    nav := FocusScope {
+        key-pressed(event) => {
+            if (root.any_dialog_open) {
+                return EventResult.reject;
             }
+            if (App.key_pressed(event.text)) {
+                return EventResult.accept;
+            }
+            return EventResult.reject;
         }
 
-        VerticalLayout {
-            // Screen area. One screen is instantiated at a time.
-            Rectangle {
-                vertical-stretch: 1;
-                background: Theme.bg;
-
-                if App.screen == Screen.instances: InstancesScreen {
-                    rows: InstancesState.rows;
-                    filter <=> InstancesState.filter;
-                    loading: InstancesState.loading;
-                    open(slug) => {
-                        App.open_instance(slug);
+        HorizontalLayout {
+            Rail {
+                current: App.screen;
+                navigate(target) => {
+                    // The rail names no instance, so the browser reached from it offers every
+                    // instance as a target. Only the detail screen's Add content sets this.
+                    if (target == Screen.browser) {
+                        BrowserState.fixed_target = false;
                     }
-                    create => {
-                        InstancesState.create();
-                    }
-                    delete(slug) => {
-                        InstancesState.delete(slug);
-                    }
-                    launch(slug) => {
-                        InstancesState.launch(slug);
-                    }
-                    refresh => {
-                        InstancesState.refresh();
-                    }
-                    changed filter => {
-                        InstancesState.filter_changed(self.filter);
-                    }
+                    App.navigate(target);
                 }
-                if App.screen == Screen.instance: InstanceScreen { }
-                if App.screen == Screen.browser: BrowserScreen { }
-                if App.screen == Screen.accounts: AccountsScreen { }
-                if App.screen == Screen.settings: SettingsScreen { }
             }
 
-            // Bottom strip: task count, the first task, and the status line.
-            // The full task panel lands in task 7.
-            Rectangle {
-                height: Theme.row-height + Theme.gap;
-                background: Theme.surface;
-                border-width: 1px;
-                border-color: Theme.border;
+            VerticalLayout {
+                // Screen area. One screen is instantiated at a time.
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: Theme.bg;
 
-                HorizontalLayout {
-                    padding-left: Theme.pad;
-                    padding-right: Theme.pad;
-                    spacing: Theme.pad;
-
-                    Text {
-                        text: App.tasks.length == 0
-                            ? "No tasks"
-                            : App.tasks.length + " task(s)";
-                        color: Theme.text-muted;
-                        font-size: Theme.font-size-small;
-                        vertical-alignment: center;
-                        horizontal-stretch: 0;
-                    }
-
-                    Text {
-                        text: App.tasks.length > 0 ? App.tasks[0].label : App.status_text;
-                        color: Theme.text;
-                        font-size: Theme.font-size-small;
-                        vertical-alignment: center;
-                        horizontal-alignment: left;
-                        horizontal-stretch: 1;
-                        overflow: elide;
-                    }
-
-                    VerticalLayout {
-                        alignment: center;
-                        horizontal-stretch: 0;
-                        ProgressBar {
-                            width: 160px;
-                            visible: App.tasks.length > 0;
-                            fraction: App.tasks.length > 0 ? App.tasks[0].fraction : 0;
+                    if App.screen == Screen.instances: InstancesScreen {
+                        rows: InstancesState.rows;
+                        filter <=> InstancesState.filter;
+                        loading: InstancesState.loading;
+                        open(slug) => {
+                            App.open_instance(slug);
+                        }
+                        create => {
+                            InstancesState.create();
+                        }
+                        delete(slug) => {
+                            InstancesState.delete(slug);
+                        }
+                        launch(slug) => {
+                            InstancesState.launch(slug);
+                        }
+                        refresh => {
+                            InstancesState.refresh();
+                        }
+                        changed filter => {
+                            InstancesState.filter_changed(self.filter);
                         }
                     }
+                    if App.screen == Screen.instance: InstanceScreen { }
+                    if App.screen == Screen.browser: BrowserScreen { }
+                    if App.screen == Screen.accounts: AccountsScreen { }
+                    if App.screen == Screen.settings: SettingsScreen { }
+                }
+
+                // Bottom task panel: the collapsed strip, or the task list once it is opened.
+                ProgressPanel {
+                    vertical-stretch: 0;
+                    tasks: App.tasks;
+                    expanded <=> App.panel_expanded;
+                    busy: App.busy;
+                    status_text: App.status_text;
                 }
             }
         }
     }
 
-    // Toast host. Shows the newest warning until a later line replaces it.
-    toast := Rectangle {
-        visible: root.toast_text != "";
-        width: min(root.width - 4 * Theme.pad, 520px);
-        height: label.preferred-height + 2 * Theme.gap;
-        x: root.width - self.width - 2 * Theme.pad;
-        y: root.height - self.height - Theme.row-height - 3 * Theme.gap;
-        background: Theme.surface-raised;
-        border-radius: Theme.radius;
-        border-width: 1px;
-        border-color: Theme.warning;
-
-        label := Text {
-            x: Theme.pad;
-            width: parent.width - 2 * Theme.pad;
-            y: Theme.gap;
-            text: root.toast_text;
-            color: Theme.text;
-            font-size: Theme.font-size-small;
-            wrap: word-wrap;
-        }
+    // Toast stack, pinned above the task strip. Rust owns the queue and its six-second life;
+    // the host only draws what it is given and lets clicks fall through.
+    ToastHost {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height - Theme.strip-height;
+        toasts: App.toasts;
     }
 
     // New-instance form. Always mounted; it paints nothing while `open` is false.
@@ -459,10 +445,13 @@ export component AppWindow inherits Window {
             App.dismiss_error();
         }
 
-        Text {
+        // Read-only and selectable, so the user can take the text with Ctrl+C. There is no
+        // clipboard call in the Slint API we can reach from a button, so selection is the
+        // whole copy story.
+        TextEdit {
+            height: 5 * Theme.row-height;
             text: App.error_text;
-            color: Theme.text-muted;
-            font-size: Theme.font-size;
+            read-only: true;
             wrap: word-wrap;
         }
     }

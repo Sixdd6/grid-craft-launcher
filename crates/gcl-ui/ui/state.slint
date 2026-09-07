@@ -1,5 +1,19 @@
 import { AccountRow, ContentRow, LogLine, PendingRow, SettingRow } from "types.slint";
 
+// The two shell services a screen may reach.
+//
+// `App` itself lives in `app.slint`, which imports every screen, so a screen cannot import it
+// back. These two callbacks are the ones screens genuinely need, so they live here instead
+// and `src/app.rs` binds them next to the rest of `App`.
+export global Shell {
+    // Push a message onto the toast stack. Carries the text and the kind, which is warning,
+    // error, or anything else for a plain note.
+    callback toast(string /* text */, string /* kind */);
+    // Where a list's selection lands after an arrow key. Carries the current index (-1 when
+    // nothing is chosen), the step, and the row count, and returns the new index.
+    callback move_selection(int /* current */, int /* delta */, int /* len */) -> int;
+}
+
 // Everything the instance detail screen and its prompt read and report.
 //
 // The screen lives inside an `if` in `app.slint`, so Rust cannot reach its properties. This

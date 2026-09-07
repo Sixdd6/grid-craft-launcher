@@ -1,6 +1,6 @@
 import { ListView } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
-import { AccountsState } from "../state.slint";
+import { AccountsState, Shell } from "../state.slint";
 import { Button } from "../components/button.slint";
 import { EmptyState } from "../components/empty-state.slint";
 import { ListRow } from "../components/list-row.slint";
@@ -11,6 +11,10 @@ import { ListRow } from "../components/list-row.slint";
 // reported through it, so `src/screens/accounts.rs` is the only place that knows what any of
 // this means.
 export component AccountsScreen inherits Rectangle {
+    // Row the keyboard is on, or -1 while nothing is chosen. Arrow keys move it and Enter
+    // makes that account the launch default.
+    in-out property <int> selected: -1;
+
     background: Theme.bg;
 
     VerticalLayout {
@@ -69,79 +73,116 @@ export component AccountsScreen inherits Rectangle {
                 + "Microsoft to play with your own copy of the game.";
         }
 
-        if AccountsState.rows.length > 0: ListView {
+        // Arrow keys move the selection, Enter makes that account active. Everything else is
+        // rejected so the shell's number shortcuts still reach the window.
+        if AccountsState.rows.length > 0: FocusScope {
             vertical-stretch: 1;
 
-            for row in AccountsState.rows: ListRow {
-                selected: row.active;
+            init => {
+                self.focus();
+            }
 
-                Text {
-                    text: row.name;
-                    color: Theme.text;
-                    font-size: Theme.font-size;
-                    vertical-alignment: center;
-                    horizontal-stretch: 0;
-                    overflow: elide;
+            key-pressed(event) => {
+                if (event.text == Key.UpArrow) {
+                    root.selected =
+                        Shell.move_selection(root.selected, -1, AccountsState.rows.length);
+                    return EventResult.accept;
                 }
+                if (event.text == Key.DownArrow) {
+                    root.selected =
+                        Shell.move_selection(root.selected, 1, AccountsState.rows.length);
+                    return EventResult.accept;
+                }
+                if (event.text == Key.Return) {
+                    if (root.selected >= 0 && root.selected < AccountsState.rows.length
+                        && !AccountsState.busy) {
+                        AccountsState.select(AccountsState.rows[root.selected].id);
+                    }
+                    return EventResult.accept;
+                }
+                return EventResult.reject;
+            }
 
-                Rectangle {
-                    horizontal-stretch: 0;
-                    width: badge.preferred-width + Theme.gap;
-                    background: Theme.surface-raised;
-                    border-radius: Theme.radius;
-                    border-width: 1px;
-                    border-color: Theme.border;
+            ListView {
+            width: 100%;
+            height: 100%;
 
-                    badge := Text {
-                        text: row.kind;
+                for row[i] in AccountsState.rows: ListRow {
+                    // The active account and the keyboard row are both highlighted; while
+                    // nothing is chosen with the keyboard only the active one is.
+                    selected: row.active || i == root.selected;
+                    clicked => {
+                        root.selected = i;
+                    }
+
+                    Text {
+                        text: row.name;
+                        color: Theme.text;
+                        font-size: Theme.font-size;
+                        vertical-alignment: center;
+                        horizontal-stretch: 0;
+                        overflow: elide;
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 0;
+                        width: badge.preferred-width + Theme.gap;
+                        background: Theme.surface-raised;
+                        border-radius: Theme.radius;
+                        border-width: 1px;
+                        border-color: Theme.border;
+
+                        badge := Text {
+                            text: row.kind;
+                            color: Theme.text-muted;
+                            font-size: Theme.font-size-small;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Text {
+                        text: row.active ? "active" : "";
+                        color: Theme.accent;
+                        font-size: Theme.font-size-small;
+                        vertical-alignment: center;
+                        horizontal-stretch: 0;
+                    }
+
+                    Text {
+                        text: row.expires == "" ? "" : "signed in until " + row.expires;
                         color: Theme.text-muted;
                         font-size: Theme.font-size-small;
-                        horizontal-alignment: center;
                         vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
                     }
-                }
 
-                Text {
-                    text: row.active ? "active" : "";
-                    color: Theme.accent;
-                    font-size: Theme.font-size-small;
-                    vertical-alignment: center;
-                    horizontal-stretch: 0;
-                }
-
-                Text {
-                    text: row.expires == "" ? "" : "signed in until " + row.expires;
-                    color: Theme.text-muted;
-                    font-size: Theme.font-size-small;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                    overflow: elide;
-                }
-
-                Button {
-                    text: "Select";
-                    enabled: !row.active && !AccountsState.busy;
-                    clicked => {
-                        AccountsState.select(row.id);
+                    Button {
+                        text: "Select";
+                        enabled: !row.active && !AccountsState.busy;
+                        clicked => {
+                            AccountsState.select(row.id);
+                        }
                     }
-                }
 
-                // Shown on every row so the buttons line up, but only a Microsoft account
-                // has a saved sign-in to renew.
-                Button {
-                    text: "Refresh";
-                    enabled: row.kind == "msa" && !AccountsState.busy;
-                    clicked => {
-                        AccountsState.refresh(row.id);
+                    // Shown on every row so the buttons line up, but only a Microsoft account
+                    // has a saved sign-in to renew.
+                    Button {
+                        text: "Refresh";
+                        enabled: row.kind == "msa" && !AccountsState.busy;
+                        clicked => {
+                            AccountsState.refresh(row.id);
+                        }
                     }
-                }
 
-                Button {
-                    text: "Remove";
-                    kind: "danger";
-                    enabled: !AccountsState.busy;
-                    clicked => {
-                        AccountsState.remove(row.id);
+                    Button {
+                        text: "Remove";
+                        kind: "danger";
+                        enabled: !AccountsState.busy;
+                        clicked => {
+                            AccountsState.remove(row.id);
+                        }
                     }
                 }
             }

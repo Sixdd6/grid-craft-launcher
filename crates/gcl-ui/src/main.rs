@@ -5,11 +5,13 @@ slint::include_modules!();
 mod app;
 mod bridge;
 mod events;
+mod keys;
 // The converters land with the screens that use them, in tasks 3 to 7.
 #[allow(dead_code)]
 mod models;
 mod screens;
 mod state;
+mod toasts;
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -64,7 +66,10 @@ fn run() -> Result<(), String> {
     window.run().map_err(|err| err.to_string())
 }
 
-/// Sends one synthetic task through the event sink, so a smoke run exercises the forwarder.
+/// Sends synthetic events through the sink, so a smoke run exercises the forwarder.
+///
+/// Three of them, one per thing the shell has to draw: a task that finishes, a task that
+/// fails so a row shows in the danger color, and a warning so the toast stack is filled.
 fn smoke(launcher: &Launcher) {
     let sink = launcher.events();
     let _ = sink.send(Event::TaskStarted {
@@ -73,6 +78,16 @@ fn smoke(launcher: &Launcher) {
         total_bytes: Some(1024),
     });
     let _ = sink.send(Event::TaskFinished { id: 0 });
+    let _ = sink.send(Event::TaskStarted {
+        id: 1,
+        label: "smoke failure".into(),
+        total_bytes: Some(2048),
+    });
+    let _ = sink.send(Event::TaskFailed {
+        id: 1,
+        error: "synthetic failure".into(),
+    });
+    let _ = sink.send(Event::Warning("synthetic warning".into()));
 }
 
 /// Reads the command line. `Ok(None)` means the caller asked for help or the version.

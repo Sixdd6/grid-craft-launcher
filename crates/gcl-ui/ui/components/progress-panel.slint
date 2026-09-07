@@ -1,0 +1,238 @@
+import { Theme } from "../theme.slint";
+import { TaskRow } from "../types.slint";
+import { ProgressBar } from "progress-bar.slint";
+
+// One task line inside the expanded panel: label, bar, and either the byte counts or the
+// error a failed task carried.
+component TaskLine inherits Rectangle {
+    in property <TaskRow> task;
+
+    height: Theme.row-height;
+
+    HorizontalLayout {
+        padding-left: Theme.pad;
+        padding-right: Theme.pad;
+        spacing: Theme.pad;
+
+        Text {
+            text: root.task.label;
+            color: Theme.text;
+            font-size: Theme.font-size-small;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            min-width: 120px;
+            overflow: elide;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            ProgressBar {
+                width: Theme.rail-width;
+                fraction: root.task.fraction;
+            }
+        }
+
+        // Status word. A failed task is the only one painted in the danger color.
+        Text {
+            text: root.task.status;
+            color: root.task.status == "failed"
+                ? Theme.danger
+                : (root.task.status == "done" ? Theme.success : Theme.text-muted);
+            font-size: Theme.font-size-small;
+            vertical-alignment: center;
+            horizontal-alignment: left;
+            horizontal-stretch: 0;
+            width: 55px;
+        }
+
+        // Byte counts while it runs, the error once it failed.
+        Text {
+            text: root.task.detail;
+            color: root.task.status == "failed" ? Theme.danger : Theme.text-muted;
+            font-size: Theme.font-size-small;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            horizontal-stretch: 0;
+            width: Theme.rail-width;
+            overflow: elide;
+        }
+    }
+}
+
+// The bottom task panel.
+//
+// Collapsed it is one strip: how many tasks are tracked, what the oldest one is doing, and a
+// pulse while anything runs. Expanded it lists up to `max_rows` tasks with a bar each. The
+// chevron on the right toggles between the two; nothing else in here has any logic.
+export component ProgressPanel inherits Rectangle {
+    // Tasks to show, oldest first. Rust prunes a finished row five seconds after it ended.
+    in property <[TaskRow]> tasks: [
+        {
+            id: 1,
+            label: "sodium-fabric-0.5.8.jar",
+            fraction: 0.42,
+            status: "running",
+            detail: "180.0 KiB / 428.0 KiB",
+        },
+        {
+            id: 2,
+            label: "1.20.1 assets",
+            fraction: 1.0,
+            status: "done",
+            detail: "12.4 MiB / 12.4 MiB",
+        },
+        {
+            id: 3,
+            label: "lithium-fabric-0.11.2.jar",
+            fraction: 0.0,
+            status: "failed",
+            detail: "connection reset by peer",
+        },
+    ];
+    // Whether the list is open. The chevron writes this, so the owner can also force it.
+    in-out property <bool> expanded: false;
+    // Whether any task is still running. Rust derives it from the same list.
+    in property <bool> busy: true;
+    // One line about the last thing that happened, shown while no task is tracked.
+    in property <string> status_text: "Ready";
+    // Most task lines the expanded panel shows at once.
+    in property <int> max_rows: 8;
+
+    // How many lines the open list is tall.
+    property <int> shown: min(root.tasks.length, root.max_rows);
+    // The task the collapsed strip describes: the oldest one still tracked.
+    property <TaskRow> head: root.tasks.length > 0
+        ? root.tasks[0]
+        : { id: 0, label: "", fraction: 0.0, status: "", detail: "" };
+    // Flips every 600 ms while `busy`, which is what makes the pulse breathe.
+    property <bool> pulse: false;
+
+    height: Theme.strip-height
+        + (root.expanded ? max(root.shown, 1) * Theme.row-height + Theme.gap : 0px);
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    beat := Timer {
+        interval: 600ms;
+        running: root.busy;
+        triggered => {
+            root.pulse = !root.pulse;
+        }
+    }
+
+    VerticalLayout {
+        // Collapsed strip. Always shown; the chevron on its right opens the list.
+        Rectangle {
+            height: Theme.strip-height;
+            vertical-stretch: 0;
+
+            HorizontalLayout {
+                padding-left: Theme.pad;
+                padding-right: Theme.pad;
+                spacing: Theme.pad;
+
+                // Pulse. Subtle and indeterminate: it only says work is in flight.
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    Rectangle {
+                        width: Theme.gap;
+                        height: Theme.gap;
+                        border-radius: Theme.gap / 2;
+                        background: Theme.accent;
+                        opacity: root.busy ? (root.pulse ? 1.0 : 0.25) : 0.0;
+                        animate opacity { duration: 600ms; }
+                    }
+                }
+
+                Text {
+                    text: root.tasks.length == 0
+                        ? "idle"
+                        : root.tasks.length + " task(s)";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
+                }
+
+                Text {
+                    text: root.tasks.length == 0
+                        ? root.status_text
+                        : "\u{00b7} " + root.head.label + " "
+                            + round(max(0.0, min(1.0, root.head.fraction)) * 100) + "%";
+                    color: root.head.status == "failed" ? Theme.danger : Theme.text;
+                    font-size: Theme.font-size-small;
+                    vertical-alignment: center;
+                    horizontal-alignment: left;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    ProgressBar {
+                        width: Theme.rail-width;
+                        visible: root.tasks.length > 0;
+                        fraction: root.head.fraction;
+                    }
+                }
+
+                // Chevron. Points down while the list is open, up while it is closed.
+                Rectangle {
+                    horizontal-stretch: 0;
+                    width: Theme.row-height;
+                    border-radius: Theme.radius;
+                    background: chevron.has-hover ? Theme.surface-hover : Colors.transparent;
+
+                    chevron := TouchArea {
+                        clicked => {
+                            root.expanded = !root.expanded;
+                        }
+                    }
+
+                    Text {
+                        text: root.expanded ? "\u{25be}" : "\u{25b4}";
+                        color: Theme.text-muted;
+                        font-size: Theme.font-size;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    animate background { duration: 100ms; }
+                }
+            }
+        }
+
+        // Task list. Only built while the panel is open. It is a plain layout, not a
+        // `ListView`: `max_rows` caps it well short of anything that would need scrolling.
+        if root.expanded && root.tasks.length > 0: VerticalLayout {
+            vertical-stretch: 0;
+
+            for task[i] in root.tasks: Rectangle {
+                // Everything past `max_rows` is folded away rather than scrolled to: the
+                // panel is a summary, and the app log holds the rest.
+                height: i < root.max_rows ? Theme.row-height : 0px;
+                visible: i < root.max_rows;
+
+                TaskLine {
+                    width: 100%;
+                    task: task;
+                }
+            }
+        }
+
+        if root.expanded && root.tasks.length == 0: Text {
+            height: Theme.row-height;
+            text: "No tasks running.";
+            color: Theme.text-muted;
+            font-size: Theme.font-size-small;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+
+    animate height { duration: 120ms; }
+}

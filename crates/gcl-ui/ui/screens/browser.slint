@@ -1,5 +1,6 @@
 import { ComboBox, LineEdit, ListView } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
+import { Shell } from "../state.slint";
 import { SearchRow } from "../types.slint";
 import { Button } from "../components/button.slint";
 import { EmptyState } from "../components/empty-state.slint";
@@ -136,6 +137,36 @@ export global BrowserState {
 // Pure layout. Every value comes from [`BrowserState`] and every action is reported through
 // it, so `src/screens/browser.rs` is the only place that knows what any of this means.
 export component BrowserScreen inherits Rectangle {
+    // Result row the keyboard is on, or -1 while nothing is chosen. Arrow keys move it and
+    // Enter runs the same action as the row's primary button.
+    in-out property <int> selected: -1;
+
+    // A result row's primary action: install a modpack, ask which world a data pack goes
+    // into, and add anything else straight to the target instance. The button and the Enter
+    // key both come through here, so the two can never drift apart.
+    function activate(project_id: string, kind: string) {
+        if (kind == "modpack") {
+            BrowserState.install_pack(project_id);
+        } else if (kind == "datapack") {
+            BrowserState.pick_world(project_id, kind);
+        } else {
+            BrowserState.add(project_id, kind);
+        }
+    }
+
+    // The keyboard version. It repeats the button's `enabled` rule, so Enter does nothing
+    // where the button would be greyed out.
+    function activate_selected() {
+        if (root.selected >= 0 && root.selected < BrowserState.rows.length
+            && !BrowserState.loading
+            && (BrowserState.rows[root.selected].kind == "modpack" || root.has_target)) {
+            root.activate(
+                BrowserState.rows[root.selected].project_id,
+                BrowserState.rows[root.selected].kind,
+            );
+        }
+    }
+
     // Loader filters the ComboBox offers. `any` means the search is not filtered by loader.
     property <[string]> loader_options: ["any", "fabric", "quilt", "forge", "neoforge"];
 
@@ -345,103 +376,129 @@ export component BrowserScreen inherits Rectangle {
             message: "Type what you are looking for and press Search.";
         }
 
-        if !root.modpack_mode && !BrowserState.loading && BrowserState.rows.length > 0: ListView {
+        // Arrow keys move the selection, Enter adds the chosen row the same way its button
+        // does. Everything else is rejected so the shell's number shortcuts still work.
+        if !root.modpack_mode && !BrowserState.loading && BrowserState.rows.length > 0: FocusScope {
             vertical-stretch: 1;
 
-            for row in BrowserState.rows: ListRow {
-                height: 3 * Theme.font-size + 3 * Theme.gap + Theme.pad;
+            init => {
+                self.focus();
+            }
 
-                VerticalLayout {
-                    padding-top: Theme.gap;
-                    padding-bottom: Theme.gap;
-                    spacing: Theme.gap / 2;
-                    horizontal-stretch: 1;
+            key-pressed(event) => {
+                if (event.text == Key.UpArrow) {
+                    root.selected =
+                        Shell.move_selection(root.selected, -1, BrowserState.rows.length);
+                    return EventResult.accept;
+                }
+                if (event.text == Key.DownArrow) {
+                    root.selected =
+                        Shell.move_selection(root.selected, 1, BrowserState.rows.length);
+                    return EventResult.accept;
+                }
+                if (event.text == Key.Return) {
+                    root.activate_selected();
+                    return EventResult.accept;
+                }
+                return EventResult.reject;
+            }
 
-                    // Title line: name, kind badge, author, and the download count.
-                    HorizontalLayout {
-                        spacing: Theme.gap;
+            ListView {
+            width: 100%;
+            height: 100%;
 
-                        Text {
-                            text: row.title;
-                            color: Theme.text;
-                            font-size: Theme.font-size;
-                            horizontal-stretch: 0;
-                            overflow: elide;
-                        }
+                for row[i] in BrowserState.rows: ListRow {
+                    height: 3 * Theme.font-size + 3 * Theme.gap + Theme.pad;
+                    selected: i == root.selected;
+                    clicked => {
+                        root.selected = i;
+                    }
 
-                        Rectangle {
-                            horizontal-stretch: 0;
-                            width: badge.preferred-width + Theme.gap;
-                            background: Theme.surface-raised;
-                            border-radius: Theme.radius;
-                            border-width: 1px;
-                            border-color: Theme.border;
+                    VerticalLayout {
+                        padding-top: Theme.gap;
+                        padding-bottom: Theme.gap;
+                        spacing: Theme.gap / 2;
+                        horizontal-stretch: 1;
 
-                            badge := Text {
-                                text: row.kind;
+                        // Title line: name, kind badge, author, and the download count.
+                        HorizontalLayout {
+                            spacing: Theme.gap;
+
+                            Text {
+                                text: row.title;
+                                color: Theme.text;
+                                font-size: Theme.font-size;
+                                horizontal-stretch: 0;
+                                overflow: elide;
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 0;
+                                width: badge.preferred-width + Theme.gap;
+                                background: Theme.surface-raised;
+                                border-radius: Theme.radius;
+                                border-width: 1px;
+                                border-color: Theme.border;
+
+                                badge := Text {
+                                    text: row.kind;
+                                    color: Theme.text-muted;
+                                    font-size: Theme.font-size-small;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            Text {
+                                text: "by " + row.author;
                                 color: Theme.text-muted;
                                 font-size: Theme.font-size-small;
-                                horizontal-alignment: center;
                                 vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
+
+                            Text {
+                                text: row.downloads + " downloads";
+                                color: Theme.text-muted;
+                                font-size: Theme.font-size-small;
+                                vertical-alignment: center;
+                                horizontal-alignment: right;
+                                horizontal-stretch: 0;
                             }
                         }
 
                         Text {
-                            text: "by " + row.author;
+                            text: row.description;
                             color: Theme.text-muted;
                             font-size: Theme.font-size-small;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
                             overflow: elide;
                         }
 
                         Text {
-                            text: row.downloads + " downloads";
-                            color: Theme.text-muted;
+                            text: row.page_url;
+                            color: Theme.accent;
                             font-size: Theme.font-size-small;
-                            vertical-alignment: center;
-                            horizontal-alignment: right;
-                            horizontal-stretch: 0;
+                            overflow: elide;
                         }
                     }
 
-                    Text {
-                        text: row.description;
-                        color: Theme.text-muted;
-                        font-size: Theme.font-size-small;
-                        overflow: elide;
-                    }
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
 
-                    Text {
-                        text: row.page_url;
-                        color: Theme.accent;
-                        font-size: Theme.font-size-small;
-                        overflow: elide;
-                    }
-                }
-
-                VerticalLayout {
-                    alignment: center;
-                    horizontal-stretch: 0;
-
-                    Button {
-                        text: row.kind == "modpack"
-                            ? "Install modpack"
-                            : (root.has_target
-                                ? "Add to " + BrowserState.target_name
-                                : "Pick an instance");
-                        kind: "primary";
-                        enabled: !BrowserState.loading
-                            && (row.kind == "modpack" || root.has_target);
-                        clicked => {
-                            if (row.kind == "modpack") {
-                                BrowserState.install_pack(row.project_id);
-                            } else if (row.kind == "datapack") {
-                                // A data pack lives inside one world, so it needs one named
-                                // before anything is downloaded.
-                                BrowserState.pick_world(row.project_id, row.kind);
-                            } else {
-                                BrowserState.add(row.project_id, row.kind);
+                        Button {
+                            text: row.kind == "modpack"
+                                ? "Install modpack"
+                                : (root.has_target
+                                    ? "Add to " + BrowserState.target_name
+                                    : "Pick an instance");
+                            kind: "primary";
+                            enabled: !BrowserState.loading
+                                && (row.kind == "modpack" || root.has_target);
+                            clicked => {
+                                root.selected = i;
+                                root.activate(row.project_id, row.kind);
                             }
                         }
                     }
