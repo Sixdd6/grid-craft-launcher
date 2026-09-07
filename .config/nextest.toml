@@ -1,0 +1,9 @@
+# nextest settings for the workspace. Everything not named here keeps nextest's own defaults.
+
+# The gcl-ui flow tests drive a real window on the Slint testing backend and wait on the
+# bridge's worker threads. A flow that never gets the event it waits for would otherwise sit
+# there until the run is killed by hand, so it gets a hard limit of its own: five 60-second
+# periods, after which nextest terminates the binary and reports the test as timed out.
+[[profile.default.overrides]]
+filter = 'binary(/^flow_/)'
+slow-timeout = { period = "60s", terminate-after = 5 }

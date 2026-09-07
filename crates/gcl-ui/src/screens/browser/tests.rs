@@ -2,8 +2,8 @@ use gcl_core::instances::model::{ContentKind, Loader};
 use gcl_core::sources::SourceId;
 
 use super::{
-    add_request, clamp_index, kinds_for, manual_note, needs_world, pack_name, page_bounds,
-    parse_loader, result_status, source_status,
+    add_request, clamp_index, kinds_for, loader_option_at, loader_option_index, manual_note,
+    needs_world, pack_name, page_bounds, parse_loader, result_status, source_status,
 };
 
 #[test]
@@ -88,6 +88,23 @@ fn add_request_without_a_kind_lets_the_project_decide() {
     let request = add_request(SourceId::CurseForge, "238222", None, None);
     assert_eq!(request.kind, None);
     assert_eq!(request.world, None);
+}
+
+#[test]
+fn a_loader_row_and_its_slug_map_both_ways() {
+    for (index, slug) in ["any", "fabric", "quilt", "forge", "neoforge"]
+        .into_iter()
+        .enumerate()
+    {
+        let index = index as i32;
+        assert_eq!(loader_option_at(index), slug);
+        assert_eq!(loader_option_index(slug), index);
+    }
+    // A row outside the list, and a slug that is not one, both mean "do not filter".
+    assert_eq!(loader_option_at(-1), "any");
+    assert_eq!(loader_option_at(99), "any");
+    assert_eq!(loader_option_index("liteloader"), 0);
+    assert_eq!(parse_loader(loader_option_at(0)), None);
 }
 
 #[test]

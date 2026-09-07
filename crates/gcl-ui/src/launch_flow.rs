@@ -97,6 +97,9 @@ fn finish(
     let reporter = bridge.clone();
     let _ = bridge.weak().upgrade_in_event_loop(move |window| {
         match outcome {
+            // A stop is what the user asked for, so it is said once, quietly: the exit code
+            // is non-zero on purpose and no warning toast belongs to it.
+            Ok(LaunchOutcome::Exited { stopped: true, .. }) => status(&window, &slug, "Stopped"),
             Ok(LaunchOutcome::Exited { code, hint, .. }) if code != 0 => {
                 let hint = hint.unwrap_or_else(|| "see the instance log".to_string());
                 let text = format!("Minecraft exited with code {code}: {hint}");
@@ -128,9 +131,12 @@ fn finish(
         // The running flag and the last-launched stamp both changed.
         mark_rows(&window, &run);
         window.global::<InstancesState>().invoke_refresh();
-        let state = window.global::<InstanceState>();
-        state.set_running(run.is_running(&slug));
+        // `InstanceState` belongs to whichever instance the detail screen shows. Writing its
+        // running flag for another slug would mark the wrong game, so both writes are guarded
+        // the same way `mark_started` guards its own.
         if shows(&window, &slug) {
+            let state = window.global::<InstanceState>();
+            state.set_running(run.is_running(&slug));
             state.invoke_load(slug.as_str().into());
         }
     });

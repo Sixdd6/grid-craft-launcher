@@ -205,10 +205,30 @@ async fn kill_child(child: &ChildHandle) -> Result<(), Error> {
         .map_err(|source| Error::Stop { pid, source })
 }
 
+/// The exit code to report for a finished process.
+///
+/// A process killed by a signal has no exit code of its own. Unix shells report `128 +
+/// signal` for one, so a `SIGTERM` reads as 143 and matches what a user sees anywhere else.
+/// A platform with no signals, and a status with neither, still reports `-1`.
+#[cfg(unix)]
+fn exit_code(status: &std::process::ExitStatus) -> i32 {
+    use std::os::unix::process::ExitStatusExt;
+    status
+        .code()
+        .or_else(|| status.signal().map(|signal| 128 + signal))
+        .unwrap_or(-1)
+}
+
+/// The exit code to report for a finished process. No signals here, so it is the code or `-1`.
+#[cfg(not(unix))]
+fn exit_code(status: &std::process::ExitStatus) -> i32 {
+    status.code().unwrap_or(-1)
+}
+
 /// Waits for the game to exit, drains the rest of its output, and returns the exit code.
 ///
-/// A process killed by a signal reports `-1`. The child is dropped before this returns, so
-/// a stop that comes afterwards finds nothing to signal.
+/// A process killed by a signal reports `128 + signal`, so a `SIGTERM` is 143. The child is
+/// dropped before this returns, so a stop that comes afterwards finds nothing to signal.
 pub async fn wait(game: RunningGame) -> Result<i32, Error> {
     let RunningGame {
         child,
@@ -242,7 +262,7 @@ pub async fn wait(game: RunningGame) -> Result<i32, Error> {
         }
     }
     let status = waited.map_err(|source| Error::Spawn { program, source })?;
-    let code = status.code().unwrap_or(-1);
+    let code = exit_code(&status);
     let level = if code == 0 {
         LogLevel::Info
     } else {
@@ -362,6 +382,32 @@ mod tests {
         assert!(matches!(err, Error::AlreadyExited), "{err:?}");
         let err = force_stop(&child, pid).await.expect_err("nothing to kill");
         assert!(matches!(err, Error::AlreadyExited), "{err:?}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_child_killed_by_sigterm_reports_143() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cmd = LaunchCommand {
+            // No `trap`, so the shell really dies of the signal and leaves no exit code.
+            program: PathBuf::from("sh"),
+            args: vec!["-c".to_string(), "sleep 30".to_string()],
+            cwd: dir.path().to_path_buf(),
+            env: Vec::new(),
+        };
+        let game = spawn(
+            &cmd,
+            dir.path().join("logs/latest.log"),
+            crate::events::null_sink(),
+        )
+        .await
+        .expect("spawn");
+        let child = game.child();
+        let pid = game.pid;
+        let waiting = tokio::spawn(async move { wait(game).await });
+        request_stop(&child, pid).await.expect("send SIGTERM");
+        let code = waiting.await.expect("join the wait").expect("wait");
+        assert_eq!(code, 143, "128 + SIGTERM, not the -1 a missing code gives");
     }
 
     #[cfg(unix)]

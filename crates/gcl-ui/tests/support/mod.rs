@@ -38,9 +38,11 @@ pub const MC: &str = "1.20.1";
 /// Fabric build the fixture loader list marks as stable.
 pub const FABRIC: &str = "0.19.5";
 
-/// Most rows a ComboBox in this app offers. [`TestApp::select_combo`] presses Up this many
-/// times to reach row 0, and a ComboBox clamps at its first row, so any larger value is safe.
-const COMBO_ROWS: usize = 64;
+/// Most Up presses [`TestApp::select_combo`] will spend reaching row 0 before it gives up.
+///
+/// It presses until the value stops changing, so this is only a guard against a ComboBox that
+/// never settles. No real list is anywhere near it.
+const COMBO_UP_CAP: usize = 4096;
 
 /// Offline account the harness creates, so a launch never has to open the name prompt.
 pub const PLAYER: &str = "Player";
@@ -109,14 +111,22 @@ impl TestApp {
         let dir = tempfile::tempdir().expect("tempdir");
         let uri = server.uri();
 
+        // Only Mojang and Fabric are mocked. Every other host is a `.invalid` name, which no
+        // resolver can answer, so a flow that reaches one fails fast instead of talking to
+        // the real internet. A later task mocks Modrinth; until then a browser flow that
+        // searches gets a connection error, which is the wanted answer for now.
         let endpoints = Endpoints {
             mojang: uri.clone(),
+            modrinth: "http://modrinth.invalid".to_string(),
+            curseforge: "http://curseforge.invalid".to_string(),
             loaders: LoaderEndpoints {
                 fabric: uri.clone(),
-                ..LoaderEndpoints::default()
+                quilt: "http://quilt.invalid".to_string(),
+                forge_meta: "http://forge-meta.invalid".to_string(),
+                forge_maven: "http://forge-maven.invalid".to_string(),
+                neoforge: "http://neoforge.invalid".to_string(),
             },
             msa: dead_msa_endpoints(),
-            ..Endpoints::default()
         };
         let (launcher, rx) = Launcher::open_with_endpoints(dir.path().to_path_buf(), endpoints)
             .expect("build launcher");
@@ -139,13 +149,21 @@ impl TestApp {
             .set_size(slint::PhysicalSize::new(1200, 760));
         window.show().expect("show the window");
 
-        TestApp {
+        let app = TestApp {
             dir,
             window,
             launcher,
             _server: server,
             _rt: rt,
-        }
+        };
+        pump();
+        assert!(
+            !app.ids().is_empty(),
+            "the generated UI carries no element names, so no flow can address anything. \
+             `crates/gcl-ui/build.rs` emits them only when PROFILE is `debug`; set \
+             SLINT_EMIT_DEBUG_INFO=1 to force them on."
+        );
+        app
     }
 
     /// The app root every instance and the stand-in java live under.
@@ -172,15 +190,40 @@ impl TestApp {
         std::fs::write(self.dir.path().join("stop"), b"").expect("write the stop file");
     }
 
-    /// The element with this id, which must be present and visible.
+    /// The one element with this id, which must be present and visible.
     ///
-    /// Panics with every id the window currently shows, which is what a flow needs to see
-    /// when a screen or a dialog is not up.
+    /// Exactly one match is the rule: a screen control is unique, so two matches mean two
+    /// screens are mounted at once or a dialog is still up, and a flow that clicks the first
+    /// of them would be testing the wrong window. A repeated row has the same id on every
+    /// instance and is reached with [`TestApp::el_nth`] instead.
+    ///
+    /// A missing element panics with every id the window currently shows, which is what a
+    /// flow needs to see when a screen or a dialog is not up.
     pub fn el(&self, id: &str) -> ElementHandle {
-        self.all(id)
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| panic!("no element `{id}` is showing. Showing: {:?}", self.ids()))
+        let mut all = self.all(id);
+        assert!(
+            !all.is_empty(),
+            "no element `{id}` is showing. Showing: {:?}",
+            self.ids()
+        );
+        assert_eq!(
+            all.len(),
+            1,
+            "`{id}` matches {} showing elements; use `el_nth` for a repeated row",
+            all.len()
+        );
+        all.remove(0)
+    }
+
+    /// The nth element with this id, in tree order, for a control inside a repeater.
+    pub fn el_nth(&self, id: &str, index: usize) -> ElementHandle {
+        let mut all = self.all(id);
+        assert!(
+            index < all.len(),
+            "`{id}` has only {} rows, wanted {index}",
+            all.len()
+        );
+        all.remove(index)
     }
 
     /// Every element with this id, in tree order. A repeater gives each row the same id.
@@ -228,10 +271,7 @@ impl TestApp {
 
     /// Presses the nth element with this id, for a control inside a repeater.
     pub fn click_nth(&self, id: &str, index: usize) {
-        let all = self.all(id);
-        let element = all.get(index).unwrap_or_else(|| {
-            panic!("`{id}` has only {} rows, wanted {index}", all.len());
-        });
+        let element = self.el_nth(id, index);
         assert_ne!(
             element.accessible_enabled(),
             Some(false),
@@ -249,8 +289,9 @@ impl TestApp {
     ///
     /// A `ComboBox` offers `accessible-action-expand` and nothing else — no set-value, no
     /// increment — so the popup is opened through that action and then driven with the arrow
-    /// keys its own key handler reads. Up is pressed [`COMBO_ROWS`] times first, which lands
-    /// on row 0 whatever was selected, and Return closes the popup on the wanted row.
+    /// keys its own key handler reads. Up is pressed until the value stops changing, which
+    /// is row 0 whatever was selected, then Down `index` times, and Return closes the popup
+    /// on the wanted row.
     pub fn select_combo(&self, id: &str, index: usize) {
         let combo = self.el(id);
         assert_ne!(
@@ -260,8 +301,19 @@ impl TestApp {
         );
         combo.invoke_accessible_expand_action();
         pump();
-        for _ in 0..COMBO_ROWS {
+        let mut value = combo.accessible_value();
+        for pressed in 0..COMBO_UP_CAP {
             self.press_key(slint::platform::Key::UpArrow);
+            let now = combo.accessible_value();
+            if now == value {
+                break;
+            }
+            value = now;
+            assert!(
+                pressed + 1 < COMBO_UP_CAP,
+                "`{id}` still changed after {COMBO_UP_CAP} Up presses; it never reaches its \
+                 first row"
+            );
         }
         for _ in 0..index {
             self.press_key(slint::platform::Key::DownArrow);

@@ -27,6 +27,12 @@ const MODPACK: &str = "modpack";
 /// What the loader ComboBox shows for "do not filter by loader".
 const ANY_LOADER: &str = "any";
 
+/// The loader ComboBox rows, in the order `BrowserState.loader_options` declares them.
+///
+/// A ComboBox only moves its selection through `current-index`, so the screen reports an
+/// index and this list is what turns it back into the slug the search filter carries.
+const LOADER_OPTIONS: [&str; 5] = [ANY_LOADER, "fabric", "quilt", "forge", "neoforge"];
+
 /// Shown when CurseForge is the source that is missing.
 const NO_CURSEFORGE: &str = "CurseForge disabled: set CURSEFORGE_API_KEY";
 
@@ -223,6 +229,18 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
                 state.set_kind_index(index);
                 clear_rows(&state);
             }
+        });
+    }
+
+    {
+        let bridge = bridge.clone();
+        state.on_set_loader(move |index| {
+            let Some(window) = bridge.weak().upgrade() else {
+                return;
+            };
+            let state = window.global::<BrowserState>();
+            state.set_loader_index(index);
+            state.set_loader(loader_option_at(index).into());
         });
     }
 
@@ -696,6 +714,23 @@ pub fn add_request(
     }
 }
 
+/// The loader slug at one ComboBox row. An index outside the list reads as "do not filter".
+pub fn loader_option_at(index: i32) -> &'static str {
+    usize::try_from(index)
+        .ok()
+        .and_then(|index| LOADER_OPTIONS.get(index))
+        .copied()
+        .unwrap_or(ANY_LOADER)
+}
+
+/// The ComboBox row for one loader slug. An unknown slug is the `any` row.
+pub fn loader_option_index(slug: &str) -> i32 {
+    LOADER_OPTIONS
+        .iter()
+        .position(|option| *option == slug)
+        .unwrap_or(0) as i32
+}
+
 /// Reads the loader filter. `any`, an empty field, and an unknown name all mean "do not
 /// filter", which is what the source sees as `None`.
 pub fn parse_loader(text: &str) -> Option<Loader> {
@@ -764,7 +799,14 @@ fn apply_target(state: &BrowserState<'_>, target: Option<&Target>) {
     state.set_target_slug(target.slug.as_str().into());
     state.set_target_name(target.name.as_str().into());
     state.set_minecraft(target.minecraft.as_str().into());
-    state.set_loader(target.loader.as_str().into());
+    set_loader_filter(state, &target.loader);
+}
+
+/// Writes the loader filter and the ComboBox row that shows it, so the two never disagree.
+fn set_loader_filter(state: &BrowserState<'_>, slug: &str) {
+    let index = loader_option_index(slug);
+    state.set_loader_index(index);
+    state.set_loader(loader_option_at(index).into());
 }
 
 /// Rebuilds the kind ComboBox for one source, keeping the picked kind in range.

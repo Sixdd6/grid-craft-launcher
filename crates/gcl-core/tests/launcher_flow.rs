@@ -816,12 +816,14 @@ async fn an_async_launch_runs_the_game_and_reports_how_it_exited() {
             code,
             log_path: reported,
             hint,
+            stopped,
         } = outcome
         else {
             panic!("expected an exit, got {outcome:?}");
         };
         assert_eq!(code, 3);
         assert_eq!(reported, log_path);
+        assert!(!stopped, "nothing asked this game to stop");
         assert!(hint.is_some(), "a non-zero exit carries a crash hint");
 
         assert!(log_path.is_file(), "{}", log_path.display());
@@ -1122,10 +1124,15 @@ async fn stop_instance_terminates_the_game_and_clears_the_registry() {
         );
 
         let outcome = running.wait_blocking(&launcher).expect("wait");
-        let LaunchOutcome::Exited { code, .. } = outcome else {
+        let LaunchOutcome::Exited {
+            code, stopped, hint, ..
+        } = outcome
+        else {
             panic!("expected an exit, got {outcome:?}");
         };
         assert_eq!(code, 143, "the stand-in traps SIGTERM and exits 143");
+        assert!(stopped, "`stop_instance` asked for this exit");
+        assert!(hint.is_none(), "a requested stop is not a crash");
         assert!(
             launcher.running_slugs().is_empty(),
             "the wait task cleared the registry"

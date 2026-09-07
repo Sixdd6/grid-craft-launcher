@@ -61,6 +61,24 @@ if ! grep -qi "$MOD" "$ROOT/content.json" && { [ -z "$PROJECT_ID" ] || ! grep -q
 fi
 pass "content add"
 
+# A dry run still resolves the JVM, and `ensure_java_component` accepts only the exact major
+# Minecraft asks for. With nothing configured it downloads Mojang's `java-runtime-gamma`, some
+# 96 MB, on every run. A configured `jvm.java_path` is used as given, so pointing the config at
+# the machine's own `java` skips that download. The CLI has no setter for this key, so the
+# config file is edited here; the loader and content steps above are untouched.
+step "point the config at the local java"
+JAVA_BIN="$(command -v java || true)"
+CONFIG="$ROOT/config.toml"
+if [ -z "$JAVA_BIN" ]; then
+  echo "NOTE: no java on PATH, so the dry run will download Mojang's runtime"
+elif grep -q '^\[jvm\]' "$CONFIG" 2>/dev/null; then
+  sed -i "s|^\[jvm\]|[jvm]\njava_path = \"$JAVA_BIN\"|" "$CONFIG"
+  pass "java_path = $JAVA_BIN"
+else
+  printf '\n[jvm]\njava_path = "%s"\n' "$JAVA_BIN" >> "$CONFIG"
+  pass "java_path = $JAVA_BIN"
+fi
+
 step "dry-run launch"
 $GCL launch e2e --offline-user e2e-tester --dry-run > "$ROOT/launch.txt"
 pass "dry-run launch"

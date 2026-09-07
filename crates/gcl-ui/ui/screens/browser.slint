@@ -35,8 +35,14 @@ export global BrowserState {
     in-out property <int> kind_index: 0;
     // Minecraft version filter, empty for any.
     in-out property <string> minecraft: "1.20.1";
-    // Loader filter: `any`, or one loader slug.
+    // Loader filter: `any`, or one loader slug. Rust reads this one; the ComboBox drives
+    // `loader_index`, and `screens/browser.rs` keeps the two in step.
     in-out property <string> loader: "fabric";
+    // Index into `loader_options`. A ComboBox only moves its selection through
+    // `current-index`, so this, not `loader`, is what the control binds to.
+    in-out property <int> loader_index: 1;
+    // Loader filters the ComboBox offers. `any` means the search is not filtered by loader.
+    in-out property <[string]> loader_options: ["any", "fabric", "quilt", "forge", "neoforge"];
 
     // Slug of the instance an Add installs into, empty when none is chosen yet.
     in-out property <string> target_slug: "fabric-perf";
@@ -123,6 +129,8 @@ export global BrowserState {
     callback set_kind(int);
     // The target ComboBox changed. Carries its new index.
     callback set_target(int);
+    // The loader ComboBox changed. Carries its new index into `loader_options`.
+    callback set_loader(int);
     // A data pack row's Add button was pressed: ask which world it goes into. Carries the
     // project id and the row's own kind.
     callback pick_world(string /* project_id */, string /* kind */);
@@ -170,9 +178,6 @@ export component BrowserScreen inherits Rectangle {
             );
         }
     }
-
-    // Loader filters the ComboBox offers. `any` means the search is not filtered by loader.
-    property <[string]> loader_options: ["any", "fabric", "quilt", "forge", "neoforge"];
 
     // The kind the filters name, empty when the source offers none.
     property <string> kind_name: BrowserState.kind_index >= 0
@@ -299,8 +304,11 @@ export component BrowserScreen inherits Rectangle {
 
             loader_combo := ComboBox {
                 width: 120px;
-                model: root.loader_options;
-                current-value <=> BrowserState.loader;
+                model: BrowserState.loader_options;
+                current-index: BrowserState.loader_index;
+                selected => {
+                    BrowserState.set_loader(self.current-index);
+                }
             }
 
             Rectangle { horizontal-stretch: 1; }

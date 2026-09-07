@@ -120,17 +120,17 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState) {
             status(&bridge, "Stopping…");
             // The launch thread is the one that reports the exit, so nothing is done here on
             // success: `launch_flow` rewrites the status and the running flag when the game
-            // goes. A failure is carried, not returned, so a game that ended on its own
-            // between the click and the signal is not an error dialog.
-            bridge.run(
+            // goes. `run_with_error` opens the shared error dialog on a failure and still
+            // runs the closure, so the status line is rewritten either way.
+            bridge.run_with_error(
                 "Stop instance",
-                move |launcher| Ok(launcher.stop_instance(&slug)),
+                move |launcher| launcher.stop_instance(&slug),
                 |window, result| {
                     if let Err(err) = result {
                         tracing::warn!(error = %crate::bridge::error_chain(&err), "stop failed");
                         window
                             .global::<InstanceState>()
-                            .set_status_text("The game was not running".into());
+                            .set_status_text("Stop failed; see the error".into());
                     }
                 },
             );

@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard};
 use std::time::Duration;
 
@@ -191,12 +192,16 @@ pub enum LaunchOutcome {
     DryRun(LaunchCommand),
     /// The game ran to completion.
     Exited {
-        /// Exit code the game returned. A process killed by a signal reports `-1`.
+        /// Exit code the game returned. A process killed by a signal reports `128 + signal`,
+        /// so a `SIGTERM` is 143.
         code: i32,
         /// File both output streams were written to.
         log_path: PathBuf,
         /// One-line reason for a non-zero exit, read out of the log. `None` on a clean exit.
         hint: Option<String>,
+        /// Whether [`Launcher::stop_instance`] asked for this exit. A stopped game exits
+        /// non-zero on purpose, so a caller reports it as a stop rather than as a crash.
+        stopped: bool,
     },
 }
 
@@ -299,6 +304,11 @@ struct RunningEntry {
     pid: Option<u32>,
     /// The child process, for the platforms with no signals.
     child: crate::launch::ChildHandle,
+    /// Set by [`Launcher::stop_instance`] before it signals, read by the waiting task.
+    ///
+    /// A stopped game exits non-zero, so this is the only way the outcome can tell a
+    /// requested stop from a crash.
+    stop_requested: Arc<AtomicBool>,
 }
 
 impl Launcher {
@@ -1031,6 +1041,7 @@ impl Launcher {
         instance.save()?;
         // Registered before the waiting task starts, so a stop that comes right after this
         // call returns finds the game.
+        let stop_requested = Arc::new(AtomicBool::new(false));
         self.running
             .lock()
             .unwrap_or_else(|err| err.into_inner())
@@ -1039,6 +1050,7 @@ impl Launcher {
                 RunningEntry {
                     pid,
                     child: game.child(),
+                    stop_requested: Arc::clone(&stop_requested),
                 },
             );
         let registry = Arc::clone(&self.running);
@@ -1056,11 +1068,15 @@ impl Launcher {
             // ran and a reader can tell a finished launch from a running one by the log.
             instance.config.last_launched = Some(now_rfc3339());
             instance.save()?;
-            let hint = (code != 0).then(|| crate::launch::crash_hint(&path));
+            // Read after the wait, so a stop that arrived while the game was shutting down
+            // still counts. The flag outlives the registry entry, which is already gone.
+            let stopped = stop_requested.load(Ordering::Relaxed);
+            let hint = (code != 0 && !stopped).then(|| crate::launch::crash_hint(&path));
             Ok(LaunchOutcome::Exited {
                 code,
                 log_path: path,
                 hint,
+                stopped,
             })
         });
         Ok(RunningLaunch {
@@ -1201,6 +1217,8 @@ impl Launcher {
             .get(slug)
             .cloned()
             .ok_or_else(|| crate::launch::Error::NotRunning(slug.to_string()))?;
+        // Set before the signal, so the waiting task cannot read it after a fast exit.
+        entry.stop_requested.store(true, Ordering::Relaxed);
         self.block_on(async move {
             match crate::launch::request_stop(&entry.child, entry.pid).await {
                 Ok(()) => {}
@@ -1593,7 +1611,7 @@ impl Launcher {
         let component = component
             .map(str::to_string)
             .unwrap_or_else(|| component_for_major(major).to_string());
-        Ok(self.block_on(async move {
+        self.block_on(async move {
             let found = detect_all(&root).await;
             // Only the exact major will do. Minecraft 1.20.1 asks for `java-runtime-gamma`,
             // which is Java 17, and it does not start on the Java 21 or 25 a distribution
@@ -1608,23 +1626,9 @@ impl Launcher {
             );
             match install_runtime(&http, &ctx, RUNTIME_MANIFEST, &component).await {
                 Ok(install) => Ok(install),
-                // Mojang publishes no runtime for every platform, and the download can fail.
-                // A newer local JVM is a worse answer than the right one, and a better answer
-                // than no launch at all, so it is the fallback and it says so.
-                Err(source) => match pick(&found, major) {
-                    Some(install) => {
-                        tracing::warn!(
-                            major,
-                            found = install.major,
-                            %source,
-                            "could not install the Mojang runtime; falling back to a newer java"
-                        );
-                        Ok(install.clone())
-                    }
-                    None => Err(source),
-                },
+                Err(source) => install_fallback(&found, major, source),
             }
-        })?)
+        })
     }
 }
 
@@ -1643,6 +1647,31 @@ impl std::fmt::Debug for Launcher {
 /// the flow with no real sleeping; this is the launcher's production one.
 fn real_sleep(wait: Duration) -> BoxFuture<'static, ()> {
     Box::pin(tokio::time::sleep(wait))
+}
+
+/// Answers a failed runtime install with the best local JVM, or repeats the failure.
+///
+/// Mojang publishes no runtime for every platform, and the download can fail. A newer local
+/// JVM is a worse answer than the right major, and a better answer than no launch at all, so
+/// it is the fallback and it says so in the log. With no local JVM above `major` there is
+/// nothing to fall back to, and the install error is what the caller gets.
+fn install_fallback(
+    found: &[JavaInstall],
+    major: u32,
+    source: crate::java::Error,
+) -> Result<JavaInstall, crate::Error> {
+    match pick(found, major) {
+        Some(install) => {
+            tracing::warn!(
+                major,
+                found = install.major,
+                %source,
+                "could not install the Mojang runtime; falling back to a newer java"
+            );
+            Ok(install.clone())
+        }
+        None => Err(source.into()),
+    }
 }
 
 /// Builds the source list: Modrinth always, CurseForge only with an API key.
@@ -1840,6 +1869,62 @@ mod tests {
 
     /// Compiles only for a type that can be shared across threads.
     fn assert_send_sync<T: Send + Sync>() {}
+
+    /// A local JVM the fallback can choose, with no real `java` behind it.
+    fn fake_install(major: u32) -> JavaInstall {
+        JavaInstall {
+            path: PathBuf::from(format!("/opt/java-{major}/bin/java")),
+            major,
+            version: format!("{major}.0.1"),
+            vendor: "test".to_string(),
+            source: JavaSource::Path,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_runtime_install_falls_back_to_a_newer_local_java() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = crate::paths::Root::from_path(dir.path());
+        // No real waiting between the retries this unreachable host forces.
+        let http = HttpClient::new()
+            .expect("http client")
+            .with_backoff(vec![Duration::ZERO; 3]);
+        let sink = crate::events::null_sink();
+        let cancel = CancellationToken::new();
+        let ctx = DownloadCtx {
+            http: &http,
+            root: &root,
+            sink: &sink,
+            cancel: &cancel,
+            parallel: 1,
+        };
+
+        // Nothing answers on this host, so the install fails the way a dead network does.
+        let source = install_runtime(
+            &http,
+            &ctx,
+            "http://runtime-manifest.invalid/all.json",
+            "java-runtime-gamma",
+        )
+        .await
+        .expect_err("the runtime manifest is unreachable");
+
+        let found = vec![fake_install(21), fake_install(25)];
+        let picked = install_fallback(&found, 17, source).expect("fall back to a local java");
+        assert_eq!(picked.major, 21, "the lowest java above the wanted major");
+
+        let source = install_runtime(
+            &http,
+            &ctx,
+            "http://runtime-manifest.invalid/all.json",
+            "java-runtime-gamma",
+        )
+        .await
+        .expect_err("the runtime manifest is unreachable");
+        let err = install_fallback(&[fake_install(8)], 17, source)
+            .expect_err("nothing local is new enough");
+        assert!(matches!(err, crate::Error::Java(_)), "got {err:?}");
+    }
 
     #[test]
     fn launcher_is_send_and_sync() {

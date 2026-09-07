@@ -62,15 +62,18 @@ pub fn run(launcher: &Launcher, format: Format, args: LaunchArgs) -> Result<Exit
             code,
             log_path,
             hint,
+            stopped,
         } => {
             match format {
                 Format::Json => print_json(&serde_json::json!({
                     "exit_code": code,
                     "log": log_path.display().to_string(),
                     "hint": hint,
+                    "stopped": stopped,
                 }))?,
                 Format::Text => {
-                    println!("exited {code} (log: {})", log_path.display());
+                    let how = if stopped { " (stopped)" } else { "" };
+                    println!("exited {code}{how} (log: {})", log_path.display());
                     if let Some(hint) = &hint {
                         println!("hint: {hint}");
                     }

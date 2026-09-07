@@ -238,9 +238,19 @@ async fn launching_a_row_runs_the_game_until_stop(app: &TestApp) {
         .global::<InstanceState>()
         .get_status_text()
         .to_string();
+    assert_eq!(
+        status, "Stopped",
+        "a requested stop is reported as one, not as the 143 the signal produced"
+    );
+    let warned = app
+        .window
+        .global::<App>()
+        .get_app_log()
+        .iter()
+        .any(|line| line.text.contains("Minecraft exited with code"));
     assert!(
-        status.contains("143"),
-        "the status says how the game ended: {status}"
+        !warned,
+        "a stop the user asked for raises no warning, so nothing reaches the app log"
     );
     assert!(app.launcher.running_slugs().is_empty());
 }
