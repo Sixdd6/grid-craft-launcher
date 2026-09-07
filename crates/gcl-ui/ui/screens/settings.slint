@@ -1,15 +1,393 @@
+import { LineEdit, ScrollView, SpinBox } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
-import { SettingRow, VersionRow, LoaderVersionRow } from "../types.slint";
-import { EmptyState } from "../components/empty-state.slint";
+import { SettingsState } from "../state.slint";
+import { Button } from "../components/button.slint";
+import { Card } from "../components/card.slint";
 
-// Settings. Filled in by task 7.
+// Launcher-wide settings: root, downloads, JVM defaults, API keys, game defaults, and the
+// source check.
+//
+// Pure layout. Every value comes from the [`SettingsState`] global and every action is
+// reported through it, so `src/screens/settings.rs` is the only place that knows what any of
+// this means. The heap fields and the new-default fields are typed text, so they are held
+// here and parsed in Rust.
 export component SettingsScreen inherits Rectangle {
-    in property <[SettingRow]> rows;
-    in property <[VersionRow]> versions;
-    in property <[LoaderVersionRow]> loader-versions;
+    // Minimum heap as typed, seeded from the saved value.
+    property <string> min_text: SettingsState.jvm_min + "";
+    // Maximum heap as typed, seeded from the saved value.
+    property <string> max_text: SettingsState.jvm_max + "";
+    // Key of the game default being added.
+    property <string> new_key: "";
+    // Value of the game default being added.
+    property <string> new_value: "";
 
-    EmptyState {
-        title: "Settings";
-        message: "Settings and the task panel land in task 7.";
+    background: Theme.bg;
+
+    VerticalLayout {
+        padding: Theme.pad;
+        spacing: Theme.gap;
+
+        Text {
+            text: "Settings";
+            color: Theme.text;
+            font-size: Theme.font-size-h1;
+            height: Theme.row-height;
+            vertical-alignment: center;
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                spacing: Theme.gap;
+                padding-right: Theme.pad;
+
+                // App root. Changing it only writes the new path: nothing is moved.
+                Card {
+                    title: "App root";
+
+                    Text {
+                        text: SettingsState.root_path;
+                        color: Theme.text;
+                        font-size: Theme.font-size;
+                        wrap: word-wrap;
+                    }
+
+                    Text {
+                        text: "A new root is used the next time the launcher starts. Instances, "
+                            + "caches, and accounts stay where they are; move them by hand if "
+                            + "you want them in the new root.";
+                        color: Theme.text-muted;
+                        font-size: Theme.font-size-small;
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        spacing: Theme.gap;
+                        height: Theme.row-height;
+
+                        LineEdit {
+                            placeholder-text: "Path to another app root";
+                            text <=> SettingsState.new_root;
+                            horizontal-stretch: 1;
+                            accepted(path) => {
+                                SettingsState.save_root(path);
+                            }
+                        }
+
+                        Button {
+                            text: "Change";
+                            enabled: SettingsState.new_root != "" && !SettingsState.busy;
+                            clicked => {
+                                SettingsState.save_root(SettingsState.new_root);
+                            }
+                        }
+                    }
+                }
+
+                // Download concurrency.
+                Card {
+                    title: "Downloads";
+
+                    HorizontalLayout {
+                        spacing: Theme.gap;
+                        height: Theme.row-height;
+
+                        Text {
+                            text: "Parallel downloads";
+                            color: Theme.text-muted;
+                            font-size: Theme.font-size;
+                            vertical-alignment: center;
+                            horizontal-stretch: 0;
+                        }
+
+                        parallel := SpinBox {
+                            minimum: 1;
+                            maximum: 32;
+                            value: SettingsState.parallel;
+                            width: 120px;
+                        }
+
+                        Rectangle { horizontal-stretch: 1; }
+
+                        Button {
+                            text: "Apply";
+                            enabled: !SettingsState.busy;
+                            clicked => {
+                                SettingsState.save_downloads(parallel.value);
+                            }
+                        }
+                    }
+                }
+
+                // JVM defaults, used unless an instance overrides them.
+                Card {
+                    title: "Java defaults";
+
+                    HorizontalLayout {
+                        spacing: Theme.gap;
+                        height: Theme.row-height;
+
+                        Text {
+                            text: "Heap min";
+                            color: Theme.text-muted;
+                            font-size: Theme.font-size;
+                            vertical-alignment: center;
+                            horizontal-stretch: 0;
+                        }
+
+                        LineEdit {
+                            placeholder-text: "1024";
+                            text <=> root.min_text;
+                            width: 110px;
+                        }
+
+                        Text {
+                            text: "Heap max";
+                            color: Theme.text-muted;
+                            font-size: Theme.font-size;
+                            vertical-alignment: center;
+                            horizontal-stretch: 0;
+                        }
+
+                        LineEdit {
+                            placeholder-text: "4096";
+                            text <=> root.max_text;
+                            width: 110px;
+                        }
+
+                        Text {
+                            text: "MiB, or a size like 8G";
+                            color: Theme.text-muted;
+                            font-size: Theme.font-size-small;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Theme.gap;
+                        height: Theme.row-height;
+
+                        Text {
+                            text: "Java path";
+                            color: Theme.text-muted;
+                            font-size: Theme.font-size;
+                            vertical-alignment: center;
+                            horizontal-stretch: 0;
+                        }
+
+                        LineEdit {
+                            placeholder-text: "empty: let the launcher choose";
+                            text <=> SettingsState.java_path;
+                            horizontal-stretch: 1;
+                        }
+
+                        Button {
+                            text: "Apply";
+                            enabled: !SettingsState.busy;
+                            clicked => {
+                                SettingsState.save_jvm(
+                                    root.min_text, root.max_text, SettingsState.java_path);
+                            }
+                        }
+                    }
+                }
+
+                // API keys. A saved key is never shown, only whether there is one.
+                Card {
+                    title: "Keys";
+
+                    HorizontalLayout {
+                        spacing: Theme.gap;
+                        height: Theme.row-height;
+
+                        Text {
+                            text: "CurseForge API key " + (SettingsState.curseforge_key_set
+                                ? "<set>"
+                                : "<unset>");
+                            color: Theme.text-muted;
+                            font-size: Theme.font-size;
+                            vertical-alignment: center;
+                            horizontal-stretch: 0;
+                        }
+
+                        LineEdit {
+                            placeholder-text: "paste a key, or leave empty to clear";
+                            input-type: password;
+                            text <=> SettingsState.curseforge_key_input;
+                            horizontal-stretch: 1;
+                        }
+
+                        Button {
+                            text: SettingsState.curseforge_key_input == ""
+                                ? "Clear"
+                                : "Save";
+                            enabled: !SettingsState.busy;
+                            clicked => {
+                                SettingsState.save_curseforge_key(
+                                    SettingsState.curseforge_key_input);
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Theme.gap;
+                        height: Theme.row-height;
+
+                        Text {
+                            text: "Microsoft client id " + (SettingsState.msa_client_id_set
+                                ? "<set>"
+                                : "<unset>");
+                            color: Theme.text-muted;
+                            font-size: Theme.font-size;
+                            vertical-alignment: center;
+                            horizontal-stretch: 0;
+                        }
+
+                        LineEdit {
+                            placeholder-text: "paste a client id, or leave empty to clear";
+                            input-type: password;
+                            text <=> SettingsState.msa_client_id_input;
+                            horizontal-stretch: 1;
+                        }
+
+                        Button {
+                            text: SettingsState.msa_client_id_input == "" ? "Clear" : "Save";
+                            enabled: !SettingsState.busy;
+                            clicked => {
+                                SettingsState.save_msa_client_id(
+                                    SettingsState.msa_client_id_input);
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: "A key set in the environment wins over the one saved here, and "
+                            + "the value is never shown again once it is saved.";
+                        color: Theme.text-muted;
+                        font-size: Theme.font-size-small;
+                        wrap: word-wrap;
+                    }
+                }
+
+                // `options.txt` keys written into every new instance.
+                Card {
+                    title: "Game defaults";
+
+                    if SettingsState.game_defaults.length == 0: Text {
+                        text: "No defaults yet. A key added here is preseeded into every new "
+                            + "instance.";
+                        color: Theme.text-muted;
+                        font-size: Theme.font-size-small;
+                        wrap: word-wrap;
+                    }
+
+                    for row in SettingsState.game_defaults: HorizontalLayout {
+                        spacing: Theme.gap;
+                        height: Theme.row-height;
+
+                        Text {
+                            text: row.key;
+                            color: Theme.text;
+                            font-size: Theme.font-size;
+                            vertical-alignment: center;
+                            width: 180px;
+                            overflow: elide;
+                        }
+
+                        Text {
+                            text: row.value;
+                            color: Theme.text-muted;
+                            font-size: Theme.font-size;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+
+                        Button {
+                            text: "Remove";
+                            kind: "danger";
+                            enabled: !SettingsState.busy;
+                            clicked => {
+                                SettingsState.default_unset(row.key);
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Theme.gap;
+                        height: Theme.row-height;
+
+                        LineEdit {
+                            placeholder-text: "key, e.g. renderDistance";
+                            text <=> root.new_key;
+                            width: 180px;
+                        }
+
+                        LineEdit {
+                            placeholder-text: "value";
+                            text <=> root.new_value;
+                            horizontal-stretch: 1;
+                        }
+
+                        Button {
+                            text: "Add";
+                            kind: "primary";
+                            enabled: root.new_key != "" && !SettingsState.busy;
+                            clicked => {
+                                SettingsState.default_set(root.new_key, root.new_value);
+                                root.new_key = "";
+                                root.new_value = "";
+                            }
+                        }
+                    }
+                }
+
+                // The one thing on this screen that talks to the network, and only on click.
+                Card {
+                    title: "Sources";
+
+                    HorizontalLayout {
+                        spacing: Theme.gap;
+                        height: Theme.row-height;
+
+                        Text {
+                            text: "Check every configured source and the Mojang manifest.";
+                            color: Theme.text-muted;
+                            font-size: Theme.font-size;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+
+                        Button {
+                            text: "Verify sources";
+                            enabled: !SettingsState.busy;
+                            clicked => {
+                                SettingsState.verify_sources();
+                            }
+                        }
+                    }
+
+                    for line in SettingsState.verify_lines: Text {
+                        text: line;
+                        // Slint has no substring test, so the line carries its own verdict
+                        // in its text: `PASS <source>` or `FAIL <source>: <error>`.
+                        color: Theme.text;
+                        font-size: Theme.font-size-small;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+
+        Text {
+            text: SettingsState.status;
+            color: Theme.text-muted;
+            font-size: Theme.font-size-small;
+            height: Theme.row-height;
+            vertical-alignment: center;
+            overflow: elide;
+        }
     }
 }

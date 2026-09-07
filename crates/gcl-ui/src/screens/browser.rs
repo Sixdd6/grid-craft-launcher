@@ -13,7 +13,7 @@ use gcl_core::instances::model::{ContentKind, Loader};
 use gcl_core::sources::{SearchQuery, SourceId};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use crate::bridge::{Bridge, show_error, warn};
+use crate::bridge::{Bridge, warn};
 use crate::models::search_row;
 use crate::{App, AppWindow, BrowserState, Screen, SearchRow};
 
@@ -705,32 +705,24 @@ fn error_dialog(window: &AppWindow, title: &str, text: &str) {
     app.set_error_open(true);
 }
 
-/// Runs a launcher call whose failure the browser reports itself.
+/// Runs a launcher call and clears `loading` however it ends.
 ///
-/// [`Bridge::run`] drops its `done` closure when the job fails, which would leave `loading`
-/// set and the screen stuck. Wrapping the result moves the failure into `done`, so every path
-/// clears the flag, and the error dialog still opens with the same label.
+/// [`Bridge::run_with_error`] opens the error dialog and always calls back, so this only has
+/// to drop the flag the screen was left on and say which step failed.
 fn run_reporting<T: Send + 'static>(
     bridge: &Bridge,
     label: &'static str,
     job: impl FnOnce(&gcl_core::Launcher) -> Result<T, gcl_core::Error> + Send + 'static,
     done: impl FnOnce(&AppWindow, T) + Send + 'static,
 ) {
-    bridge.run(
-        label,
-        move |launcher| Ok(job(launcher)),
-        move |window, result| {
-            let state = window.global::<BrowserState>();
-            state.set_loading(false);
-            match result {
-                Ok(value) => done(window, value),
-                Err(err) => {
-                    state.set_status(format!("{label} failed").into());
-                    show_error(window, label, &err);
-                }
-            }
-        },
-    );
+    bridge.run_with_error(label, job, move |window, result| {
+        let state = window.global::<BrowserState>();
+        state.set_loading(false);
+        match result {
+            Ok(value) => done(window, value),
+            Err(_) => state.set_status(format!("{label} failed").into()),
+        }
+    });
 }
 
 #[cfg(test)]

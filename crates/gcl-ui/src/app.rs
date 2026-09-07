@@ -65,6 +65,8 @@ pub fn build(
     crate::screens::instances::wire(&window, &bridge, &run);
     crate::screens::instance::wire(&window, &bridge, &run);
     crate::screens::browser::wire(&window, &bridge);
+    crate::screens::accounts::wire(&window, &bridge);
+    crate::screens::settings::wire(&window, &bridge);
 
     start_forwarder(rx, window.as_weak());
     Ok(window)

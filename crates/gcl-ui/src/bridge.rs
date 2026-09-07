@@ -53,6 +53,29 @@ impl Bridge {
             });
         });
     }
+
+    /// Runs `job` on its own thread and hands its whole result to `done` on the UI thread.
+    ///
+    /// [`Bridge::run`] drops `done` when the job fails, which leaves a screen that set a
+    /// "loading" flag stuck on it. Here `done` always runs, so every path can clear that
+    /// flag, and the error dialog still opens with `label` as its title before it does.
+    pub fn run_with_error<T: Send + 'static>(
+        &self,
+        label: &'static str,
+        job: impl FnOnce(&Launcher) -> Result<T, gcl_core::Error> + Send + 'static,
+        done: impl FnOnce(&AppWindow, Result<T, gcl_core::Error>) + Send + 'static,
+    ) {
+        self.run(
+            label,
+            move |launcher| Ok(job(launcher)),
+            move |window, result| {
+                if let Err(err) = &result {
+                    show_error(window, label, err);
+                }
+                done(window, result);
+            },
+        );
+    }
 }
 
 /// Runs `job` on a new thread and hands back the channel its one result arrives on.

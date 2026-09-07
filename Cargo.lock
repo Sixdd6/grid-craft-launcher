@@ -1942,6 +1942,7 @@ dependencies = [
  "slint-build",
  "time",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

@@ -3,10 +3,11 @@ import {
     AccountRow, ContentRow, InstanceRow, LoaderVersionRow, LogLine, PendingRow,
     Screen, SearchRow, SettingRow, TaskRow, VersionRow
 } from "types.slint";
-import { InstanceState } from "state.slint";
+import { AccountsState, InstanceState, SettingsState } from "state.slint";
 import { Rail } from "components/rail.slint";
 import { ChoiceDialog } from "components/choice-dialog.slint";
 import { ConfirmDialog } from "components/confirm-dialog.slint";
+import { DeviceCodeDialog } from "components/device-code-dialog.slint";
 import { CreateInstanceDialog } from "components/create-instance-dialog.slint";
 import { Dialog } from "components/dialog.slint";
 import { PromptDialog } from "components/prompt-dialog.slint";
@@ -19,8 +20,9 @@ import { SettingsScreen } from "screens/settings.slint";
 
 // Re-exported so the generated Rust module has every struct the screens will need.
 export {
-    AccountRow, BrowserState, ContentRow, InstanceRow, InstanceState, LoaderVersionRow, LogLine,
-    PendingRow, Screen, SearchRow, SettingRow, TaskRow, Theme, VersionRow
+    AccountRow, AccountsState, BrowserState, ContentRow, InstanceRow, InstanceState,
+    LoaderVersionRow, LogLine, PendingRow, Screen, SearchRow, SettingRow, SettingsState, TaskRow,
+    Theme, VersionRow
 }
 
 // Shell state and the callbacks Rust wires up. Screens read from here, never from each other.
@@ -148,6 +150,30 @@ export component AppWindow inherits Window {
             BrowserState.open();
         }
     }
+
+    // Whether the accounts screen is up. It reloads the account store when it is shown, for
+    // the same reason the browser reloads its sources: Rust cannot watch a property.
+    property <bool> accounts_open: App.screen == Screen.accounts;
+
+    changed accounts_open => {
+        if (self.accounts_open) {
+            AccountsState.open();
+        }
+    }
+
+    // Whether the settings screen is up. It re-reads the config when it is shown.
+    property <bool> settings_open: App.screen == Screen.settings;
+
+    changed settings_open => {
+        if (self.settings_open) {
+            SettingsState.open();
+        }
+    }
+
+    // Newest app-log line, which is what the device-code dialog shows while a sign-in runs.
+    property <string> newest_log: App.app_log.length > 0
+        ? App.app_log[App.app_log.length - 1].text
+        : "";
 
     // The newest log line, shown as a toast while it is a warning.
     property <string> toast_text: App.app_log.length > 0
@@ -365,6 +391,55 @@ export component AppWindow inherits Window {
         }
         cancel => {
             BrowserState.choice_cancel();
+        }
+    }
+
+    // Microsoft sign-in. The status line is the newest log line, which is where the login's
+    // own progress lands; it is only read while the sign-in is running.
+    DeviceCodeDialog {
+        width: root.width;
+        height: root.height;
+        open: AccountsState.device_open;
+        code: AccountsState.device_code;
+        uri: AccountsState.device_uri;
+        status: root.newest_log;
+        busy: AccountsState.busy;
+        cancel => {
+            AccountsState.cancel_sign_in();
+        }
+    }
+
+    // Offline-account name prompt, opened by the accounts screen's Add offline button.
+    PromptDialog {
+        width: root.width;
+        height: root.height;
+        open: AccountsState.prompt_open;
+        title: "Add offline account";
+        label: "Player name";
+        value <=> AccountsState.prompt_value;
+        accept_label: "Add";
+        accept(name) => {
+            AccountsState.prompt_ok(name);
+        }
+        cancel => {
+            AccountsState.prompt_cancel();
+        }
+    }
+
+    // Remove-account confirmation.
+    ConfirmDialog {
+        width: root.width;
+        height: root.height;
+        open: AccountsState.confirm_open;
+        title: "Remove account?";
+        text: AccountsState.confirm_text;
+        confirm_label: "Remove";
+        danger: true;
+        confirm => {
+            AccountsState.confirm_yes();
+        }
+        cancel => {
+            AccountsState.confirm_no();
         }
     }
 

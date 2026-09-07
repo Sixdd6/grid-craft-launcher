@@ -1,0 +1,92 @@
+import { Theme } from "../theme.slint";
+import { Dialog } from "dialog.slint";
+
+// The Microsoft device-code sign-in: the code to type, the page to type it on, and Cancel.
+//
+// It does not close itself: `src/screens/accounts.rs` sets `open` back to false when the
+// sign-in ends, so the panel stays up while the login thread is still polling.
+//
+// There is no clipboard call in Slint 1.17 for application code (`set_clipboard_text` is a
+// method of the `Platform` trait a backend implements), so the code is shown in a large
+// read-only `TextInput` instead: it can be selected and copied with Ctrl+C.
+export component DeviceCodeDialog inherits Rectangle {
+    // Whether the panel is visible.
+    in property <bool> open: true;
+    // The short code the user types on Microsoft's page, empty until it arrives.
+    in property <string> code: "F7X9-QK4D";
+    // The page the user opens to enter that code.
+    in property <string> uri: "https://www.microsoft.com/link";
+    // One line about what the sign-in is doing, fed by the login's own log lines.
+    in property <string> status: "Waiting for approval…";
+    // True while the sign-in is still running.
+    in property <bool> busy: true;
+
+    // The user pressed Cancel, or clicked outside the panel.
+    callback cancel();
+
+    Dialog {
+        width: root.width;
+        height: root.height;
+        open: root.open;
+        title: "Sign in with Microsoft";
+        close-text: "Cancel";
+        close => {
+            root.cancel();
+        }
+
+        VerticalLayout {
+            spacing: Theme.gap;
+
+            Text {
+                text: "Open the page below and enter this code. This window keeps waiting "
+                    + "until you approve the sign-in.";
+                color: Theme.text-muted;
+                font-size: Theme.font-size;
+                wrap: word-wrap;
+            }
+
+            // The code, selectable so Ctrl+C copies it. Read-only: nothing here is typed.
+            Rectangle {
+                height: Theme.row-height * 1.6;
+                background: Theme.surface-raised;
+                border-radius: Theme.radius;
+                border-width: 1px;
+                border-color: Theme.border;
+
+                TextInput {
+                    text: root.code == "" ? "waiting for a code…" : root.code;
+                    read-only: true;
+                    single-line: true;
+                    color: root.code == "" ? Theme.text-muted : Theme.text;
+                    font-size: Theme.font-size-h1;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    selection-background-color: Theme.accent;
+                    selection-foreground-color: Theme.accent-text;
+                    width: parent.width - 2 * Theme.pad;
+                    height: parent.height;
+                }
+            }
+
+            Text {
+                text: "Select the code and press Ctrl+C to copy it.";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+            }
+
+            Text {
+                text: root.uri;
+                color: Theme.accent;
+                font-size: Theme.font-size;
+                wrap: word-wrap;
+            }
+
+            Text {
+                text: root.busy ? root.status : "";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+                wrap: word-wrap;
+            }
+        }
+    }
+}

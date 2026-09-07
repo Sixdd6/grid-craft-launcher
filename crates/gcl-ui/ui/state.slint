@@ -1,4 +1,4 @@
-import { ContentRow, LogLine, PendingRow, SettingRow } from "types.slint";
+import { AccountRow, ContentRow, LogLine, PendingRow, SettingRow } from "types.slint";
 
 // Everything the instance detail screen and its prompt read and report.
 //
@@ -134,4 +134,138 @@ export global InstanceState {
     callback prompt_ok(string);
     // The offline-name prompt was dismissed.
     callback prompt_cancel();
+}
+
+// Everything the accounts screen, its name prompt, and the device-code dialog read and report.
+//
+// The screen lives inside an `if` in `app.slint`, so Rust cannot reach its properties. This
+// global is the seam, the same way `InstanceState` is for the detail view:
+// `src/screens/accounts.rs` binds it, and the screen reads it directly.
+//
+// Every default here is preview content: `just ui-preview screens/accounts.slint` shows it.
+export global AccountsState {
+    // Saved accounts, in the order the store holds them.
+    in-out property <[AccountRow]> rows: [
+        {
+            id: "b50ad385-829d-3141-a216-7e7d7539ba7f",
+            name: "Notch",
+            kind: "offline",
+            expires: "",
+            active: true,
+        },
+        {
+            id: "069a79f4-44e9-4726-a5be-fca90e38aaf5",
+            name: "Steve",
+            kind: "msa",
+            expires: "2026-09-07 10:22",
+            active: false,
+        },
+    ];
+    // Whether a Microsoft client id is configured, which is what makes sign-in possible.
+    in-out property <bool> msa_available: true;
+    // Why sign-in is off, shown next to the disabled button. Empty while it is on.
+    in-out property <string> msa_hint: "";
+    // True while a store operation, a refresh, or a sign-in is running.
+    in-out property <bool> busy: false;
+    // One line about the last thing that happened here.
+    in-out property <string> status: "2 account(s)";
+
+    // Whether the device-code dialog is up.
+    in-out property <bool> device_open: false;
+    // The short code the user types on Microsoft's page. Empty until the code arrives.
+    in-out property <string> device_code: "";
+    // The page the user opens to enter that code.
+    in-out property <string> device_uri: "";
+
+    // Whether the offline-name prompt is up.
+    in-out property <bool> prompt_open: false;
+    // What the user typed into it.
+    in-out property <string> prompt_value: "";
+
+    // Whether the remove confirmation is up.
+    in-out property <bool> confirm_open: false;
+    // Body text of that confirmation.
+    in-out property <string> confirm_text: "";
+
+    // The screen was shown: read the account store and the Microsoft client id.
+    callback open();
+    // The Add offline button was pressed: ask for a name.
+    callback add_offline();
+    // The offline-name prompt was accepted. Carries the name typed.
+    callback prompt_ok(string);
+    // The offline-name prompt was dismissed.
+    callback prompt_cancel();
+    // Make one account the launch default. Carries its id.
+    callback select(string);
+    // A row's Remove button was pressed: ask first. Carries its id.
+    callback remove(string);
+    // The remove confirmation was accepted.
+    callback confirm_yes();
+    // The remove confirmation was dismissed.
+    callback confirm_no();
+    // Sign a saved Microsoft account in again from its stored refresh token. Carries its id.
+    callback refresh(string);
+    // Start a Microsoft sign-in and open the device-code dialog.
+    callback sign_in();
+    // Cancel the sign-in that dialog is showing.
+    callback cancel_sign_in();
+}
+
+// Everything the settings screen reads and reports.
+//
+// The same seam as `AccountsState`, for `src/screens/settings.rs`. The two key fields are
+// write-only on purpose: a saved key is shown as set or unset and never as its value.
+//
+// Every default here is preview content: `just ui-preview screens/settings.slint` shows it.
+export global SettingsState {
+    // The app root in use right now.
+    in-out property <string> root_path: "/home/steve/.local/share/grid-craft-launcher";
+    // Root typed into the Change field, empty until the user types one.
+    in-out property <string> new_root: "";
+    // Maximum number of concurrent downloads.
+    in-out property <int> parallel: 8;
+    // Default minimum heap, in MiB.
+    in-out property <int> jvm_min: 1024;
+    // Default maximum heap, in MiB.
+    in-out property <int> jvm_max: 4096;
+    // Path to a specific `java`, empty when the launcher may choose one.
+    in-out property <string> java_path: "";
+    // Whether a CurseForge API key is configured, from the config file or the environment.
+    in-out property <bool> curseforge_key_set: false;
+    // Whether a Microsoft client id is configured.
+    in-out property <bool> msa_client_id_set: true;
+    // What the user typed into the CurseForge key field. Cleared as soon as it is saved.
+    in-out property <string> curseforge_key_input: "";
+    // What the user typed into the client id field. Cleared as soon as it is saved.
+    in-out property <string> msa_client_id_input: "";
+    // `options.txt` keys preseeded into every new instance, in key order.
+    in-out property <[SettingRow]> game_defaults: [
+        { key: "fov", value: "0.5" },
+        { key: "renderDistance", value: "12" },
+    ];
+    // One line about the last thing that happened here.
+    in-out property <string> status: "Ready";
+    // PASS/FAIL lines from the last source check, in check order.
+    in-out property <[string]> verify_lines: [];
+    // True while a save or a source check is running.
+    in-out property <bool> busy: false;
+
+    // The screen was shown: read the config.
+    callback open();
+    // Point the launcher at another app root. Carries the path typed.
+    callback save_root(string);
+    // Change the download concurrency. Carries the new count.
+    callback save_downloads(int);
+    // Save the JVM defaults. Carries min heap, max heap, and the java path, as typed.
+    callback save_jvm(string /* min */, string /* max */, string /* java_path */);
+    // Save the CurseForge API key. An empty string clears it.
+    callback save_curseforge_key(string);
+    // Save the Microsoft client id. An empty string clears it.
+    callback save_msa_client_id(string);
+    // Set one `options.txt` default. Carries the key and the value.
+    callback default_set(string /* key */, string /* value */);
+    // Drop one `options.txt` default. Carries the key.
+    callback default_unset(string);
+    // Check every configured source and the Mojang manifest. Talks to the network.
+    callback verify_sources();
 }
