@@ -58,6 +58,8 @@ export global InstancesState {
     in-out property <bool> create_open: false;
     // Name typed into that form.
     in-out property <string> create_name;
+    // True from the moment the form is submitted until the instance is on disk.
+    in-out property <bool> create_busy: false;
     // Minecraft versions the form offers, already filtered by `show_snapshots`.
     in-out property <[VersionRow]> versions;
     // Every published version. Rust owns it and re-derives `versions` from it.
@@ -260,6 +262,7 @@ export component AppWindow inherits Window {
         height: root.height;
         open: InstancesState.create_open;
         name <=> InstancesState.create_name;
+        busy: InstancesState.create_busy;
         versions: InstancesState.versions;
         version_labels: InstancesState.version_labels;
         version_index <=> InstancesState.version_index;

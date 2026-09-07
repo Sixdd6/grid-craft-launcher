@@ -12,6 +12,8 @@ export component CreateInstanceDialog inherits Rectangle {
     in-out property <bool> open: true;
     // Instance name, as typed.
     in-out property <string> name;
+    // True while the instance is being written. The form stays up, but Create is held.
+    in property <bool> busy: false;
 
     // Minecraft versions to choose from, already filtered by `show_snapshots`.
     in property <[VersionRow]> versions: [
@@ -88,7 +90,7 @@ export component CreateInstanceDialog inherits Rectangle {
         title: "New instance";
         close-text: "Cancel";
         confirm-text: "Create";
-        confirm-enabled: root.can_create;
+        confirm-enabled: root.can_create && !root.busy;
         close => {
             root.cancel();
         }

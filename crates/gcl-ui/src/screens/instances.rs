@@ -307,9 +307,16 @@ fn create_instance(
     if !can_create(name, !mc.is_empty(), index, !loader_version.is_empty()) {
         return;
     }
-    if let Some(window) = bridge.weak().upgrade() {
-        window.global::<InstancesState>().set_create_open(false);
+    let Some(window) = bridge.weak().upgrade() else {
+        return;
+    };
+    let state = window.global::<InstancesState>();
+    // The form stays up until the instance is on disk, so a second press would create a
+    // second instance.
+    if state.get_create_busy() {
+        return;
     }
+    state.set_create_busy(true);
 
     let (name, mc) = (name.to_string(), mc.to_string());
     let loader_version = (!loader_version.is_empty()).then(|| loader_version.to_string());
@@ -317,20 +324,52 @@ fn create_instance(
     let running = running.clone();
     bridge.run(
         "Create instance",
+        // The error is carried, not returned, so the form is released either way.
         move |launcher| {
             // The guard is dropped at the end of the statement: never hold one across a call.
             let defaults = launcher.config().game_defaults.clone();
-            let instance =
-                launcher
-                    .instances()
-                    .create(&name, &mc, loader, loader_version, &defaults)?;
-            // Install now so the row is ready to launch. Progress reaches the task strip
-            // through the event forwarder.
-            if loader != Loader::None {
-                launcher.install_loader(&instance.slug)?;
-            }
-            Ok(())
+            Ok(launcher
+                .instances()
+                .create(&name, &mc, loader, loader_version, &defaults)
+                .map(|instance| instance.slug)
+                .map_err(gcl_core::Error::from))
         },
+        move |window, created| {
+            let state = window.global::<InstancesState>();
+            state.set_create_busy(false);
+            let slug = match created {
+                Ok(slug) => slug,
+                Err(err) => {
+                    // Nothing was written. The form stays up with what the user typed, under
+                    // the error dialog.
+                    show_error(window, "Create instance", &err);
+                    return;
+                }
+            };
+            state.set_create_open(false);
+            state.set_create_name(SharedString::new());
+            // The instance exists now, so show it before the install starts: a loader install
+            // that fails must not leave the new instance out of the list.
+            load(&after, &running);
+            if loader != Loader::None {
+                install_loader(&after, &running, &slug);
+            }
+        },
+    );
+}
+
+/// Installs a new instance's loader, then reloads the list so its installed flag is fresh.
+///
+/// A failure only opens the error dialog: the instance is already on disk and already in the
+/// list, and a launch installs the loader again. Progress reaches the task strip through the
+/// event forwarder.
+fn install_loader(bridge: &Bridge, running: &RunState, slug: &str) {
+    let slug = slug.to_string();
+    let after = bridge.clone();
+    let running = running.clone();
+    bridge.run(
+        "Install loader",
+        move |launcher| launcher.install_loader(&slug).map(|_| ()),
         move |_window, ()| load(&after, &running),
     );
 }
