@@ -79,11 +79,13 @@ pub fn setting_row(row: &Row, edited: Layer) -> SettingRowModel {
         // a slider has nowhere to put it, and silently snapping it to a bound would hide a
         // value the file really holds. That covers a value that does not parse and a value
         // that parses outside `[min, max]`.
+        // `display` is the stored-to-shown scaling `fov` needs; nothing reads it yet.
         Control::Slider {
             min,
             max,
             step,
             decimals,
+            display: _,
         } => {
             let Ok(parsed) = row.value.parse::<f64>() else {
                 return model;

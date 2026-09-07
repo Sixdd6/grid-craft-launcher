@@ -247,7 +247,7 @@ mod tests {
             ("gamma", "0.8"),
             ("customPreseed", "1"),
         ]);
-        let overrides = map(&[("fov", "90"), ("customOverride", "2")]);
+        let overrides = map(&[("fov", "0.5"), ("customOverride", "2")]);
         // gamma is preseeded as well: the file value wins.
         let current = OptionsFile::parse("maxFps:30\ngamma:0.7\ncustomFile:3\n");
 

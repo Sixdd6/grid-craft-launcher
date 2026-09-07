@@ -15,7 +15,7 @@ expression: summary
   ],
   [
     "fov",
-    "90",
+    "0.5",
     "Override"
   ],
   [
@@ -55,7 +55,7 @@ expression: summary
   ],
   [
     "renderClouds",
-    "true",
+    "\"true\"",
     "Default"
   ],
   [
@@ -104,6 +104,41 @@ expression: summary
     "Default"
   ],
   [
+    "cloudRange",
+    "128",
+    "Default"
+  ],
+  [
+    "weatherRadius",
+    "10",
+    "Default"
+  ],
+  [
+    "vignette",
+    "true",
+    "Default"
+  ],
+  [
+    "cutoutLeaves",
+    "true",
+    "Default"
+  ],
+  [
+    "chunkSectionFadeInTime",
+    "0.75",
+    "Default"
+  ],
+  [
+    "glintSpeed",
+    "0.5",
+    "Default"
+  ],
+  [
+    "glintStrength",
+    "0.75",
+    "Default"
+  ],
+  [
     "mouseSensitivity",
     "0.5",
     "Default"
@@ -141,6 +176,26 @@ expression: summary
   [
     "mouseWheelSensitivity",
     "1.0",
+    "Default"
+  ],
+  [
+    "invertXMouse",
+    "false",
+    "Default"
+  ],
+  [
+    "toggleAttack",
+    "false",
+    "Default"
+  ],
+  [
+    "toggleUse",
+    "false",
+    "Default"
+  ],
+  [
+    "sprintWindow",
+    "7",
     "Default"
   ],
   [
@@ -194,6 +249,11 @@ expression: summary
     "Default"
   ],
   [
+    "soundCategory_ui",
+    "1.0",
+    "Default"
+  ],
+  [
     "showSubtitles",
     "false",
     "Default"
@@ -225,7 +285,7 @@ expression: summary
   ],
   [
     "chatHeightUnfocused",
-    "0.44366196",
+    "0.4375",
     "Default"
   ],
   [
@@ -289,13 +349,43 @@ expression: summary
     "Default"
   ],
   [
+    "chatDelay",
+    "0.0",
+    "Default"
+  ],
+  [
+    "notificationDisplayTime",
+    "1.0",
+    "Default"
+  ],
+  [
+    "highContrast",
+    "false",
+    "Default"
+  ],
+  [
+    "darknessEffectScale",
+    "1.0",
+    "Default"
+  ],
+  [
+    "damageTiltStrength",
+    "1.0",
+    "Default"
+  ],
+  [
+    "menuBackgroundBlurriness",
+    "5",
+    "Default"
+  ],
+  [
     "lang",
     "en_us",
     "Default"
   ],
   [
     "mainHand",
-    "right",
+    "\"right\"",
     "Default"
   ],
   [
@@ -315,7 +405,7 @@ expression: summary
   ],
   [
     "syncChunkWrites",
-    "true",
+    "false",
     "Default"
   ],
   [
@@ -335,7 +425,7 @@ expression: summary
   ],
   [
     "hideMatchedNames",
-    "false",
+    "true",
     "Default"
   ],
   [

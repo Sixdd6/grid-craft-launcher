@@ -29,7 +29,8 @@ bytes.workspace = true
 futures-util.workspace = true
 tokio-util.workspace = true
 uuid.workspace = true
-time.workspace = true
+# `local-offset` lets `launch::log4j` show game log timestamps in the machine's time zone.
+time = { workspace = true, features = ["local-offset"] }
 zip.workspace = true
 
 # Unix-only: `SIGTERM` then `SIGKILL` for `Launcher::stop_instance`.

@@ -4,14 +4,17 @@
 //! account, an instance, and JVM settings into a [`LaunchCommand`]. [`spawn::spawn`] starts it,
 //! streams both output pipes to the event sink and to a log file, and [`spawn::wait`] returns
 //! the exit code. [`crash::crash_hint`] reads that log back into a one-line reason when the
-//! game exits non-zero.
+//! game exits non-zero. [`log4j::EventParser`] turns the game's log4j XML output into plain
+//! lines first, so the file, the sink, and the hint never see markup.
 
 pub mod command;
 pub mod crash;
+pub mod log4j;
 pub mod spawn;
 
 pub use command::{JvmSettings, LaunchCommand, LaunchInputs, build};
 pub use crash::crash_hint;
+pub use log4j::{EventParser, LogRecord};
 pub use spawn::{ChildHandle, RunningGame, force_stop, request_stop, spawn, wait};
 
 /// Errors building or running a launch command.

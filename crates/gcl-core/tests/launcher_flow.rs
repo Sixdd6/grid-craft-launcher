@@ -862,8 +862,9 @@ async fn instance_overrides_are_set_and_unset_through_the_launcher() {
     tokio::task::spawn_blocking(move || {
         let (launcher, slug) = instance_launcher(&dir);
 
+        // `fov` is stored as a fraction of the 30-110 degree range: 0.5 is 90 degrees.
         launcher
-            .set_instance_override(&slug, "fov", "90")
+            .set_instance_override(&slug, "fov", "0.5")
             .expect("set the override");
         let saved = launcher.instances().get(&slug).expect("reload");
         assert_eq!(
@@ -872,7 +873,7 @@ async fn instance_overrides_are_set_and_unset_through_the_launcher() {
                 .settings_overrides
                 .get("fov")
                 .map(String::as_str),
-            Some("90")
+            Some("0.5")
         );
 
         assert!(

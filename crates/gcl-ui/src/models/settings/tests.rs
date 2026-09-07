@@ -183,7 +183,8 @@ fn a_search_matches_key_or_label_and_opens_the_group_it_hits() {
 fn choice_token_maps_a_position_back_to_the_stored_value() {
     assert_eq!(choice_token("graphicsMode", 0), Some("0"));
     assert_eq!(choice_token("graphicsMode", 2), Some("2"));
-    assert_eq!(choice_token("renderClouds", 1), Some("fast"));
+    // The catalog keeps the JSON quotes a real options.txt writes.
+    assert_eq!(choice_token("renderClouds", 1), Some("\"fast\""));
     assert_eq!(choice_token("graphicsMode", 9), None);
     assert_eq!(choice_token("graphicsMode", -1), None);
     assert_eq!(choice_token("renderDistance", 0), None);

@@ -37,6 +37,9 @@ pub enum Control {
         /// How many digits after the decimal point the stored value uses. `0` means the value
         /// is stored and parsed as an integer.
         decimals: u8,
+        /// How the stored number is shown to a user, when the two differ. `None` shows the
+        /// stored number itself.
+        display: Option<Display>,
     },
     /// A `true`/`false` switch.
     Toggle,
@@ -44,6 +47,22 @@ pub enum Control {
     Choice(&'static [(&'static str, &'static str)]),
     /// Free text, stored and displayed verbatim.
     Text,
+}
+
+/// How a slider's stored number is turned into the number a user reads.
+///
+/// `shown = stored * mul + add`, and `stored = (shown - add) / mul`. Minecraft stores `fov` as
+/// a float in `[-1.0, 1.0]`; a player sets degrees, so `fov` carries `mul: 40.0, add: 70.0`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Display {
+    /// What the stored value is multiplied by.
+    pub mul: f64,
+    /// What is added after the multiplication.
+    pub add: f64,
+    /// How many digits after the decimal point the shown value uses.
+    pub decimals: u8,
+    /// The unit shown after the number, `""` when it has none.
+    pub unit: &'static str,
 }
 
 /// One known `options.txt` key.
@@ -81,6 +100,16 @@ macro_rules! slider {
             max: $max,
             step: $step,
             decimals: $decimals,
+            display: None,
+        }
+    };
+    ($min:expr, $max:expr, $step:expr, $decimals:expr, $display:expr) => {
+        Control::Slider {
+            min: $min,
+            max: $max,
+            step: $step,
+            decimals: $decimals,
+            display: Some($display),
         }
     };
 }
@@ -104,10 +133,23 @@ pub const CATALOG: &[Setting] = &[
     },
     Setting {
         key: "fov",
+        // Stored as a float in [-1.0, 1.0]: `fov:0.0` is 70 degrees and `fov:1.0` is 110.
+        // The display scaling turns that back into the degrees a player sets.
         label: "Field of View",
         group: Group::Video,
-        control: slider!(30.0, 110.0, 1.0, 0),
-        default: "70",
+        control: slider!(
+            -1.0,
+            1.0,
+            0.025,
+            3,
+            Display {
+                mul: 40.0,
+                add: 70.0,
+                decimals: 0,
+                unit: "\u{b0}",
+            }
+        ),
+        default: "0.0",
     },
     Setting {
         key: "maxFps",
@@ -162,8 +204,13 @@ pub const CATALOG: &[Setting] = &[
         key: "renderClouds",
         label: "Clouds",
         group: Group::Video,
-        control: Control::Choice(&[("true", "On"), ("fast", "Fast"), ("false", "Off")]),
-        default: "true",
+        // The stored tokens carry their JSON quotes: a real file has `renderClouds:"true"`.
+        control: Control::Choice(&[
+            ("\"true\"", "On"),
+            ("\"fast\"", "Fast"),
+            ("\"false\"", "Off"),
+        ]),
+        default: "\"true\"",
     },
     Setting {
         key: "entityShadows",
@@ -232,6 +279,55 @@ pub const CATALOG: &[Setting] = &[
         ]),
         default: "0",
     },
+    Setting {
+        key: "cloudRange",
+        label: "Cloud Distance",
+        group: Group::Video,
+        control: slider!(2.0, 128.0, 1.0, 0),
+        default: "128",
+    },
+    Setting {
+        key: "weatherRadius",
+        label: "Weather Distance",
+        group: Group::Video,
+        control: slider!(3.0, 10.0, 1.0, 0),
+        default: "10",
+    },
+    Setting {
+        key: "vignette",
+        label: "Vignette",
+        group: Group::Video,
+        control: Control::Toggle,
+        default: "true",
+    },
+    Setting {
+        key: "cutoutLeaves",
+        label: "Leaves",
+        group: Group::Video,
+        control: Control::Toggle,
+        default: "true",
+    },
+    Setting {
+        key: "chunkSectionFadeInTime",
+        label: "Chunk Fade-In",
+        group: Group::Video,
+        control: slider!(0.0, 2.0, 0.05, 2),
+        default: "0.75",
+    },
+    Setting {
+        key: "glintSpeed",
+        label: "Glint Speed",
+        group: Group::Video,
+        control: slider!(0.0, 1.0, 0.01, 2),
+        default: "0.5",
+    },
+    Setting {
+        key: "glintStrength",
+        label: "Glint Strength",
+        group: Group::Video,
+        control: slider!(0.0, 1.0, 0.01, 2),
+        default: "0.75",
+    },
     // Controls
     Setting {
         key: "mouseSensitivity",
@@ -288,6 +384,34 @@ pub const CATALOG: &[Setting] = &[
         group: Group::Controls,
         control: slider!(0.01, 10.0, 0.01, 2),
         default: "1.0",
+    },
+    Setting {
+        key: "invertXMouse",
+        label: "Invert Mouse (Horizontal)",
+        group: Group::Controls,
+        control: Control::Toggle,
+        default: "false",
+    },
+    Setting {
+        key: "toggleAttack",
+        label: "Toggle Attack",
+        group: Group::Controls,
+        control: Control::Toggle,
+        default: "false",
+    },
+    Setting {
+        key: "toggleUse",
+        label: "Toggle Use",
+        group: Group::Controls,
+        control: Control::Toggle,
+        default: "false",
+    },
+    Setting {
+        key: "sprintWindow",
+        label: "Sprint Double-Tap Window",
+        group: Group::Controls,
+        control: slider!(0.0, 10.0, 1.0, 0),
+        default: "7",
     },
     // Sound
     Setting {
@@ -361,6 +485,13 @@ pub const CATALOG: &[Setting] = &[
         default: "1.0",
     },
     Setting {
+        key: "soundCategory_ui",
+        label: "UI Volume",
+        group: Group::Sound,
+        control: slider!(0.0, 1.0, 0.01, 2),
+        default: "1.0",
+    },
+    Setting {
         key: "showSubtitles",
         label: "Show Subtitles",
         group: Group::Sound,
@@ -407,10 +538,10 @@ pub const CATALOG: &[Setting] = &[
         key: "chatHeightUnfocused",
         label: "Chat Height (Unfocused)",
         group: Group::Chat,
-        // Eight decimals: Minecraft's default is 0.44366196, and the stored value must
-        // round-trip through `format_value` unchanged.
-        control: slider!(0.0, 1.0, 0.01, 8),
-        default: "0.44366196",
+        // Four decimals: a real 26.2 file writes 0.4375, and the stored value must round-trip
+        // through `format_value` unchanged.
+        control: slider!(0.0, 1.0, 0.0625, 4),
+        default: "0.4375",
     },
     Setting {
         key: "chatLineSpacing",
@@ -496,6 +627,48 @@ pub const CATALOG: &[Setting] = &[
         control: Control::Toggle,
         default: "true",
     },
+    Setting {
+        key: "chatDelay",
+        label: "Chat Delay",
+        group: Group::Chat,
+        control: slider!(0.0, 6.0, 0.1, 1),
+        default: "0.0",
+    },
+    Setting {
+        key: "notificationDisplayTime",
+        label: "Notification Time",
+        group: Group::Chat,
+        control: slider!(0.0, 10.0, 0.5, 1),
+        default: "1.0",
+    },
+    Setting {
+        key: "highContrast",
+        label: "High Contrast",
+        group: Group::Chat,
+        control: Control::Toggle,
+        default: "false",
+    },
+    Setting {
+        key: "darknessEffectScale",
+        label: "Darkness Pulsing",
+        group: Group::Chat,
+        control: slider!(0.0, 1.0, 0.01, 2),
+        default: "1.0",
+    },
+    Setting {
+        key: "damageTiltStrength",
+        label: "Damage Tilt",
+        group: Group::Chat,
+        control: slider!(0.0, 1.0, 0.01, 2),
+        default: "1.0",
+    },
+    Setting {
+        key: "menuBackgroundBlurriness",
+        label: "Menu Background Blur",
+        group: Group::Chat,
+        control: slider!(0.0, 10.0, 1.0, 0),
+        default: "5",
+    },
     // Other
     Setting {
         key: "lang",
@@ -508,8 +681,9 @@ pub const CATALOG: &[Setting] = &[
         key: "mainHand",
         label: "Main Hand",
         group: Group::Other,
-        control: Control::Choice(&[("right", "Right"), ("left", "Left")]),
-        default: "right",
+        // Quoted in the file, the same as `renderClouds`: `mainHand:"right"`.
+        control: Control::Choice(&[("\"right\"", "Right"), ("\"left\"", "Left")]),
+        default: "\"right\"",
     },
     Setting {
         key: "attackIndicator",
@@ -537,9 +711,9 @@ pub const CATALOG: &[Setting] = &[
         label: "Sync Chunk Writes",
         group: Group::Other,
         control: Control::Toggle,
-        // The wiki lists this default as platform-dependent, not a fixed value; `true` stands
-        // in as a starting point, and any instance's actual `options.txt` value wins over it.
-        default: "true",
+        // Platform-dependent: `true` on Windows, `false` everywhere else. A real Linux 26.2
+        // file writes `false`, and any instance's own `options.txt` value wins over this.
+        default: "false",
     },
     Setting {
         key: "useNativeTransport",
@@ -567,7 +741,7 @@ pub const CATALOG: &[Setting] = &[
         label: "Hide Matched Names",
         group: Group::Other,
         control: Control::Toggle,
-        default: "false",
+        default: "true",
     },
     Setting {
         key: "resourcePacks",
@@ -577,6 +751,33 @@ pub const CATALOG: &[Setting] = &[
         default: "[]",
     },
 ];
+
+impl Setting {
+    /// The number a user reads for a stored slider value.
+    ///
+    /// A control with no [`Display`] shows the stored number itself, so this is the identity
+    /// for every setting but `fov`.
+    pub fn to_display(&self, stored: f64) -> f64 {
+        match self.control {
+            Control::Slider {
+                display: Some(display),
+                ..
+            } => stored * display.mul + display.add,
+            _ => stored,
+        }
+    }
+
+    /// The value to store for a number a user set. The inverse of [`to_display`](Self::to_display).
+    pub fn from_display(&self, shown: f64) -> f64 {
+        match self.control {
+            Control::Slider {
+                display: Some(display),
+                ..
+            } if display.mul != 0.0 => (shown - display.add) / display.mul,
+            _ => shown,
+        }
+    }
+}
 
 /// Looks up a setting by its `options.txt` key.
 pub fn find(key: &str) -> Option<&'static Setting> {
@@ -758,9 +959,55 @@ mod tests {
     #[test]
     fn choice_round_trips_format_and_parse() {
         let setting = find("mainHand").expect("catalog entry");
-        let value = parse_value(setting, "left").expect("parse");
-        assert_eq!(value, Value::Text("left".to_string()));
-        assert_eq!(format_value(setting, &value), "left");
+        // The quotes are part of the stored token: a real file holds `mainHand:"left"`.
+        let value = parse_value(setting, "\"left\"").expect("parse");
+        assert_eq!(value, Value::Text("\"left\"".to_string()));
+        assert_eq!(format_value(setting, &value), "\"left\"");
+    }
+
+    #[test]
+    fn an_unquoted_choice_token_is_rejected_where_the_file_quotes_it() {
+        for key in ["mainHand", "renderClouds"] {
+            let setting = find(key).expect("catalog entry");
+            let bare = setting.default.trim_matches('"');
+            let err = parse_value(setting, bare).expect_err("bare token");
+            assert!(matches!(err, Error::BadChoice { .. }), "{key}: {err:?}");
+        }
+    }
+
+    #[test]
+    fn fov_is_stored_as_a_fraction_and_shown_as_degrees() {
+        let setting = find("fov").expect("catalog entry");
+        assert_eq!(setting.default, "0.0");
+        assert_eq!(setting.to_display(0.0), 70.0);
+        assert_eq!(setting.to_display(1.0), 110.0);
+        assert_eq!(setting.to_display(-1.0), 30.0);
+        assert_eq!(setting.from_display(70.0), 0.0);
+        assert_eq!(setting.from_display(110.0), 1.0);
+        assert_eq!(setting.from_display(30.0), -1.0);
+        assert_eq!(setting.from_display(setting.to_display(0.25)), 0.25);
+    }
+
+    #[test]
+    fn a_slider_without_display_scaling_shows_its_stored_value() {
+        let setting = find("renderDistance").expect("catalog entry");
+        assert_eq!(setting.to_display(16.0), 16.0);
+        assert_eq!(setting.from_display(16.0), 16.0);
+        let toggle = find("fullscreen").expect("catalog entry");
+        assert_eq!(toggle.to_display(1.0), 1.0);
+        assert_eq!(toggle.from_display(1.0), 1.0);
+    }
+
+    #[test]
+    fn only_fov_carries_display_scaling() {
+        for setting in CATALOG {
+            if let Control::Slider {
+                display: Some(_), ..
+            } = setting.control
+            {
+                assert_eq!(setting.key, "fov", "unexpected display scaling");
+            }
+        }
     }
 
     #[test]

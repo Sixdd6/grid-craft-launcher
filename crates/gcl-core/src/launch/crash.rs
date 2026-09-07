@@ -2,8 +2,11 @@
 
 use std::path::Path;
 
-/// Log markers that usually carry the reason a Minecraft launch died.
-const MARKERS: [&str; 4] = ["Exception", "Caused by", "Mod File:", "Mixin"];
+/// Log markers that usually carry the reason a Minecraft launch died, most telling first.
+///
+/// A stack trace holds both a `Caused by` line and the generic exception line that wraps it, so
+/// the more specific marker is looked for across the whole tail before the next one is tried.
+const MARKERS: [&str; 4] = ["Caused by", "Mod File:", "Mixin", "Exception"];
 
 /// How many lines from the end of the log are scanned.
 const TAIL_LINES: usize = 200;
@@ -16,9 +19,9 @@ pub const GENERIC_HINT: &str = "non-zero exit; read the log";
 
 /// Reads `log` and returns a one-line reason for the exit.
 ///
-/// It scans the last 200 lines for the first line naming an exception, a cause, a
-/// mod file, or a mixin, and quotes it trimmed to 160 characters. An unreadable log,
-/// or one with no such line, gives [`GENERIC_HINT`].
+/// It scans the last 200 lines for a line naming a cause, a mod file, a mixin, or an exception,
+/// in that order, and quotes the first one it finds trimmed to 160 characters. An unreadable
+/// log, or one with no such line, gives [`GENERIC_HINT`].
 pub fn crash_hint(log: &Path) -> String {
     match std::fs::read_to_string(log) {
         Ok(text) => hint_from_log(&text),
@@ -33,14 +36,16 @@ pub fn crash_hint(log: &Path) -> String {
 pub fn hint_from_log(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let tail = &lines[lines.len().saturating_sub(TAIL_LINES)..];
-    match tail
-        .iter()
-        .map(|line| line.trim())
-        .find(|line| MARKERS.iter().any(|marker| line.contains(marker)))
-    {
-        Some(line) => trim_to(line, MAX_CHARS),
-        None => GENERIC_HINT.to_string(),
+    for marker in MARKERS {
+        if let Some(line) = tail
+            .iter()
+            .map(|line| line.trim())
+            .find(|line| line.contains(marker))
+        {
+            return trim_to(line, MAX_CHARS);
+        }
     }
+    GENERIC_HINT.to_string()
 }
 
 /// Cuts `line` to `max` characters, marking a cut with a trailing `…`.
@@ -83,6 +88,43 @@ mod tests {
             log.push_str(&format!("line {i}\n"));
         }
         assert_eq!(hint_from_log(&log), GENERIC_HINT);
+    }
+
+    #[test]
+    fn a_cause_beats_a_generic_exception_that_came_first() {
+        let log = "java.lang.RuntimeException: something went wrong\n\
+                   \tat Main.main(Main.java:1)\n\
+                   Caused by: java.lang.NoSuchMethodError: sodium\n";
+        assert_eq!(
+            hint_from_log(log),
+            "Caused by: java.lang.NoSuchMethodError: sodium"
+        );
+    }
+
+    #[test]
+    fn a_mod_file_beats_a_generic_exception_that_came_first() {
+        let log = "java.lang.RuntimeException: something went wrong\n\
+                   Mod File: /mods/sodium-fabric-0.5.8.jar\n";
+        assert_eq!(
+            hint_from_log(log),
+            "Mod File: /mods/sodium-fabric-0.5.8.jar"
+        );
+    }
+
+    #[test]
+    fn a_converted_realms_failure_reads_as_plain_text() {
+        // What `launch::log4j` makes of the RealmsAvailability event in a real 26.2 game log.
+        let log = "[16:59:01] [Download-2/INFO]: Could not authorize you against Realms server\n\
+                   [16:59:01] [Download-2/ERROR]: Couldn't connect to realms\n\
+                   com.mojang.realmsclient.exception.RealmsServiceException: Realms authentication error\n\
+                   \tat knot//com.mojang.realmsclient.client.RealmsClient.execute(RealmsClient.java:528)\n";
+        let hint = hint_from_log(log);
+        assert_eq!(
+            hint,
+            "com.mojang.realmsclient.exception.RealmsServiceException: Realms authentication error"
+        );
+        assert!(!hint.contains("log4j"), "{hint}");
+        assert!(!hint.contains("CDATA"), "{hint}");
     }
 
     #[test]

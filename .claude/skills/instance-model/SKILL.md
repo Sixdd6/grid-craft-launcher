@@ -99,9 +99,21 @@ directory and a `BTreeMap<String, String>`, never an `Instance`, so `instances::
 `settings::catalog` is the table of keys the launcher understands: `CATALOG: &[Setting]`, one
 `Setting { key, label, group, control, default }` per key, in the order a screen shows them.
 `Group` is `Video`, `Controls`, `Sound`, `Chat`, or `Other`. `Control` is `Slider { min, max,
-step, decimals }`, `Toggle`, `Choice(&[(token, label)])`, or `Text`. It is data, not code —
-adding a key is one row, and `docs/research/2026-09-07-options-txt-catalog.md` is where the
-ranges and tokens come from.
+step, decimals, display }`, `Toggle`, `Choice(&[(token, label)])`, or `Text`. It is data, not
+code — adding a key is one row, and `docs/research/2026-09-07-options-txt-catalog.md` is where
+the ranges and tokens come from. That document was checked against a real 26.2 `options.txt` on
+2026-09-07; entries it still marks VERIFY were not.
+
+**A choice token carries the quotes the file writes.** Minecraft JSON-quotes some string values
+and not others: `renderClouds:"true"` and `mainHand:"right"` are quoted, `lang:en_us` is not.
+The catalog stores the quotes as part of the token, so `renderClouds`'s tokens are `"\"true\""`,
+`"\"fast\""`, `"\"false\""`. A bare `true` is `Error::BadChoice`.
+
+**A slider's stored number is not always the number a user reads.** `Slider.display` is
+`Option<Display>`, and `Display { mul, add, decimals, unit }` gives `shown = stored * mul + add`.
+`fov` is the only key that uses it: 26.2 stores a float in `[-1.0, 1.0]` where `0.0` is 70
+degrees, so `fov` carries `mul: 40.0, add: 70.0, decimals: 0, unit: "°"`. `Setting::to_display`
+and `Setting::from_display` convert both ways and are the identity for every other setting.
 
 `catalog::find(key)` looks a key up. `format_value` and `parse_value` round-trip the stored
 form Minecraft writes: `true`/`false` for a toggle, a float with its own `decimals` for a

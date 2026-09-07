@@ -11,6 +11,7 @@ use tokio::task::JoinHandle;
 
 use super::Error;
 use super::command::LaunchCommand;
+use super::log4j::{EventParser, LogRecord};
 use crate::events::{Event, EventSink, LogLevel};
 
 /// A shared handle to the game's child process.
@@ -276,6 +277,11 @@ pub async fn wait(game: RunningGame) -> Result<i32, Error> {
 }
 
 /// Spawns a task that turns every line of `stream` into a `(level, line)` message.
+///
+/// Every line goes through an [`EventParser`] first, so the game's log4j XML becomes the plain
+/// `[HH:MM:SS] [thread/LEVEL]: message` lines the log file, the sink, and
+/// [`crate::launch::crash_hint`] all read. A line that is not part of an event is forwarded as
+/// it came, at `level`.
 fn read_lines<R>(
     stream: R,
     level: LogLevel,
@@ -285,12 +291,13 @@ where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
+        let mut parser = EventParser::new(level);
         let mut lines = BufReader::new(stream).lines();
         loop {
             match lines.next_line().await {
                 Ok(Some(line)) => {
-                    if tx.send((level, line)).is_err() {
-                        break;
+                    if !send_all(&tx, parser.push(&line)) {
+                        return;
                     }
                 }
                 Ok(None) => break,
@@ -300,7 +307,18 @@ where
                 }
             }
         }
+        send_all(&tx, parser.flush());
     })
+}
+
+/// Sends every record on. `false` means the receiver is gone and reading should stop.
+fn send_all(tx: &UnboundedSender<(LogLevel, String)>, records: Vec<LogRecord>) -> bool {
+    for record in records {
+        if tx.send((record.level, record.text)).is_err() {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -350,6 +368,43 @@ mod tests {
         let written = std::fs::read_to_string(&log_path).expect("read log");
         assert!(written.contains("out\n"), "{written}");
         assert!(written.contains("err\n"), "{written}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn log4j_events_reach_the_file_and_the_sink_as_plain_lines() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log_path = dir.path().join("logs/latest.log");
+        let event = "  <log4j:Event logger=\"FabricLoader\" timestamp=\"1788800335568\" \
+             level=\"WARN\" thread=\"main\">\n\
+             <log4j:Message><![CDATA[Mappings not present!]]></log4j:Message>\n\
+             </log4j:Event>";
+        let cmd = LaunchCommand {
+            program: PathBuf::from("sh"),
+            args: vec!["-c".to_string(), format!("cat <<'XML'\n{event}\nXML")],
+            cwd: dir.path().to_path_buf(),
+            env: Vec::new(),
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let game = spawn(&cmd, log_path.clone(), tx).await.expect("spawn");
+        assert_eq!(wait(game).await.expect("wait"), 0);
+
+        let mut logs = Vec::new();
+        while let Ok(Event::Log { level, message }) = rx.try_recv() {
+            logs.push((level, message));
+        }
+        logs.pop().expect("summary line");
+        assert_eq!(logs.len(), 1, "{logs:?}");
+        assert_eq!(logs[0].0, LogLevel::Warn, "the event's own level");
+        assert!(
+            logs[0].1.ends_with("[main/WARN]: Mappings not present!"),
+            "{:?}",
+            logs[0].1
+        );
+
+        let written = std::fs::read_to_string(&log_path).expect("read log");
+        assert!(!written.contains("log4j"), "{written}");
+        assert!(written.contains("Mappings not present!\n"), "{written}");
     }
 
     #[cfg(unix)]
