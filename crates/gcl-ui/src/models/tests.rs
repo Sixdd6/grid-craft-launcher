@@ -6,11 +6,13 @@ use std::path::PathBuf;
 use gcl_core::auth::{Account, AccountKind};
 use gcl_core::instances::Instance;
 use gcl_core::instances::model::{ContentEntry, ContentKind, InstanceConfig, Loader};
+use gcl_core::loaders::LoaderVersion;
+use gcl_core::mojang::manifest::{ManifestEntry, VersionType};
 use gcl_core::sources::{SearchHit, SourceId};
 
 use super::{
-    account_row, content_row, format_bytes, format_downloads, instance_row, search_row,
-    setting_rows, short_time,
+    account_row, content_row, format_bytes, format_downloads, instance_row, loader_version_row,
+    search_row, setting_rows, short_time, version_row,
 };
 
 #[test]
@@ -133,4 +135,50 @@ fn setting_rows_follow_key_order() {
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].key.as_str(), "difficulty");
     assert_eq!(rows[1].key.as_str(), "fov");
+}
+
+#[test]
+fn version_row_lowercases_the_channel_and_shortens_the_date() {
+    let entry = ManifestEntry {
+        id: "1.21".into(),
+        kind: VersionType::Snapshot,
+        url: "https://example.invalid/1.21.json".into(),
+        time: "2026-06-13T13:12:00+00:00".into(),
+        release_time: "2026-06-13T13:12:00+00:00".into(),
+        sha1: "0".repeat(40),
+        compliance_level: 1,
+    };
+    let row = version_row(&entry);
+    assert_eq!(row.id.as_str(), "1.21");
+    assert_eq!(row.kind.as_str(), "snapshot");
+    assert_eq!(row.release_time.as_str(), "2026-06-13 13:12");
+}
+
+#[test]
+fn version_row_names_the_old_channels_in_one_word() {
+    let entry = ManifestEntry {
+        id: "b1.7.3".into(),
+        kind: VersionType::OldBeta,
+        url: String::new(),
+        time: String::new(),
+        release_time: "not a date".into(),
+        sha1: String::new(),
+        compliance_level: 0,
+    };
+    let row = version_row(&entry);
+    assert_eq!(row.kind.as_str(), "oldbeta");
+    assert_eq!(row.release_time.as_str(), "not a date");
+}
+
+#[test]
+fn loader_version_row_carries_both_flags() {
+    let version = LoaderVersion {
+        version: "0.16.9".into(),
+        stable: true,
+        recommended: true,
+    };
+    let row = loader_version_row(&version);
+    assert_eq!(row.version.as_str(), "0.16.9");
+    assert!(row.stable);
+    assert!(row.recommended);
 }

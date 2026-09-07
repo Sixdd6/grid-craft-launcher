@@ -8,6 +8,7 @@ mod events;
 // The converters land with the screens that use them, in tasks 3 to 7.
 #[allow(dead_code)]
 mod models;
+mod screens;
 
 use std::process::ExitCode;
 use std::sync::Arc;

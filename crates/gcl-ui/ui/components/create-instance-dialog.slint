@@ -1,0 +1,162 @@
+import { CheckBox, ComboBox, LineEdit } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { LoaderVersionRow, VersionRow } from "../types.slint";
+import { Dialog } from "dialog.slint";
+
+// The new-instance form: a name, a Minecraft version, an optional loader, and its build.
+//
+// The two `*_labels` models are what the `ComboBox`es show; the matching row models carry the
+// ids the form reports back through `confirm`. Rust sets both halves together.
+export component CreateInstanceDialog inherits Rectangle {
+    // Whether the modal is visible.
+    in-out property <bool> open: true;
+    // Instance name, as typed.
+    in-out property <string> name;
+
+    // Minecraft versions to choose from, already filtered by `show_snapshots`.
+    in property <[VersionRow]> versions: [
+        { id: "1.21", kind: "release", release_time: "2026-06-13 13:12" },
+        { id: "1.20.1", kind: "release", release_time: "2025-06-12 10:01" },
+    ];
+    // One label per entry of `versions`, in the same order.
+    in property <[string]> version_labels: ["1.21", "1.20.1"];
+    // Index into `versions`, or -1 when nothing is chosen.
+    in-out property <int> version_index: 0;
+    // Whether snapshots are offered as well as releases.
+    in-out property <bool> show_snapshots: false;
+
+    // 0 none, 1 fabric, 2 quilt, 3 forge, 4 neoforge.
+    in-out property <int> loader_index: 0;
+    // Builds of the chosen loader for the chosen Minecraft version, newest first.
+    in property <[LoaderVersionRow]> loader_versions;
+    // One label per entry of `loader_versions`, in the same order.
+    in property <[string]> loader_version_labels;
+    // Index into `loader_versions`, or -1 when nothing is chosen.
+    in-out property <int> loader_version_index: -1;
+    // True while the loader build list is being fetched.
+    in property <bool> loading_loader_versions: false;
+
+    // Ask for the builds of `loader` that run on Minecraft `mc`.
+    callback load_loader_versions(string /* mc */, string /* loader */);
+    // The user pressed Create. Carries name, Minecraft id, loader slug, and loader build.
+    callback confirm(string /* name */, string /* mc */, string /* loader */, string /* loader_version */);
+    // The user pressed Cancel, or clicked outside the panel.
+    callback cancel();
+
+    // Loader slugs, indexed the same way as `loader_index`.
+    property <[string]> loader_slugs: ["none", "fabric", "quilt", "forge", "neoforge"];
+    // Loader names shown in the ComboBox, indexed the same way as `loader_index`.
+    property <[string]> loader_names: ["None (vanilla)", "Fabric", "Quilt", "Forge", "NeoForge"];
+
+    // The Minecraft id the form currently reports, empty when nothing is chosen.
+    property <string> chosen_mc: root.version_index >= 0
+        && root.version_index < root.versions.length
+        ? root.versions[root.version_index].id
+        : "";
+    // The loader slug the form currently reports.
+    property <string> chosen_loader: root.loader_slugs[root.loader_index];
+    // The loader build the form currently reports, empty for vanilla or no choice.
+    property <string> chosen_loader_version: root.loader_index > 0
+        && root.loader_version_index >= 0
+        && root.loader_version_index < root.loader_versions.length
+        ? root.loader_versions[root.loader_version_index].version
+        : "";
+    // Create stays disabled until the form names an instance a launch could build.
+    property <bool> can_create: root.name != ""
+        && root.chosen_mc != ""
+        && (root.loader_index == 0 || root.chosen_loader_version != "");
+
+    // Picking another version or loader invalidates the build list, so ask for a new one.
+    changed version_index => {
+        root.request_loader_versions();
+    }
+    changed loader_index => {
+        root.request_loader_versions();
+    }
+
+    // Asks the owner for the build list, when a loader and a version are both chosen.
+    function request_loader_versions() {
+        if (root.loader_index > 0 && root.chosen_mc != "") {
+            root.load_loader_versions(root.chosen_mc, root.chosen_loader);
+        }
+    }
+
+    Dialog {
+        width: root.width;
+        height: root.height;
+        open: root.open;
+        title: "New instance";
+        close-text: "Cancel";
+        confirm-text: "Create";
+        confirm-enabled: root.can_create;
+        close => {
+            root.cancel();
+        }
+        confirm => {
+            root.confirm(root.name, root.chosen_mc, root.chosen_loader, root.chosen_loader_version);
+        }
+
+        VerticalLayout {
+            spacing: Theme.gap;
+
+            Text {
+                text: "Name";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+            }
+
+            LineEdit {
+                placeholder-text: "My instance";
+                text <=> root.name;
+            }
+
+            Text {
+                text: "Minecraft version";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+            }
+
+            ComboBox {
+                model: root.version_labels;
+                current-index <=> root.version_index;
+                enabled: root.version_labels.length > 0;
+            }
+
+            CheckBox {
+                text: "Show snapshots";
+                checked <=> root.show_snapshots;
+            }
+
+            Text {
+                text: "Mod loader";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+            }
+
+            ComboBox {
+                model: root.loader_names;
+                current-index <=> root.loader_index;
+            }
+
+            if root.loader_index > 0: Text {
+                text: "Loader version";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+            }
+
+            if root.loader_index > 0 && root.loading_loader_versions: Text {
+                text: "Loading builds…";
+                color: Theme.text-muted;
+                font-size: Theme.font-size;
+                height: Theme.row-height;
+                vertical-alignment: center;
+            }
+
+            if root.loader_index > 0 && !root.loading_loader_versions: ComboBox {
+                model: root.loader_version_labels;
+                current-index <=> root.loader_version_index;
+                enabled: root.loader_version_labels.length > 0;
+            }
+        }
+    }
+}

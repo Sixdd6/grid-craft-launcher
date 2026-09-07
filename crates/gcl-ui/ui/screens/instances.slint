@@ -1,14 +1,209 @@
+import { ListView } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
 import { InstanceRow } from "../types.slint";
+import { Button } from "../components/button.slint";
 import { EmptyState } from "../components/empty-state.slint";
+import { ListRow } from "../components/list-row.slint";
+import { SearchBox } from "../components/search-box.slint";
 
-// Instance list. Filled in by task 3; the shell only needs it to exist.
+// The instance list: header, one dense row per instance, and an empty state.
+//
+// Pure layout. `rows` is already filtered by Rust; `filter` only carries what the user typed
+// back out, so the owner can re-filter and set `rows` again.
 export component InstancesScreen inherits Rectangle {
-    in property <[InstanceRow]> rows;
-    in property <string> selected-slug;
+    // Instances to show, in display order.
+    in property <[InstanceRow]> rows: [
+        {
+            slug: "vanilla",
+            name: "Vanilla 1.21",
+            minecraft: "1.21",
+            loader: "none",
+            loader_version: "",
+            last_launched: "2026-09-05 21:14",
+            installed: true,
+            running: false,
+        },
+        {
+            slug: "fabric-perf",
+            name: "Fabric Performance",
+            minecraft: "1.20.1",
+            loader: "fabric",
+            loader_version: "0.16.9",
+            last_launched: "2026-09-06 08:02",
+            installed: true,
+            running: true,
+        },
+        {
+            slug: "create-above",
+            name: "Create: Above and Beyond",
+            minecraft: "1.18.2",
+            loader: "forge",
+            loader_version: "40.2.21",
+            last_launched: "",
+            installed: false,
+            running: false,
+        },
+    ];
+    // What the user typed into the search box.
+    in-out property <string> filter;
+    // True while the list is being read from disk.
+    in property <bool> loading: false;
 
-    EmptyState {
-        title: "Instances";
-        message: "The instance list lands in task 3.";
+    // A row was activated: show its detail screen.
+    callback open(string);
+    // The Create button was pressed.
+    callback create();
+    // A row's Delete button was pressed. The owner asks for confirmation.
+    callback delete(string);
+    // A row's Launch button was pressed.
+    callback launch(string);
+    // The Refresh button was pressed.
+    callback refresh();
+
+    background: Theme.bg;
+
+    VerticalLayout {
+        padding: Theme.pad;
+        spacing: Theme.gap;
+
+        // Header: title, search, and the two list-wide actions.
+        HorizontalLayout {
+            spacing: Theme.gap;
+            height: Theme.row-height;
+
+            Text {
+                text: "Instances";
+                color: Theme.text;
+                font-size: Theme.font-size-h1;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            SearchBox {
+                placeholder: "Filter instances";
+                text <=> root.filter;
+                horizontal-stretch: 0;
+                width: 280px;
+            }
+
+            Button {
+                text: "Create";
+                kind: "primary";
+                clicked => {
+                    root.create();
+                }
+            }
+
+            Button {
+                text: "Refresh";
+                enabled: !root.loading;
+                clicked => {
+                    root.refresh();
+                }
+            }
+        }
+
+        if root.loading: Text {
+            text: "Loading instances…";
+            color: Theme.text-muted;
+            font-size: Theme.font-size;
+            vertical-alignment: center;
+            height: Theme.row-height;
+        }
+
+        if !root.loading && root.rows.length == 0: EmptyState {
+            vertical-stretch: 1;
+            title: root.filter == "" ? "No instances yet" : "No instance matches";
+            message: root.filter == ""
+                ? "Create one to pick a Minecraft version and a mod loader."
+                : "Clear the filter to see every instance.";
+        }
+
+        if !root.loading && root.rows.length > 0: ListView {
+            vertical-stretch: 1;
+
+            for row in root.rows: ListRow {
+                height: Theme.row-height + Theme.gap;
+                clicked => {
+                    root.open(row.slug);
+                }
+
+                // Name, and the slug under it when they differ.
+                Text {
+                    text: row.name;
+                    color: Theme.text;
+                    font-size: Theme.font-size;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    min-width: 100px;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: row.minecraft;
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    vertical-alignment: center;
+                    horizontal-alignment: left;
+                    horizontal-stretch: 0;
+                    width: 55px;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: row.loader == "none"
+                        ? "vanilla"
+                        : (row.loader_version == ""
+                            ? row.loader
+                            : row.loader + " " + row.loader_version);
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    vertical-alignment: center;
+                    horizontal-alignment: left;
+                    horizontal-stretch: 0;
+                    width: 95px;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: row.last_launched == "" ? "never launched" : row.last_launched;
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
+                    horizontal-stretch: 0;
+                    width: 110px;
+                    overflow: elide;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    Button {
+                        // A launch installs whatever is missing, so an instance that was
+                        // never installed can still be started. Only a running game blocks it.
+                        text: row.running ? "Running" : "Launch";
+                        kind: "primary";
+                        enabled: !row.running;
+                        clicked => {
+                            root.launch(row.slug);
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    Button {
+                        text: "Delete";
+                        clicked => {
+                            root.delete(row.slug);
+                        }
+                    }
+                }
+            }
+        }
     }
 }

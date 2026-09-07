@@ -1,0 +1,47 @@
+import { Theme } from "../theme.slint";
+import { Dialog } from "dialog.slint";
+
+// A yes/no modal built on [`Dialog`]. `danger` paints the confirming button red, for deletes.
+//
+// It does not close itself: the owner sets `open` back to false from `confirm` or `cancel`,
+// so a confirm that starts background work can keep the panel up until that work is queued.
+export component ConfirmDialog inherits Rectangle {
+    // Whether the modal is visible.
+    in-out property <bool> open: true;
+    // Headline of the panel.
+    in property <string> title: "Delete instance?";
+    // Body text under the headline.
+    in property <string> text: "This removes the instance folder and everything in it.";
+    // Label of the confirming button.
+    in property <string> confirm_label: "Delete";
+    // True when confirming destroys something.
+    in property <bool> danger: false;
+
+    // The user confirmed.
+    callback confirm();
+    // The user cancelled, or clicked outside the panel.
+    callback cancel();
+
+    Dialog {
+        width: root.width;
+        height: root.height;
+        open: root.open;
+        title: root.title;
+        close-text: "Cancel";
+        confirm-text: root.confirm_label;
+        danger: root.danger;
+        close => {
+            root.cancel();
+        }
+        confirm => {
+            root.confirm();
+        }
+
+        Text {
+            text: root.text;
+            color: Theme.text-muted;
+            font-size: Theme.font-size;
+            wrap: word-wrap;
+        }
+    }
+}

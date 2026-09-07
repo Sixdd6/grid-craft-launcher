@@ -4,6 +4,8 @@ import {
     Screen, SearchRow, SettingRow, TaskRow, VersionRow
 } from "types.slint";
 import { Rail } from "components/rail.slint";
+import { ConfirmDialog } from "components/confirm-dialog.slint";
+import { CreateInstanceDialog } from "components/create-instance-dialog.slint";
 import { Dialog } from "components/dialog.slint";
 import { ProgressBar } from "components/progress-bar.slint";
 import { InstancesScreen } from "screens/instances.slint";
@@ -35,6 +37,83 @@ export global App {
     callback dismiss_error();
 }
 
+// Everything the instances screen and its two modals read and report.
+//
+// The screens themselves stay pure layout, and they live inside an `if`, so Rust cannot reach
+// their properties. This global is the seam: `src/screens/instances.rs` binds it, and the
+// window below copies it into the screen.
+export global InstancesState {
+    // Instances to show, already filtered by `filter`.
+    in-out property <[InstanceRow]> rows;
+    // Every instance, before `filter` is applied. Rust owns it and re-derives `rows` from it.
+    in-out property <[InstanceRow]> all_rows;
+    // What the user typed into the list's search box.
+    in-out property <string> filter;
+    // True while the list is being read from disk.
+    in-out property <bool> loading: false;
+
+    // Whether the new-instance form is up.
+    in-out property <bool> create_open: false;
+    // Name typed into that form.
+    in-out property <string> create_name;
+    // Minecraft versions the form offers, already filtered by `show_snapshots`.
+    in-out property <[VersionRow]> versions;
+    // Every published version. Rust owns it and re-derives `versions` from it.
+    in-out property <[VersionRow]> all_versions;
+    // One label per entry of `versions`, in the same order.
+    in-out property <[string]> version_labels;
+    // Index into `versions`, or -1 when nothing is chosen.
+    in-out property <int> version_index: -1;
+    // Whether the form offers snapshots as well as releases.
+    in-out property <bool> show_snapshots: false;
+    // 0 none, 1 fabric, 2 quilt, 3 forge, 4 neoforge.
+    in-out property <int> loader_index: 0;
+    // Builds of the chosen loader for the chosen Minecraft version.
+    in-out property <[LoaderVersionRow]> loader_versions;
+    // One label per entry of `loader_versions`, in the same order.
+    in-out property <[string]> loader_version_labels;
+    // Index into `loader_versions`, or -1 when nothing is chosen.
+    in-out property <int> loader_version_index: -1;
+    // True while the loader build list is being fetched.
+    in-out property <bool> loading_loader_versions: false;
+
+    // Whether the yes/no modal is up.
+    in-out property <bool> confirm_open: false;
+    // Headline of that modal.
+    in-out property <string> confirm_title;
+    // Body text of that modal.
+    in-out property <string> confirm_text;
+    // Label of its affirming button.
+    in-out property <string> confirm_label: "Confirm";
+    // True when confirming destroys something.
+    in-out property <bool> confirm_danger: false;
+    // Slug the yes/no modal is asking about.
+    in-out property <string> confirm_slug;
+
+    // Re-read the instance list from disk.
+    callback refresh();
+    // The search box changed. Carries the new filter.
+    callback filter_changed(string);
+    // The Create button was pressed: load versions, then open the form.
+    callback create();
+    // The form was submitted: name, Minecraft id, loader slug, loader build.
+    callback create_confirm(string, string, string, string);
+    // The form was dismissed.
+    callback create_cancel();
+    // Fetch the builds of a loader for a Minecraft version.
+    callback load_loader_versions(string /* mc */, string /* loader */);
+    // The snapshots checkbox changed. Carries its new state.
+    callback snapshots_changed(bool);
+    // Launch one instance by slug.
+    callback launch(string);
+    // A row's Delete button was pressed. Opens the yes/no modal.
+    callback delete(string);
+    // The yes/no modal was confirmed.
+    callback confirm_yes();
+    // The yes/no modal was dismissed.
+    callback confirm_no();
+}
+
 export component AppWindow inherits Window {
     title: "GRID Craft Launcher";
     background: Theme.bg;
@@ -63,7 +142,29 @@ export component AppWindow inherits Window {
                 vertical-stretch: 1;
                 background: Theme.bg;
 
-                if App.screen == Screen.instances: InstancesScreen { }
+                if App.screen == Screen.instances: InstancesScreen {
+                    rows: InstancesState.rows;
+                    filter <=> InstancesState.filter;
+                    loading: InstancesState.loading;
+                    open(slug) => {
+                        App.open_instance(slug);
+                    }
+                    create => {
+                        InstancesState.create();
+                    }
+                    delete(slug) => {
+                        InstancesState.delete(slug);
+                    }
+                    launch(slug) => {
+                        InstancesState.launch(slug);
+                    }
+                    refresh => {
+                        InstancesState.refresh();
+                    }
+                    changed filter => {
+                        InstancesState.filter_changed(self.filter);
+                    }
+                }
                 if App.screen == Screen.instance: InstanceScreen {
                     slug: App.current_slug;
                 }
@@ -139,6 +240,52 @@ export component AppWindow inherits Window {
             color: Theme.text;
             font-size: Theme.font-size-small;
             wrap: word-wrap;
+        }
+    }
+
+    // New-instance form. Always mounted; it paints nothing while `open` is false.
+    CreateInstanceDialog {
+        width: root.width;
+        height: root.height;
+        open: InstancesState.create_open;
+        name <=> InstancesState.create_name;
+        versions: InstancesState.versions;
+        version_labels: InstancesState.version_labels;
+        version_index <=> InstancesState.version_index;
+        show_snapshots <=> InstancesState.show_snapshots;
+        loader_index <=> InstancesState.loader_index;
+        loader_versions: InstancesState.loader_versions;
+        loader_version_labels: InstancesState.loader_version_labels;
+        loader_version_index <=> InstancesState.loader_version_index;
+        loading_loader_versions: InstancesState.loading_loader_versions;
+        load_loader_versions(mc, loader) => {
+            InstancesState.load_loader_versions(mc, loader);
+        }
+        confirm(name, mc, loader, loader_version) => {
+            InstancesState.create_confirm(name, mc, loader, loader_version);
+        }
+        cancel => {
+            InstancesState.create_cancel();
+        }
+        changed show_snapshots => {
+            InstancesState.snapshots_changed(self.show_snapshots);
+        }
+    }
+
+    // Yes/no modal, currently used by the delete action.
+    ConfirmDialog {
+        width: root.width;
+        height: root.height;
+        open: InstancesState.confirm_open;
+        title: InstancesState.confirm_title;
+        text: InstancesState.confirm_text;
+        confirm_label: InstancesState.confirm_label;
+        danger: InstancesState.confirm_danger;
+        confirm => {
+            InstancesState.confirm_yes();
+        }
+        cancel => {
+            InstancesState.confirm_no();
         }
     }
 

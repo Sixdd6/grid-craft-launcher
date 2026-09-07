@@ -34,9 +34,10 @@ pub fn build(
 
     // Opening an instance reads its summary off the UI thread. The detail screen that uses
     // the summary lands in task 4; for now the shell only switches to it.
+    let open_bridge = bridge.clone();
     app.on_open_instance(move |slug| {
         let slug = slug.to_string();
-        bridge.run(
+        open_bridge.run(
             "Open instance",
             move |launcher| launcher.instance_summary(&slug),
             |window, summary| {
@@ -57,6 +58,8 @@ pub fn build(
             app.set_error_text("".into());
         }
     });
+
+    crate::screens::instances::wire(&window, &bridge);
 
     start_forwarder(rx, window.as_weak());
     Ok(window)

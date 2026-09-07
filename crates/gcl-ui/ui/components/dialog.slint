@@ -6,7 +6,14 @@ export component Dialog inherits Rectangle {
     in property <bool> open: true;
     in property <string> title: "Title";
     in property <string> close-text: "Close";
+    // Set this to add a second, affirming button next to the closing one.
+    in property <string> confirm-text: "";
+    // Whether that affirming button can be pressed.
+    in property <bool> confirm-enabled: true;
+    // Paints the affirming button in the danger color, for a destructive action.
+    in property <bool> danger: false;
     callback close();
+    callback confirm();
 
     visible: root.open;
     background: Colors.black.with-alpha(0.55);
@@ -43,11 +50,23 @@ export component Dialog inherits Rectangle {
 
             HorizontalLayout {
                 alignment: end;
+                spacing: Theme.gap;
+
                 Button {
                     text: root.close-text;
-                    kind: "primary";
+                    // The closing button leads only while it is the sole action.
+                    kind: root.confirm-text == "" ? "primary" : "secondary";
                     clicked => {
                         root.close();
+                    }
+                }
+
+                if root.confirm-text != "": Button {
+                    text: root.confirm-text;
+                    kind: root.danger ? "danger" : "primary";
+                    enabled: root.confirm-enabled;
+                    clicked => {
+                        root.confirm();
                     }
                 }
             }

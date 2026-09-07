@@ -9,6 +9,9 @@ use slint::{ComponentHandle, Weak};
 use crate::{App, AppWindow};
 
 /// Holds the launcher and a weak window handle, so any callback can start background work.
+///
+/// Cloning is cheap and shares the same launcher, so every screen can keep its own handle.
+#[derive(Clone)]
 pub struct Bridge {
     launcher: Arc<Launcher>,
     weak: Weak<AppWindow>,
@@ -21,10 +24,13 @@ impl Bridge {
     }
 
     /// The shared launcher, for a caller that needs it outside a job.
-    // The screens that read the launcher directly land in tasks 3 to 7.
-    #[allow(dead_code)]
     pub fn launcher(&self) -> &Arc<Launcher> {
         &self.launcher
+    }
+
+    /// The weak window handle, for a caller that posts its own results back.
+    pub fn weak(&self) -> &Weak<AppWindow> {
+        &self.weak
     }
 
     /// Runs `job` on its own thread. On success `done` runs on the UI thread; on failure the
