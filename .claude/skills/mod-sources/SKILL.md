@@ -126,6 +126,13 @@ installed: the installed version stays, the walk goes on through
 `queue_installed_dependencies`, and the pin lands in `AddOutcome.conflicts` as a
 `DependencyConflict { project_id, title, installed_version_id, wanted_version_id, wanted_by }`.
 Two jars for one project break NeoForge and Forge mod loading, which is the whole reason.
+
+A pack file that no source id could be found for is recorded under the source `file` with
+its sha1 for a project id, so `installed` cannot match it. `add` therefore checks the
+picked *file* as well (`entry_holding_file`): an entry whose sha1 is the picked file's
+sha1, or a `file`-source entry with the picked file's name, counts as installed. That
+project is skipped, its dependencies are still walked, and a pin of another version lands
+in `conflicts` the same way.
 The CLI prints one `warning: kept ...` line per conflict and puts them in `--json`; the GUI
 browser raises one toast (`screens::browser::conflict_note`).
 

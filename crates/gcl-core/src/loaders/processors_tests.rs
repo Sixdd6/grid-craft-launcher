@@ -442,7 +442,11 @@ async fn an_accepted_output_writes_a_sidecar_that_skips_the_second_run() {
 
     let sidecar = h.root.libraries_dir().join("out/a.jar.sha1");
     let noted = std::fs::read_to_string(&sidecar).expect("sidecar");
-    assert_eq!(noted.trim(), sha1_hex(&we_built));
+    assert_eq!(
+        noted,
+        format!("{}\n{}\n", h.data.0["OUT_A_SHA"], sha1_hex(&we_built)),
+        "the sidecar binds the profile hash to the hash on disk"
+    );
 
     let second = FakeRunner::new(writes_with_a(&h, we_built), 0);
     h.run(&second, &null_sink()).await.expect("second run");
@@ -488,4 +492,133 @@ async fn a_missing_output_says_missing() {
     let err = h.run(&runner, &null_sink()).await.expect_err("no output");
 
     assert!(err.to_string().contains("missing"), "{err}");
+}
+
+/// Builds a zip holding one entry of hard-to-compress bytes, so its deflate stream is long
+/// enough that flipping one byte inside it is a real corruption.
+fn noisy_jar() -> Vec<u8> {
+    use std::io::Write;
+    let mut state: u32 = 0x1234_5678;
+    let payload: Vec<u8> = (0..8000)
+        .map(|_| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 24) as u8
+        })
+        .collect();
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut w = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .last_modified_time(
+                zip::DateTime::from_date_and_time(1989, 11, 26, 0, 0, 0).expect("time"),
+            );
+        w.start_file("assets/noise.bin", opts).expect("entry");
+        w.write_all(&payload).expect("write");
+        w.finish().expect("finish");
+    }
+    buf.into_inner()
+}
+
+#[tokio::test]
+async fn a_flipped_byte_inside_an_entry_is_rejected_by_the_crc_check() {
+    let good = noisy_jar();
+    let mut flipped = good.clone();
+    // Well past the local file header, well before the central directory: the archive
+    // still opens and lists its entry, and only reading the entry finds the damage.
+    let at = 200;
+    flipped[at] ^= 0xff;
+    assert!(
+        zip::ZipArchive::new(std::io::Cursor::new(flipped.clone())).is_ok(),
+        "the central directory must still be intact"
+    );
+
+    let mut h = Harness::new();
+    let mut data = h.data.0.clone();
+    data.insert("OUT_A_SHA".to_string(), sha1_hex(&good));
+    h.data = DataMap(data);
+
+    let runner = FakeRunner::new(writes_with_a(&h, flipped), 0);
+    let err = h
+        .run(&runner, &null_sink())
+        .await
+        .expect_err("a flipped byte must fail the install");
+
+    assert!(
+        matches!(err, Error::ProcessorOutputDamaged { ref path, .. } if path == &h.out_a()),
+        "{err:?}"
+    );
+    assert!(
+        !h.root.libraries_dir().join("out/a.jar.sha1").exists(),
+        "a damaged output gets no sidecar"
+    );
+}
+
+#[tokio::test]
+async fn a_sidecar_written_for_another_profile_hash_is_ignored() {
+    let (h, we_built) = recompressed_harness();
+
+    let first = FakeRunner::new(writes_with_a(&h, we_built.clone()), 0);
+    h.run(&first, &null_sink()).await.expect("first run");
+
+    let sidecar = h.root.libraries_dir().join("out/a.jar.sha1");
+    let noted = std::fs::read_to_string(&sidecar).expect("sidecar");
+    let lines: Vec<&str> = noted.lines().collect();
+    assert_eq!(lines.len(), 2, "expected then actual: {noted:?}");
+    assert_eq!(
+        lines[0], h.data.0["OUT_A_SHA"],
+        "the profile hash it binds to"
+    );
+    assert_eq!(lines[1], sha1_hex(&we_built), "the hash on disk");
+
+    // A new NeoForge build ships another expected hash for the same output path. The
+    // sidecar from the old profile says nothing about it, so the processor runs again.
+    let mut h2 = Harness::new();
+    let mut data = h2.data.0.clone();
+    data.insert("OUT_A_SHA".to_string(), sha1_hex(b"another-profile-hash"));
+    h2.data = DataMap(data);
+    std::fs::create_dir_all(h2.out_a().parent().expect("parent")).expect("dir");
+    std::fs::write(h2.out_a(), &we_built).expect("stale output");
+    std::fs::copy(&sidecar, h2.root.libraries_dir().join("out/a.jar.sha1")).expect("copy sidecar");
+
+    let second = FakeRunner::new(writes_with_a(&h2, we_built), 0);
+    h2.run(&second, &null_sink()).await.expect("second run");
+    assert_eq!(
+        second.calls().len(),
+        2,
+        "a sidecar bound to another profile hash must not skip the processor"
+    );
+}
+
+#[tokio::test]
+async fn a_mismatched_output_that_is_not_an_archive_is_a_plain_hash_error() {
+    let mut h = Harness::new();
+    let mut data = h.data.0.clone();
+    let out = h.root.libraries_dir().join("out/a.bin");
+    data.insert("OUT_A".to_string(), out.display().to_string());
+    data.insert("OUT_A_SHA".to_string(), sha1_hex(b"what forge built"));
+    h.data = DataMap(data);
+
+    let writes = BTreeMap::from([
+        (
+            "net.test.One".to_string(),
+            vec![(out.clone(), b"what we built".to_vec())],
+        ),
+        ("net.test.Two".to_string(), vec![(h.out_b(), BETA.to_vec())]),
+    ]);
+    let runner = FakeRunner::new(writes, 0);
+
+    let err = h
+        .run(&runner, &null_sink())
+        .await
+        .expect_err("a non-archive output must not get the lenient path");
+
+    assert!(
+        matches!(err, Error::ProcessorOutputHash { ref path, .. } if path == &out),
+        "{err:?}"
+    );
+    assert!(
+        !out.with_extension("bin.sha1").exists(),
+        "no sidecar for a plain mismatch"
+    );
 }

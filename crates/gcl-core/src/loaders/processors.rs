@@ -230,7 +230,7 @@ fn check_output(path: &Path, want: &str) -> Result<(), BadOutput> {
     let Ok(actual) = sha1_file(path) else {
         return Err(BadOutput::Missing(path.to_path_buf()));
     };
-    if actual.eq_ignore_ascii_case(want) || sidecar_holds(path, &actual) {
+    if actual.eq_ignore_ascii_case(want) || sidecar_holds(path, want, &actual) {
         return Ok(());
     }
     Err(BadOutput::Mismatch {
@@ -247,10 +247,30 @@ fn sidecar_path(path: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// True when `<output>.sha1` records exactly the hash the file on disk has now.
-fn sidecar_holds(path: &Path, actual: &str) -> bool {
-    std::fs::read_to_string(sidecar_path(path))
-        .is_ok_and(|noted| noted.trim().eq_ignore_ascii_case(actual))
+/// True when `<output>.sha1` binds this profile's hash to the hash the file has now.
+///
+/// The sidecar holds two lines, `{expected}\n{actual}\n`. Both have to match: the first
+/// against the sha1 the install profile names right now, the second against the file on
+/// disk. A sidecar written for an earlier profile — a new Forge or NeoForge build with
+/// another expected hash for the same path — says nothing about this install, so it is
+/// ignored and the processor runs again.
+fn sidecar_holds(path: &Path, want: &str, actual: &str) -> bool {
+    let Ok(noted) = std::fs::read_to_string(sidecar_path(path)) else {
+        return false;
+    };
+    let mut lines = noted.lines();
+    let (Some(expected_line), Some(actual_line)) = (lines.next(), lines.next()) else {
+        return false;
+    };
+    expected_line.trim().eq_ignore_ascii_case(want)
+        && actual_line.trim().eq_ignore_ascii_case(actual)
+}
+
+/// True when an output is an archive the CRC check can read back entry by entry.
+fn is_archive(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("jar") || e.eq_ignore_ascii_case("zip"))
 }
 
 /// Verifies a finished processor's outputs, accepting a jar the host zlib recompressed.
@@ -285,6 +305,15 @@ fn verify_outputs_blocking(outputs: &[(PathBuf, String)]) -> Result<(), Error> {
                 expected,
                 actual,
             }) => {
+                if !is_archive(&path) {
+                    // Only a jar or a zip can be recompressed into other bytes with the
+                    // same content. Anything else with another hash is simply wrong.
+                    return Err(Error::ProcessorOutputHash {
+                        path,
+                        expected,
+                        actual,
+                    });
+                }
                 if let Err(source) = archive_reads_cleanly(&path) {
                     return Err(Error::ProcessorOutputDamaged {
                         path,
@@ -302,7 +331,7 @@ fn verify_outputs_blocking(outputs: &[(PathBuf, String)]) -> Result<(), Error> {
                      Fedora and Arch) deflates to different bytes than the stream Forge hashed. \
                      Accepting it"
                 );
-                write_sidecar(&path, &actual)?;
+                write_sidecar(&path, &expected, &actual)?;
             }
         }
     }
@@ -325,13 +354,18 @@ fn archive_reads_cleanly(path: &Path) -> Result<(), std::io::Error> {
     Ok(())
 }
 
-/// Records the sha1 an output was accepted with next to it.
-fn write_sidecar(path: &Path, actual: &str) -> Result<(), Error> {
+/// Records the profile hash an output was accepted against, and the hash it really has.
+///
+/// Two lines, `{expected}\n{actual}\n`, written atomically so a killed install leaves no
+/// half-written sidecar behind.
+fn write_sidecar(path: &Path, expected: &str, actual: &str) -> Result<(), Error> {
     let sidecar = sidecar_path(path);
-    std::fs::write(&sidecar, format!("{actual}\n")).map_err(|source| Error::Io {
-        path: sidecar,
-        source,
-    })
+    crate::paths::write_atomic(&sidecar, format!("{expected}\n{actual}\n").as_bytes()).map_err(
+        |source| Error::Io {
+            path: sidecar,
+            source: std::io::Error::other(source.to_string()),
+        },
+    )
 }
 
 /// Reads a processor jar's `Main-Class`, off the async thread.

@@ -853,4 +853,250 @@ mod online {
             "{err:?}"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // mrpack files resolve to their Modrinth project
+    // -----------------------------------------------------------------------
+
+    /// Bytes of the mod an `.mrpack` in these tests ships.
+    const SODIUM_BYTES: &[u8] = b"sodium jar bytes";
+
+    /// Bytes of a file no source knows.
+    const LOCAL_BYTES: &[u8] = b"a jar only this pack has";
+
+    /// One Modrinth version as `GET /version/{id}` and `POST /version_files` answer it.
+    fn mr_version(
+        server: &MockServer,
+        project_id: &str,
+        id: &str,
+        file_name: &str,
+        bytes: &[u8],
+        dependencies: serde_json::Value,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "project_id": project_id,
+            "name": id,
+            "version_number": id,
+            "version_type": "release",
+            "date_published": "2026-01-01T00:00:00Z",
+            "game_versions": ["1.20.1"],
+            "loaders": ["fabric"],
+            "files": [{
+                "url": format!("{}/files/{file_name}", server.uri()),
+                "filename": file_name,
+                "size": bytes.len(),
+                "primary": true,
+                "hashes": { "sha1": sha1_hex(bytes) },
+            }],
+            "dependencies": dependencies,
+        })
+    }
+
+    /// One Modrinth project as `GET /project/{id}` answers it.
+    fn mr_project(id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "slug": id.to_lowercase(),
+            "title": id,
+            "description": "",
+            "project_type": "mod",
+        })
+    }
+
+    /// Serves `body` at `at` for every POST.
+    async fn serve_post(server: &MockServer, at: &str, body: String) {
+        Mock::given(method("POST"))
+            .and(path(at.to_string()))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(server)
+            .await;
+    }
+
+    /// A Modrinth mock that resolves sodium's sha1 and knows nothing about the other file.
+    async fn modrinth_hash_lookup(server: &MockServer) -> BoxSource {
+        serve(server, "/files/sodium.jar", SODIUM_BYTES.to_vec()).await;
+        serve(server, "/files/local.jar", LOCAL_BYTES.to_vec()).await;
+        let body = serde_json::json!({
+            sha1_hex(SODIUM_BYTES): mr_version(
+                server,
+                "SODIUM",
+                "sv-new",
+                "sodium.jar",
+                SODIUM_BYTES,
+                serde_json::json!([]),
+            ),
+        })
+        .to_string();
+        serve_post(server, "/version_files", body).await;
+        Arc::new(Modrinth::with_base_url(
+            HttpClient::new().expect("http"),
+            server.uri(),
+        ))
+    }
+
+    /// The two files the pack ships: one Modrinth knows, one it does not.
+    fn mrpack_files(server: &MockServer) -> Vec<PackFile> {
+        vec![
+            PackFile {
+                path: Some("mods/sodium.jar".to_string()),
+                url: Some(format!("{}/files/sodium.jar", server.uri())),
+                sha1: Some(sha1_hex(SODIUM_BYTES)),
+                size: Some(SODIUM_BYTES.len() as u64),
+                source: None,
+                required: true,
+            },
+            PackFile {
+                path: Some("mods/local.jar".to_string()),
+                url: Some(format!("{}/files/local.jar", server.uri())),
+                sha1: Some(sha1_hex(LOCAL_BYTES)),
+                size: Some(LOCAL_BYTES.len() as u64),
+                source: None,
+                required: true,
+            },
+        ]
+    }
+
+    #[tokio::test]
+    async fn an_mrpack_file_is_recorded_under_the_project_its_hash_resolves_to() {
+        let server = MockServer::start().await;
+        let source = modrinth_hash_lookup(&server).await;
+        let mut harness = Harness::new(vec![source]);
+        let mut instance = Instances::new(harness.root.clone())
+            .create("Pack", "1.20.1", Loader::Fabric, None, &BTreeMap::new())
+            .expect("create");
+
+        let files = mrpack_files(&server);
+        let placed = with_ctx!(harness, |ctx| install_mrpack_files(
+            &ctx,
+            &mut instance,
+            &files
+        )
+        .await
+        .expect("install"));
+
+        assert_eq!(placed, 2);
+        assert_eq!(instance.config.content.len(), 2);
+        let sodium = &instance.config.content[0];
+        assert_eq!(sodium.source, "modrinth", "the real source, not `file`");
+        assert_eq!(sodium.project_id, "SODIUM");
+        assert_eq!(sodium.version_id, "sv-new");
+        assert_eq!(
+            sodium.sha1.as_deref(),
+            Some(sha1_hex(SODIUM_BYTES).as_str())
+        );
+
+        let local = &instance.config.content[1];
+        assert_eq!(
+            local.source, "file",
+            "an unresolved file keeps the stand-in"
+        );
+        assert_eq!(local.project_id, sha1_hex(LOCAL_BYTES));
+
+        let warnings = harness.warnings();
+        assert!(
+            warnings.iter().any(|w| w.contains("mods/local.jar")),
+            "one warning names the file no project was found for: {warnings:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pack_mod_resolved_to_its_project_is_not_installed_twice() {
+        let server = MockServer::start().await;
+        let source = modrinth_hash_lookup(&server).await;
+
+        // Iris requires sodium, pinned to the older version the pack does not ship.
+        let iris_dep = serde_json::json!([
+            { "project_id": "SODIUM", "version_id": "sv-old", "dependency_type": "required" },
+        ]);
+        let iris = mr_version(
+            &server,
+            "IRIS",
+            "iv1",
+            "iris.jar",
+            b"iris jar bytes",
+            iris_dep,
+        );
+        serve(&server, "/files/iris.jar", b"iris jar bytes".to_vec()).await;
+        for at in ["/project/iris", "/project/IRIS"] {
+            serve(&server, at, mr_project("IRIS").to_string().into_bytes()).await;
+        }
+        serve(
+            &server,
+            "/project/SODIUM",
+            mr_project("SODIUM").to_string().into_bytes(),
+        )
+        .await;
+        serve(
+            &server,
+            "/project/IRIS/version",
+            serde_json::json!([iris]).to_string().into_bytes(),
+        )
+        .await;
+        serve(
+            &server,
+            "/version/sv-new",
+            mr_version(
+                &server,
+                "SODIUM",
+                "sv-new",
+                "sodium.jar",
+                SODIUM_BYTES,
+                serde_json::json!([]),
+            )
+            .to_string()
+            .into_bytes(),
+        )
+        .await;
+
+        let harness = Harness::new(vec![source]);
+        let mut instance = Instances::new(harness.root.clone())
+            .create("Pack", "1.20.1", Loader::Fabric, None, &BTreeMap::new())
+            .expect("create");
+
+        let files = mrpack_files(&server);
+        with_ctx!(harness, |ctx| install_mrpack_files(
+            &ctx,
+            &mut instance,
+            &files
+        )
+        .await
+        .expect("install"));
+
+        let out = with_ctx!(harness, |ctx| crate::content::add(
+            &ctx,
+            &mut instance,
+            crate::content::AddRequest {
+                source: SourceId::Modrinth,
+                project: "iris".to_string(),
+                version: None,
+                kind: None,
+                world: None,
+            }
+        )
+        .await
+        .expect("add iris"));
+
+        let mods = instance.game_dir().join("mods");
+        let jars: Vec<String> = std::fs::read_dir(&mods)
+            .expect("mods dir")
+            .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+            .filter(|n| n.contains("sodium"))
+            .collect();
+        assert_eq!(jars, ["sodium.jar"], "one sodium jar on disk");
+        assert_eq!(
+            instance
+                .config
+                .content
+                .iter()
+                .filter(|e| e.project_id == "SODIUM")
+                .count(),
+            1,
+            "one entry for the pack's sodium: {:?}",
+            instance.config.content
+        );
+        assert_eq!(out.conflicts.len(), 1, "{:?}", out.conflicts);
+        assert_eq!(out.conflicts[0].project_id, "SODIUM");
+        assert_eq!(out.conflicts[0].wanted_version_id, "sv-old");
+    }
 }

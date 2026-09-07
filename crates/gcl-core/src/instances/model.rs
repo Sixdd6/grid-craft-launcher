@@ -95,6 +95,11 @@ fn default_true() -> bool {
     true
 }
 
+/// [`ContentEntry::source`] of a file that came from a pack archive, not from a source
+/// API. No [`crate::sources::SourceId`] parses it, which is what keeps `content` from
+/// asking a source about an entry it has no project id for.
+pub const FILE_SOURCE: &str = "file";
+
 /// One installed file: a mod, pack, shader, or world.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(default)]

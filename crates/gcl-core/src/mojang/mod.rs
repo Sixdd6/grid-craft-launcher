@@ -358,7 +358,10 @@ fn merge_arguments(parent: Option<Arguments>, child: Option<Arguments>) -> Optio
 ///
 /// `keep_both` never keeps the *same* coordinate twice: a library the child repeats verbatim
 /// builds the one jar path, and a classpath that names it twice fails BootstrapLauncher's
-/// duplicate check.
+/// duplicate check. The copy kept is the parent's: vanilla publishes a `downloads.artifact`
+/// with Mojang's URL and sha1, while a loader profile usually names only a maven root, so
+/// taking the child would lose the checksum the download layer verifies against. A child
+/// entry at another version still sits next to vanilla's.
 fn merge_libraries(parent: Vec<Library>, child: Vec<Library>, keep_both: bool) -> Vec<Library> {
     let mut out = parent;
     for lib in child {
@@ -385,6 +388,8 @@ fn merge_libraries(parent: Vec<Library>, child: Vec<Library>, keep_both: bool) -
             _ => None,
         };
         match existing {
+            // An exact coordinate match under `keep_both` keeps the parent's entry.
+            Some(_) if keep_both => {}
             Some(i) => out[i] = lib,
             None => out.push(lib),
         }
@@ -979,6 +984,29 @@ mod merge_tests {
             ["3.12.0", "3.14.0"],
             "a different version is still kept next to vanilla's"
         );
+
+        // The kept copy is vanilla's, so the download url and sha1 Mojang publishes
+        // survive: the loader's entry names a maven root and no artifact at all.
+        let gson = merged
+            .libraries
+            .iter()
+            .find(|l| l.name == "com.google.code.gson:gson:2.10")
+            .expect("gson is on the merged list");
+        let artifact = gson
+            .downloads
+            .as_ref()
+            .and_then(|d| d.artifact.as_ref())
+            .expect("vanilla's artifact block is kept");
+        assert_eq!(
+            artifact.sha1, "dd9b193aef96e973d5a11ab13cd17430c2e4306b",
+            "vanilla's sha1 wins"
+        );
+        assert_eq!(
+            artifact.url,
+            "https://libraries.minecraft.net/com/google/code/gson/gson/2.10/gson-2.10.jar",
+            "vanilla's url wins"
+        );
+        assert_eq!(gson.url, None, "the loader's maven root does not leak in");
     }
 
     #[test]

@@ -991,3 +991,115 @@ async fn a_top_level_pin_replaces_the_installed_file() {
     assert_eq!(out.installed.len(), 1);
     assert!(out.conflicts.is_empty(), "{:?}", out.conflicts);
 }
+
+// ---------------------------------------------------------------------------
+// pack files with no project id
+// ---------------------------------------------------------------------------
+
+/// A source where iris requires sodium and sodium's newest version is `sv-new`.
+async fn unpinned_dependency_source(server: &MockServer) -> BoxSource {
+    let mut sodium = version("sodium", "sv-new", "0.8.13");
+    sodium.files = vec![served_file(server, "sodium-0.8.13.jar", b"sodium new").await];
+    let mut iris = version("iris", "iv1", "1.7");
+    iris.files = vec![served_file(server, "iris.jar", b"iris bytes").await];
+    iris.dependencies = vec![requires("sodium")];
+
+    FakeSource::new(SourceId::Modrinth)
+        .with(project("sodium", ContentKind::Mod), vec![sodium])
+        .with(project("iris", ContentKind::Mod), vec![iris])
+        .boxed()
+}
+
+/// Places one jar recorded the way a `.mrpack` import records a file it could not
+/// resolve: source `file`, and the sha1 standing in for both ids.
+fn place_pack_file(instance: &mut Instance, root: &Root, file_name: &str, bytes: &[u8]) {
+    let object = root.object_path(&sha1_hex(bytes)).expect("object path");
+    std::fs::create_dir_all(object.parent().expect("parent")).expect("dir");
+    std::fs::write(&object, bytes).expect("object");
+    crate::instances::content::place_file(
+        instance,
+        &object,
+        ContentEntry {
+            source: "file".to_string(),
+            project_id: sha1_hex(bytes),
+            version_id: sha1_hex(bytes),
+            file_name: file_name.to_string(),
+            sha1: Some(sha1_hex(bytes)),
+            fingerprint: None,
+            kind: ContentKind::Mod,
+            world: None,
+            enabled: true,
+        },
+    )
+    .expect("place pack file");
+}
+
+#[tokio::test]
+async fn a_pack_file_with_the_same_sha1_counts_as_installed() {
+    let server = MockServer::start().await;
+    let (_dir, root, mut instance) = fixture();
+    let mut h = Harness::new(
+        root.clone(),
+        vec![unpinned_dependency_source(&server).await],
+    );
+    place_pack_file(&mut instance, &root, "sodium-0.8.13.jar", b"sodium new");
+
+    let out = with_ctx!(h, |ctx| add(&ctx, &mut instance, request("iris"))
+        .await
+        .expect("add iris"));
+
+    let mods = instance.game_dir().join("mods");
+    let jars: Vec<String> = std::fs::read_dir(&mods)
+        .expect("mods")
+        .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+        .filter(|n| n.contains("sodium"))
+        .collect();
+    assert_eq!(jars, ["sodium-0.8.13.jar"], "one sodium jar");
+    assert_eq!(
+        instance.config.content.len(),
+        2,
+        "the pack entry and iris: {:?}",
+        instance.config.content
+    );
+    assert!(out.skipped.contains(&"sodium".to_string()), "{out:?}");
+    assert!(
+        h.logs()
+            .iter()
+            .any(|m| m.contains("sodium") && m.contains("already installed")),
+        "the pack's copy is named in the log"
+    );
+}
+
+#[tokio::test]
+async fn a_pack_file_with_the_same_name_counts_as_installed() {
+    let server = MockServer::start().await;
+    let (_dir, root, mut instance) = fixture();
+    let h = Harness::new(
+        root.clone(),
+        vec![unpinned_dependency_source(&server).await],
+    );
+    // Same file name, other bytes: a repackaged jar the pack shipped.
+    place_pack_file(
+        &mut instance,
+        &root,
+        "sodium-0.8.13.jar",
+        b"repacked sodium",
+    );
+
+    let out = with_ctx!(h, |ctx| add(&ctx, &mut instance, request("iris"))
+        .await
+        .expect("add iris"));
+
+    assert_eq!(
+        instance.config.content.len(),
+        2,
+        "no second sodium entry: {:?}",
+        instance.config.content
+    );
+    assert_eq!(
+        std::fs::read(instance.game_dir().join("mods/sodium-0.8.13.jar")).expect("jar"),
+        b"repacked sodium",
+        "the pack's file stays where it is"
+    );
+    assert!(out.skipped.contains(&"sodium".to_string()), "{out:?}");
+}

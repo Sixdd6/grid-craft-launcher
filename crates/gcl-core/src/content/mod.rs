@@ -14,7 +14,7 @@ use crate::download::{DownloadCtx, DownloadSpec, download_one};
 use crate::events::{Event, EventSink, LogLevel};
 use crate::instances::Instance;
 use crate::instances::content::{installed, place_file, place_world};
-use crate::instances::model::{ContentEntry, ContentKind, Loader};
+use crate::instances::model::{ContentEntry, ContentKind, FILE_SOURCE, Loader};
 use crate::paths::Root;
 use crate::sources::fingerprint::fingerprint_file;
 use crate::sources::{
@@ -107,6 +107,11 @@ impl ContentCtx<'_> {
             .iter()
             .find(|s| s.id() == id)
             .ok_or(Error::SourceUnavailable(id))
+    }
+
+    /// The Modrinth source, when one is configured. `None` disables a hash lookup.
+    pub(crate) fn modrinth(&self) -> Option<&BoxSource> {
+        self.sources.iter().find(|s| s.id() == SourceId::Modrinth)
     }
 
     /// Emits an [`Event::Log`] line at info level.
@@ -390,6 +395,33 @@ pub async fn add(
                 loader,
             })?;
 
+        // A pack import records a file Modrinth could not resolve under the source
+        // `file`, with its sha1 for a project id, so `installed` above cannot see it.
+        // The picked file itself still can: same bytes, or the same name in the same
+        // folder. Two jars of one mod break Forge and NeoForge mod loading.
+        if let Some(file) = primary_file(&version)
+            && let Some(existing) = entry_holding_file(instance, file)
+        {
+            let entry_version = existing.version_id.clone();
+            let file_name = existing.file_name.clone();
+            ctx.log(format!(
+                "{} is already installed as {file_name}",
+                project.title
+            ));
+            if let Some(want) = item.version.as_deref().filter(|w| *w != entry_version) {
+                outcome.conflicts.push(DependencyConflict {
+                    project_id: project.id.clone(),
+                    title: project.title.clone(),
+                    installed_version_id: entry_version,
+                    wanted_version_id: want.to_string(),
+                    wanted_by: item.parent.clone().unwrap_or_else(|| project.title.clone()),
+                });
+            }
+            outcome.skipped.push(project.id.clone());
+            queue_dependencies(&mut queue, &version.dependencies, &item, &project.title);
+            continue;
+        }
+
         match primary_file(&version) {
             Some(file) if file.url.is_some() => {
                 let entry =
@@ -427,6 +459,25 @@ pub async fn add(
     }
 
     Ok(outcome)
+}
+
+/// The installed entry that already holds this file, under whatever project id.
+///
+/// Two things count: an entry whose sha1 is the picked file's sha1 — the same bytes are
+/// already on disk, whatever the entry calls itself — and a [`FILE_SOURCE`] entry with
+/// the picked file's name, which placing the new file would silently overwrite while
+/// leaving both entries in `instance.toml`.
+fn entry_holding_file<'a>(
+    instance: &'a Instance,
+    file: &crate::sources::VersionFile,
+) -> Option<&'a ContentEntry> {
+    instance.config.content.iter().find(|entry| {
+        let same_bytes = match (entry.sha1.as_deref(), file.sha1.as_deref()) {
+            (Some(have), Some(want)) => have.eq_ignore_ascii_case(want),
+            _ => false,
+        };
+        same_bytes || (entry.source == FILE_SOURCE && entry.file_name == file.file_name)
+    })
 }
 
 /// Pushes every required dependency of `deps` onto the queue, one hop deeper.

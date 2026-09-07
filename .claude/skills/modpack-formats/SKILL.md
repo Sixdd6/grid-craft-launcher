@@ -88,10 +88,15 @@ passes an empty slice.
    - `.mrpack`: each `PackFile.path` is `safe_join`ed under the game directory;
      `content::fetch_object` downloads (or reuses) the object by its published sha1, then
      `link_or_copy` links it into place. A file under `mods/`, `resourcepacks/`, or
-     `shaderpacks/` gets a `ContentEntry` too — its `source` is `"file"`, and `project_id` and
-     `version_id` are both the file's own sha1, since an `.mrpack` file has no source, project
-     id, or version id of its own. `SourceId::parse` does not accept `"file"`, so
-     `content::check_updates` skips such an entry silently: there is no project to ask about.
+     `shaderpacks/` gets a `ContentEntry` too. One batched Modrinth hash lookup
+     (`Source::resolve_by_hash`, `POST /version_files`) runs first over every such file's
+     sha1, so the entry carries the real `(project_id, version_id)` and `content::add` can
+     see the pack's own copy of a mod. The lookup is best effort: no Modrinth source, a
+     failed request, or a hash Modrinth does not know falls back to `source: "file"` with
+     the sha1 standing in for both ids, and emits one `Event::Warning` naming the file.
+     `SourceId::parse` does not accept `"file"`, so `content::check_updates` skips such an
+     entry silently: there is no project to ask about. `instances::model::FILE_SOURCE` holds
+     that string; CurseForge pack files are unchanged, since they carry ids already.
      Anything else (a config file, a script) is placed and left off the content list, like an
      override.
    - CurseForge: `files_batch` resolves every `(project_id, file_id)` to a `Version`,

@@ -105,6 +105,16 @@ pub enum Error {
         /// Why the archive did not read back.
         source: std::io::Error,
     },
+    /// A processor output has the wrong sha1 and is not an archive to check further.
+    #[error("processor output {path} hash mismatch (expected {expected}, got {actual})")]
+    ProcessorOutputHash {
+        /// The output that is wrong.
+        path: PathBuf,
+        /// The sha1 the install profile names.
+        expected: String,
+        /// The sha1 the file on disk has.
+        actual: String,
+    },
     /// A Forge-like install needs a JVM to run its processors.
     #[error("java runtime required to install {0}")]
     JavaRequired(Loader),

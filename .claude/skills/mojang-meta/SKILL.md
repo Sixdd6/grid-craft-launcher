@@ -37,7 +37,11 @@ Loader profiles set `inheritsFrom`. Resolve parent first. Child `mainClass` wins
 `arguments` append to parent. Libraries are merged by `group:artifact:classifier`
 (`MavenCoord::merge_key`), so a natives classifier jar and its plain jar merge independently,
 with the child's version winning per key. The one exception: Forge and NeoForge expect both
-versions on the classpath, so they keep both there.
+versions on the classpath, so they keep both there. Under `keep_both` a library the child
+repeats at the *same* version is kept once, and the copy kept is the parent's: vanilla
+publishes `downloads.artifact` with Mojang's URL and sha1, while a loader profile usually
+names only a maven root, so taking the child would lose the checksum the download layer
+verifies against. A classpath naming one jar twice fails BootstrapLauncher's duplicate check.
 
 The caller passes that choice, it is not sniffed from the profile: `merge(parent, child,
 keep_both_libraries)` and `Mojang::resolve(v, keep_both_libraries)` take the flag, and the

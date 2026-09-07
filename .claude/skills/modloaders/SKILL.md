@@ -93,10 +93,16 @@ output can have. A missing output after a processor exits 0 is fatal (`Error::Pr
 "is missing"). A hash mismatch on a file that is there means opening it with the `zip` crate and
 reading every entry end to end, which checks each CRC32 against its header: an archive that reads
 cleanly is accepted with a `tracing::warn!` naming both sha1s, and one that does not fails with
-`Error::ProcessorOutputDamaged` ("hash mismatch and the archive is damaged"). An accepted
-output's real sha1 goes into `<output>.sha1`; the skip check in step 6 and `outputs_current`
-accept a file matching the profile hash **or** that sidecar, so the second install still does no
-work. Detail and evidence: `docs/research/2026-09-07-forge-processor-hashes.md`.
+`Error::ProcessorOutputDamaged` ("hash mismatch and the archive is damaged"). The lenient path is for archives only: an output whose
+path does not end in `.jar` or `.zip` fails with a plain `Error::ProcessorOutputHash` on any
+mismatch, since nothing else gets recompressed into other bytes with the same content.
+An accepted output writes `<output>.sha1` with two lines, `{expected}\n{actual}\n`: the sha1
+the install profile named, and the sha1 the file really has. The skip check in step 6 and
+`outputs_current` accept a file matching the profile hash **or** a sidecar whose *both* lines
+match — the first against the profile hash of this install, the second against the file on
+disk — so the second install does no work, while a sidecar left by an earlier Forge or
+NeoForge build with another expected hash is ignored and the processor runs again. The
+sidecar is written with `paths::write_atomic`. Detail and evidence: `docs/research/2026-09-07-forge-processor-hashes.md`.
 
 ### Cache short-circuit
 

@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use crate::content::{ContentCtx, ManualDownload};
 use crate::download::link_or_copy;
 use crate::events::Event;
-use crate::instances::model::{ContentEntry, ContentKind, Loader, PackSource};
+use crate::instances::model::{ContentEntry, ContentKind, FILE_SOURCE, Loader, PackSource};
 use crate::instances::{Instance, Instances};
 use crate::loaders::{LoaderCtx, LoaderEndpoints};
 use crate::paths::safe_join;
@@ -33,12 +33,6 @@ const CF_MANIFEST: &str = "manifest.json";
 
 /// `manifestType` value that marks a CurseForge zip as a Minecraft modpack.
 const CF_PACK_TYPE: &str = "minecraftModpack";
-
-/// `source` recorded for a content entry that came from a file, not from a source API.
-///
-/// No [`SourceId`] parses it, which is what keeps `content::check_updates` from asking a
-/// source about an entry it has no project id for.
-const FILE_SOURCE: &str = "file";
 
 /// Largest manifest this module reads out of a pack archive, in bytes.
 ///
@@ -365,9 +359,11 @@ async fn install(
 /// `instance.toml`: those are the folders the content list manages. Everything else — a
 /// config file, a script — is placed and left unrecorded, the same as an override.
 ///
-/// A recorded entry's source is [`FILE_SOURCE`], not the pack's source: the index names
-/// no project and no version at either source, so the entry cannot be updated or
-/// re-resolved.
+/// A recorded entry names the Modrinth project its sha1 resolves to, so a later
+/// `content add` sees the pack's own copy of a mod and does not install a second one.
+/// The lookup is best effort: a file Modrinth does not know, or a lookup that fails
+/// outright, falls back to [`FILE_SOURCE`] with the sha1 standing in for both ids, and
+/// says so once per file.
 async fn install_mrpack_files(
     ctx: &ContentCtx<'_>,
     instance: &mut Instance,
@@ -377,6 +373,7 @@ async fn install_mrpack_files(
     let total = files.len();
     let mut entries = Vec::new();
     let mut placed = 0usize;
+    let resolved = resolve_mrpack_hashes(ctx, files).await;
 
     for (index, file) in files.iter().enumerate() {
         let Some(path) = file.path.as_deref() else {
@@ -400,14 +397,28 @@ async fn install_mrpack_files(
         placed += 1;
 
         if let Some(kind) = kind_of_path(path) {
-            // A `.mrpack` file has no source, project id, or version id: it is only a
-            // URL and a hash. The source is recorded as `file`, which no `SourceId`
-            // parses, so `content::check_updates` leaves the entry alone. The sha1
-            // stands in for both ids, which keeps the entry unique.
+            // The index names only a URL and a hash. When Modrinth knows that hash, the
+            // entry carries the real project and version, so the content list can update
+            // it and `content::add` can see it. Otherwise the source is recorded as
+            // `file`, which no `SourceId` parses, so `content::check_updates` leaves the
+            // entry alone, and the sha1 stands in for both ids to keep it unique.
+            let (source, project_id, version_id) = match resolved.get(&sha1) {
+                Some(version) => (
+                    SourceId::Modrinth.to_string(),
+                    version.project_id.clone(),
+                    version.id.clone(),
+                ),
+                None => {
+                    let _ = ctx.sink.send(Event::Warning(format!(
+                        "no Modrinth project matches {path}; it will not be updated"
+                    )));
+                    (FILE_SOURCE.to_string(), sha1.clone(), sha1.clone())
+                }
+            };
             entries.push(ContentEntry {
-                source: FILE_SOURCE.to_string(),
-                project_id: sha1.clone(),
-                version_id: sha1.clone(),
+                source,
+                project_id,
+                version_id,
                 file_name,
                 sha1: Some(sha1),
                 fingerprint: None,
@@ -423,6 +434,52 @@ async fn install_mrpack_files(
         instance.save()?;
     }
     Ok(placed)
+}
+
+/// Resolves the sha1 of every content file in a `.mrpack` to its Modrinth version.
+///
+/// One batched `POST /version_files` for the whole pack. Only files that become a
+/// content entry are asked about; a config file or a script has no project. A missing
+/// Modrinth source, or a lookup that errors, yields an empty map: the caller then
+/// records the stand-in entry, which is what this launcher did before the lookup
+/// existed. The map is keyed by the lowercase sha1 the index published.
+async fn resolve_mrpack_hashes(
+    ctx: &ContentCtx<'_>,
+    files: &[PackFile],
+) -> BTreeMap<String, Version> {
+    let hashes: Vec<String> = files
+        .iter()
+        .filter(|f| f.path.as_deref().and_then(kind_of_path).is_some())
+        .filter_map(|f| f.sha1.as_ref().map(|s| s.to_ascii_lowercase()))
+        .collect();
+    if hashes.is_empty() {
+        return BTreeMap::new();
+    }
+    let Some(source) = ctx.modrinth() else {
+        return BTreeMap::new();
+    };
+    let versions = match source.resolve_by_hash(&hashes).await {
+        Ok(versions) => versions,
+        Err(error) => {
+            let _ = ctx.sink.send(Event::Warning(format!(
+                "could not resolve this pack's files at Modrinth: {error}"
+            )));
+            return BTreeMap::new();
+        }
+    };
+    let wanted: std::collections::HashSet<&String> = hashes.iter().collect();
+    let mut out = BTreeMap::new();
+    for version in versions {
+        for file in &version.files {
+            let Some(sha1) = file.sha1.as_ref().map(|s| s.to_ascii_lowercase()) else {
+                continue;
+            };
+            if wanted.contains(&sha1) {
+                out.insert(sha1, version.clone());
+            }
+        }
+    }
+    out
 }
 
 /// Resolves a CurseForge pack's file ids and places what it can download.

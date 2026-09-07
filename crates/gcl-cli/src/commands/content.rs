@@ -502,6 +502,12 @@ fn merge(outcomes: &[AddOutcome]) -> AddOutcome {
         merged.manual.extend(outcome.manual.iter().cloned());
         merged.conflicts.extend(outcome.conflicts.iter().cloned());
     }
+    // `gcl content add a b` runs one `add` per project, and both walks can meet the same
+    // dependency. Two identical warning lines say nothing the first did not.
+    let mut seen = std::collections::HashSet::new();
+    merged
+        .conflicts
+        .retain(|c| seen.insert((c.project_id.clone(), c.wanted_by.clone())));
     merged
 }
 
@@ -580,7 +586,47 @@ mod tests {
         assert_eq!(merged.installed.len(), 2);
         assert_eq!(merged.skipped.len(), 2);
         assert_eq!(merged.manual.len(), 2);
-        assert_eq!(merged.conflicts.len(), 2);
+        assert_eq!(
+            merged.conflicts.len(),
+            1,
+            "the same project wanted by the same parent is one warning"
+        );
+    }
+
+    #[test]
+    fn merging_keeps_one_conflict_row_per_project_and_parent() {
+        let other_parent = DependencyConflict {
+            wanted_by: "Distant Horizons".to_string(),
+            ..conflict()
+        };
+        let other_project = DependencyConflict {
+            project_id: "fabric-api".to_string(),
+            title: "Fabric API".to_string(),
+            ..conflict()
+        };
+        let merged = merge(&[
+            AddOutcome {
+                conflicts: vec![conflict(), other_parent.clone()],
+                ..AddOutcome::default()
+            },
+            AddOutcome {
+                conflicts: vec![conflict(), other_project.clone()],
+                ..AddOutcome::default()
+            },
+        ]);
+        let rows: Vec<_> = merged
+            .conflicts
+            .iter()
+            .map(|c| (c.project_id.as_str(), c.wanted_by.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("sodium", "Iris"),
+                ("sodium", "Distant Horizons"),
+                ("fabric-api", "Iris"),
+            ]
+        );
     }
 
     /// One conflict: sodium is installed at sv-new, iris wanted sv-old.

@@ -318,9 +318,12 @@ fn legacy_assets(inputs: &LaunchInputs<'_>, game_dir: &Path) -> Result<AssetPath
 const PATH_LIST_FLAGS: [&str; 5] = ["-cp", "-classpath", "--class-path", "-p", "--module-path"];
 
 /// Drops every repeated entry, keeping the first occurrence and the order of the rest.
+///
+/// An empty entry is left alone: `a::b` names the current directory between two jars, and
+/// dropping it would change what java resolves.
 fn dedupe_keeping_order(entries: &mut Vec<String>) {
     let mut seen = std::collections::HashSet::new();
-    entries.retain(|e| seen.insert(e.clone()));
+    entries.retain(|e| e.is_empty() || seen.insert(e.clone()));
 }
 
 /// Drops repeated jars from every classpath and module path on the command line.
@@ -362,6 +365,7 @@ mod tests {
 
     const V1_20_1: &str = include_str!("../../../../tests/fixtures/mojang/1.20.1.json");
     const V1_8_9: &str = include_str!("../../../../tests/fixtures/mojang/1.8.9.json");
+    const V1_21_1: &str = include_str!("../../../../tests/fixtures/mojang/1.21.1.json");
     const NEOFORGE_PROFILE: &str =
         include_str!("../../../../tests/fixtures/neoforge/version_21.1.250.json");
     const FORGE_PROFILE: &str =
@@ -587,7 +591,8 @@ mod tests {
 
     #[test]
     fn a_neoforge_profile_over_vanilla_has_no_duplicate_classpath_entries() {
-        let vanilla: VersionJson = serde_json::from_str(V1_20_1).expect("fixture parses");
+        // NeoForge 21.1.250 targets 1.21.1, and both list gson 2.10.1: the real collision.
+        let vanilla: VersionJson = serde_json::from_str(V1_21_1).expect("fixture parses");
         let profile: VersionJson =
             serde_json::from_str(NEOFORGE_PROFILE).expect("neoforge fixture parses");
         let resolved = crate::mojang::merge(vanilla, profile, true);
@@ -621,6 +626,23 @@ mod tests {
         dedupe_path_list_args(&mut args);
         assert_eq!(args[1], format!("/libs/a.jar{sep}/libs/b.jar"));
         assert_eq!(args[3], "ALL-MODULE-PATH", "other args are untouched");
+    }
+
+    #[test]
+    fn an_empty_path_list_entry_is_left_where_it_is() {
+        // `a::b` on a classpath means the current directory in the middle. Collapsing it
+        // would shift what java resolves, so only real repeats are dropped.
+        let sep = CLASSPATH_SEPARATOR;
+        let mut args = vec![
+            "-cp".to_string(),
+            format!("/libs/a.jar{sep}{sep}/libs/b.jar{sep}{sep}/libs/a.jar"),
+        ];
+        dedupe_path_list_args(&mut args);
+        assert_eq!(
+            args[1],
+            format!("/libs/a.jar{sep}{sep}/libs/b.jar{sep}"),
+            "both empties stay, the repeated jar goes"
+        );
     }
 
     #[test]
