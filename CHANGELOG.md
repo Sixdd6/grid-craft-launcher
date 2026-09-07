@@ -5,6 +5,10 @@ All notable changes to GRID Craft Launcher are documented here. Format follows
 
 ## Unreleased
 
+- Launch: a loader that repeats a vanilla library no longer puts the jar on the classpath twice. NeoForge 1.21 and Forge refused to start with `Duplicate key`.
+- Content: a dependency pinned to another version of an installed mod is reported as a conflict instead of placing a second jar. Modpack files resolve to their Modrinth project when the hash is known.
+- Loaders: a Forge processor output whose entries match is accepted when the host zlib changes the compressed bytes. Fedora and Arch ship zlib-ng.
+
 ### Added
 
 - Instance management: create, list, and configure instances per Minecraft version.
