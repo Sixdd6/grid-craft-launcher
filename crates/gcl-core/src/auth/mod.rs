@@ -1,10 +1,12 @@
 //! Accounts: offline players and Microsoft accounts, and launch placeholders.
 //!
 //! See the `msa-auth` skill, "Storage" and "Offline". [`msa`] holds the Microsoft device-code
-//! chain, [`store`] the accounts file, and [`offline`] offline players.
+//! chain, [`secrets`] the refresh-token store, [`store`] the accounts file, and [`offline`]
+//! offline players.
 
 pub mod msa;
 pub mod offline;
+pub mod secrets;
 pub mod store;
 
 use serde::{Deserialize, Serialize};
@@ -75,6 +77,12 @@ pub enum Error {
     /// A request in the login chain failed.
     #[error(transparent)]
     Http(#[from] crate::http::Error),
+    /// There is no usable OS keyring on this machine.
+    #[error("no OS keyring available: {0}")]
+    KeyringUnavailable(String),
+    /// The OS keyring rejected a read or a write. Carries its message only.
+    #[error("keyring error: {0}")]
+    Keyring(String),
     /// A response in the login chain was not the JSON shape expected.
     #[error("could not read the {what} response: {detail}")]
     Parse {
