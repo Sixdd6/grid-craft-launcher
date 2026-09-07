@@ -104,6 +104,10 @@ enum DebugCommand {
 const EXIT_NOT_IMPLEMENTED: u8 = 2;
 
 fn main() -> ExitCode {
+    // First of all, before any thread starts: `time` reads the local UTC offset only from a
+    // single-threaded process, and game log timestamps are shown in local time.
+    gcl_core::launch::init_local_offset();
+
     let cli = Cli::parse();
 
     // A source we cannot verify yet answers before a launcher, and so before any app root

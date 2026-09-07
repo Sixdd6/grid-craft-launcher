@@ -132,6 +132,19 @@ pub fn validate(setting: &Setting, value: &str) -> Result<(), Error> {
     catalog::parse_value(setting, value).map(|_| ())
 }
 
+/// Rewrites `value` in the form `options.txt` stores, and rejects one the setting cannot take.
+///
+/// A choice typed bare comes back quoted, since that is how Minecraft writes it: `fast` becomes
+/// `"fast"`. A key the catalog does not know is passed through as typed, the same way
+/// [`crate::Launcher::set_instance_override`] skips the typed check for it.
+pub fn normalize(key: &str, value: &str) -> Result<String, Error> {
+    let Some(setting) = catalog::find(key) else {
+        return Ok(value.to_string());
+    };
+    let parsed = catalog::parse_value(setting, value)?;
+    Ok(catalog::format_value(setting, &parsed))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,5 +270,24 @@ mod tests {
             .map(|r| (r.key.clone(), r.value.clone(), format!("{:?}", r.source)))
             .collect();
         insta::assert_json_snapshot!(summary);
+    }
+
+    #[test]
+    fn normalize_quotes_a_bare_choice_token_and_passes_an_unknown_key_through() {
+        assert_eq!(
+            normalize("renderClouds", "fast").expect("a known token"),
+            "\"fast\""
+        );
+        assert_eq!(
+            normalize("renderClouds", "\"fast\"").expect("the stored form"),
+            "\"fast\""
+        );
+        assert_eq!(normalize("renderDistance", "16").expect("in range"), "16");
+        assert_eq!(
+            normalize("someModKey", "anything").expect("unknown key"),
+            "anything"
+        );
+        let err = normalize("renderClouds", "cloudy").expect_err("bad choice");
+        assert!(err.to_string().contains("true, fast, false"), "{err}");
     }
 }

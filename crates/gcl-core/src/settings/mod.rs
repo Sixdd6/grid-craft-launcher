@@ -37,22 +37,31 @@ pub enum Error {
     #[error("not a valid options.txt value: {0:?}")]
     BadRawValue(String),
     /// A slider value fell outside its setting's `[min, max]` range.
-    #[error("{key:?} must be between {min} and {max}")]
+    ///
+    /// The message names the range a user reads, with its unit: `fov` is stored as `-1.0..1.0`
+    /// but shown as `30°` to `110°`, and the bounds are named the shown way.
+    #[error("{key:?} must be between {min_shown} and {max_shown}")]
     OutOfRange {
         /// The key whose value was out of range.
         key: String,
-        /// The lower bound, inclusive.
+        /// The lower bound, inclusive, as stored.
         min: f64,
-        /// The upper bound, inclusive.
+        /// The upper bound, inclusive, as stored.
         max: f64,
+        /// The lower bound as a user reads it, with its unit.
+        min_shown: String,
+        /// The upper bound as a user reads it, with its unit.
+        max_shown: String,
     },
     /// A choice value did not match any of the setting's stored tokens.
-    #[error("{value:?} is not a valid choice for {key:?}")]
+    #[error("{value:?} is not a valid choice for {key:?}: expected one of {allowed}")]
     BadChoice {
         /// The key whose value was rejected.
         key: String,
         /// The value that did not match any stored token.
         value: String,
+        /// Every token the setting accepts, bare and comma separated.
+        allowed: String,
     },
     /// A value could not be parsed as its setting's control kind (not a number, not
     /// `true`/`false`).

@@ -388,6 +388,62 @@ fn settings_set_is_shown_as_an_override_over_the_preseeded_options() {
 }
 
 #[test]
+fn settings_set_takes_a_bare_choice_token_and_stores_the_quoted_form() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    gcl(dir.path())
+        .args(["instance", "create", "Demo", "--minecraft", MC])
+        .assert()
+        .success();
+
+    gcl(dir.path())
+        .args(["settings", "set", "demo", "renderClouds", "fast"])
+        .assert()
+        .success();
+    let out = gcl(dir.path())
+        .args(["--json", "settings", "show", "demo"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("stdout is json");
+    assert_eq!(
+        parsed["overrides"]["renderClouds"], "\"fast\"",
+        "the quotes options.txt writes are added back: {parsed}"
+    );
+
+    // A token the setting does not have names the ones it does.
+    gcl(dir.path())
+        .args(["settings", "set", "demo", "renderClouds", "cloudy"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("true, fast, false"));
+}
+
+#[test]
+fn settings_set_names_the_range_a_user_reads_for_a_scaled_slider() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    gcl(dir.path())
+        .args(["instance", "create", "Demo", "--minecraft", MC])
+        .assert()
+        .success();
+
+    // fov is stored as -1..1, so 90 is out of range, and the message names the degrees.
+    gcl(dir.path())
+        .args(["settings", "set", "demo", "fov", "90"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "\"fov\" must be between 30\u{b0} and 110\u{b0}",
+        ));
+
+    gcl(dir.path())
+        .args(["settings", "set", "demo", "fov", "0.5"])
+        .assert()
+        .success();
+}
+
+#[test]
 fn settings_set_rejects_a_value_outside_the_catalog_range() {
     let dir = tempfile::tempdir().expect("tempdir");
     gcl(dir.path())

@@ -33,6 +33,10 @@ struct Args {
 }
 
 fn main() -> ExitCode {
+    // First of all, before any thread starts: `time` reads the local UTC offset only from a
+    // single-threaded process, and game log timestamps are shown in local time.
+    gcl_core::launch::init_local_offset();
+
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {

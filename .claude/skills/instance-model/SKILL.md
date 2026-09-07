@@ -107,7 +107,11 @@ the ranges and tokens come from. That document was checked against a real 26.2 `
 **A choice token carries the quotes the file writes.** Minecraft JSON-quotes some string values
 and not others: `renderClouds:"true"` and `mainHand:"right"` are quoted, `lang:en_us` is not.
 The catalog stores the quotes as part of the token, so `renderClouds`'s tokens are `"\"true\""`,
-`"\"fast\""`, `"\"false\""`. A bare `true` is `Error::BadChoice`.
+`"\"fast\""`, `"\"false\""`. `parse_value` also takes the bare word a person types and gives back
+the stored form: `fast` parses to `"fast"`. `settings::doc::normalize(key, value)` is that
+rewrite for a caller holding only strings, and the CLI runs every `settings set` value through
+it. A token no choice holds is `Error::BadChoice`, whose message lists the bare tokens
+(`true, fast, false`).
 
 **A slider's stored number is not always the number a user reads.** `Slider.display` is
 `Option<Display>`, and `Display { mul, add, decimals, unit }` gives `shown = stored * mul + add`.
@@ -117,8 +121,10 @@ and `Setting::from_display` convert both ways and are the identity for every oth
 
 `catalog::find(key)` looks a key up. `format_value` and `parse_value` round-trip the stored
 form Minecraft writes: `true`/`false` for a toggle, a float with its own `decimals` for a
-slider, a bare token for a choice, the string verbatim for text. `parse_value` rejects an
-out-of-range number, a non-finite one, and a token no choice holds.
+slider, a quoted token for a choice, the string verbatim for text. `parse_value` rejects an
+out-of-range number, a non-finite one, and a token no choice holds. `Error::OutOfRange` names
+the range the way a user reads it, unit and all — `"fov" must be between 30° and 110°` — while
+the value itself stays in the stored form, which is why `gcl settings set` says so in its help.
 
 **A key the catalog does not know is never lost.** It has no control and no validation beyond
 `validate_key`/`validate_value`, and it survives every read and write.

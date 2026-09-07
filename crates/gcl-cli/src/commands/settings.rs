@@ -5,7 +5,12 @@
 //!
 //! `set` and `defaults set` go through [`Launcher::set_instance_override`] and
 //! [`Launcher::set_game_default`], so the CLI rejects the same out-of-range and bad-choice
-//! values as the GUI does.
+//! values as the GUI does. A value is normalised first by
+//! [`gcl_core::settings::doc::normalize`], so a choice typed bare is stored the way
+//! `options.txt` writes it: `fast` is saved as `"fast"`.
+//!
+//! Values are in the form `options.txt` stores, not the form the game's own screens show. The
+//! one place the two differ is `fov`, stored as `-1..1` for 30° to 110°.
 
 use std::collections::BTreeMap;
 
@@ -30,7 +35,8 @@ pub enum SettingsCommand {
         slug: String,
         /// `options.txt` key, such as renderDistance.
         key: String,
-        /// Value to write.
+        /// Value as `options.txt` stores it. A choice may be typed bare (`fast`). `fov` is
+        /// stored as -1..1, where -1 is 30 degrees and 1 is 110.
         value: String,
     },
     /// Remove one override key. The value already in `options.txt` stays as it is.
@@ -56,7 +62,8 @@ pub enum DefaultsCommand {
     Set {
         /// `options.txt` key.
         key: String,
-        /// Value to write.
+        /// Value as `options.txt` stores it. A choice may be typed bare (`fast`). `fov` is
+        /// stored as -1..1, where -1 is 30 degrees and 1 is 110.
         value: String,
     },
     /// Remove one default key.
@@ -100,6 +107,7 @@ pub fn run(launcher: &mut Launcher, format: Format, command: SettingsCommand) ->
             }
         }
         SettingsCommand::Set { slug, key, value } => {
+            let value = gcl_core::settings::doc::normalize(&key, &value)?;
             launcher.set_instance_override(&slug, &key, &value)?;
             report_change(format, &key, Some(&value))
         }
@@ -125,6 +133,7 @@ fn defaults(launcher: &mut Launcher, format: Format, command: DefaultsCommand) -
             }
         }
         DefaultsCommand::Set { key, value } => {
+            let value = gcl_core::settings::doc::normalize(&key, &value)?;
             launcher.set_game_default(&key, &value)?;
             report_change(format, &key, Some(&value))
         }

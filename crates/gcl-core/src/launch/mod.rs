@@ -14,7 +14,7 @@ pub mod spawn;
 
 pub use command::{JvmSettings, LaunchCommand, LaunchInputs, build};
 pub use crash::crash_hint;
-pub use log4j::{EventParser, LogRecord};
+pub use log4j::{EventParser, LogRecord, init_local_offset};
 pub use spawn::{ChildHandle, RunningGame, force_stop, request_stop, spawn, wait};
 
 /// Errors building or running a launch command.

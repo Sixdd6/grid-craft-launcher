@@ -293,10 +293,14 @@ where
     tokio::spawn(async move {
         let mut parser = EventParser::new(level);
         let mut lines = BufReader::new(stream).lines();
+        // Reused for every line, so a line that is not part of an event allocates no vector.
+        let mut records = Vec::new();
         loop {
             match lines.next_line().await {
                 Ok(Some(line)) => {
-                    if !send_all(&tx, parser.push(&line)) {
+                    records.clear();
+                    parser.push_into(&line, &mut records);
+                    if !send_all(&tx, records.drain(..)) {
                         return;
                     }
                 }
@@ -312,7 +316,10 @@ where
 }
 
 /// Sends every record on. `false` means the receiver is gone and reading should stop.
-fn send_all(tx: &UnboundedSender<(LogLevel, String)>, records: Vec<LogRecord>) -> bool {
+fn send_all(
+    tx: &UnboundedSender<(LogLevel, String)>,
+    records: impl IntoIterator<Item = LogRecord>,
+) -> bool {
     for record in records {
         if tx.send((record.level, record.text)).is_err() {
             return false;

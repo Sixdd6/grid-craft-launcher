@@ -790,8 +790,9 @@ pub fn find(key: &str) -> Option<&'static Setting> {
 /// [`Value::Float`]. Both are checked against `[min, max]`, inclusive, and a value that does
 /// not parse as a finite number — including `NaN` and the infinities, which `f64::from_str`
 /// accepts — is [`Error::BadValue`]. A `Toggle` accepts exactly `true` or `false`.
-/// A `Choice` value must match one of the setting's stored tokens exactly, or
-/// [`Error::BadChoice`]. `Text` accepts anything.
+/// A `Choice` value matches one of the setting's stored tokens, either as stored (`"fast"`) or
+/// bare (`fast`), and is returned in the stored form; anything else is [`Error::BadChoice`],
+/// whose message lists the bare tokens. `Text` accepts anything.
 pub fn parse_value(setting: &Setting, value: &str) -> Result<Value, Error> {
     match setting.control {
         Control::Slider {
@@ -806,11 +807,7 @@ pub fn parse_value(setting: &Setting, value: &str) -> Result<Value, Error> {
             })?;
             let as_f64 = parsed as f64;
             if as_f64 < min || as_f64 > max {
-                return Err(Error::OutOfRange {
-                    key: setting.key.to_string(),
-                    min,
-                    max,
-                });
+                return Err(out_of_range(setting, min, max));
             }
             Ok(Value::Int(parsed))
         }
@@ -826,11 +823,7 @@ pub fn parse_value(setting: &Setting, value: &str) -> Result<Value, Error> {
                 });
             }
             if parsed < min || parsed > max {
-                return Err(Error::OutOfRange {
-                    key: setting.key.to_string(),
-                    min,
-                    max,
-                });
+                return Err(out_of_range(setting, min, max));
             }
             Ok(Value::Float(parsed))
         }
@@ -843,16 +836,70 @@ pub fn parse_value(setting: &Setting, value: &str) -> Result<Value, Error> {
             }),
         },
         Control::Choice(values) => {
-            if values.iter().any(|(stored, _)| *stored == value) {
-                Ok(Value::Text(value.to_string()))
-            } else {
-                Err(Error::BadChoice {
+            // A stored token keeps the quotes `options.txt` writes, but a person types the bare
+            // word, so both are taken and the stored form is what comes back.
+            let found = values
+                .iter()
+                .find(|(stored, _)| *stored == value || bare(stored) == value);
+            match found {
+                Some((stored, _)) => Ok(Value::Text((*stored).to_string())),
+                None => Err(Error::BadChoice {
                     key: setting.key.to_string(),
                     value: value.to_string(),
-                })
+                    allowed: allowed_tokens(values),
+                }),
             }
         }
         Control::Text => Ok(Value::Text(value.to_string())),
+    }
+}
+
+/// The token without the quotes `options.txt` stores it with: `"fast"` is typed `fast`.
+fn bare(token: &str) -> &str {
+    token.trim_matches('"')
+}
+
+/// Every token a choice accepts, bare and comma separated, for an error message.
+fn allowed_tokens(values: &[(&str, &str)]) -> String {
+    values
+        .iter()
+        .map(|(stored, _)| bare(stored))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The [`Error::OutOfRange`] for a slider, with the bounds named the way a user reads them.
+///
+/// `fov` is stored as `-1.0..1.0` and shown as `30°..110°`, so its message names degrees. A
+/// setting with no [`Display`] names its stored bounds, which are the same numbers.
+fn out_of_range(setting: &Setting, min: f64, max: f64) -> Error {
+    let mut low = setting.to_display(min);
+    let mut high = setting.to_display(max);
+    if low > high {
+        std::mem::swap(&mut low, &mut high);
+    }
+    Error::OutOfRange {
+        key: setting.key.to_string(),
+        min,
+        max,
+        min_shown: shown_bound(setting, low),
+        max_shown: shown_bound(setting, high),
+    }
+}
+
+/// One bound as a user reads it: the shown number at the display's precision, plus its unit.
+fn shown_bound(setting: &Setting, shown: f64) -> String {
+    match setting.control {
+        Control::Slider {
+            display: Some(display),
+            ..
+        } => format!(
+            "{:.*}{}",
+            usize::from(display.decimals),
+            shown,
+            display.unit
+        ),
+        _ => format!("{shown}"),
     }
 }
 
@@ -966,13 +1013,44 @@ mod tests {
     }
 
     #[test]
-    fn an_unquoted_choice_token_is_rejected_where_the_file_quotes_it() {
+    fn an_unquoted_choice_token_is_normalised_to_the_stored_form() {
         for key in ["mainHand", "renderClouds"] {
             let setting = find(key).expect("catalog entry");
             let bare = setting.default.trim_matches('"');
-            let err = parse_value(setting, bare).expect_err("bare token");
-            assert!(matches!(err, Error::BadChoice { .. }), "{key}: {err:?}");
+            let value = parse_value(setting, bare).expect("bare token");
+            assert_eq!(
+                format_value(setting, &value),
+                setting.default,
+                "{key}: the quotes come back"
+            );
         }
+        let clouds = find("renderClouds").expect("catalog entry");
+        let value = parse_value(clouds, "fast").expect("bare token");
+        assert_eq!(value, Value::Text("\"fast\"".to_string()));
+    }
+
+    #[test]
+    fn a_bad_choice_names_every_token_it_would_take() {
+        let setting = find("renderClouds").expect("catalog entry");
+        let err = parse_value(setting, "cloudy").expect_err("bad choice");
+        let message = err.to_string();
+        assert!(message.contains("true, fast, false"), "{message}");
+    }
+
+    #[test]
+    fn an_out_of_range_slider_names_the_range_a_user_reads() {
+        let fov = find("fov").expect("catalog entry");
+        let err = parse_value(fov, "90").expect_err("out of range");
+        assert_eq!(
+            err.to_string(),
+            "\"fov\" must be between 30\u{b0} and 110\u{b0}"
+        );
+        let distance = find("renderDistance").expect("catalog entry");
+        let err = parse_value(distance, "999").expect_err("out of range");
+        assert_eq!(
+            err.to_string(),
+            "\"renderDistance\" must be between 2 and 32"
+        );
     }
 
     #[test]
