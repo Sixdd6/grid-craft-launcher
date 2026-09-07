@@ -1567,11 +1567,35 @@ impl Launcher {
             .unwrap_or_else(|| component_for_major(major).to_string());
         Ok(self.block_on(async move {
             let found = detect_all(&root).await;
-            if let Some(install) = pick(&found, major) {
+            // Only the exact major will do. Minecraft 1.20.1 asks for `java-runtime-gamma`,
+            // which is Java 17, and it does not start on the Java 21 or 25 a distribution
+            // ships; taking whatever is newest is what makes a launch die on the first frame.
+            if let Some(install) = crate::java::pick_exact(&found, major) {
                 return Ok(install.clone());
             }
-            tracing::info!(major, component, "no local java found, installing one");
-            install_runtime(&http, &ctx, RUNTIME_MANIFEST, &component).await
+            tracing::info!(
+                major,
+                component,
+                "no java {major} on this machine, installing one"
+            );
+            match install_runtime(&http, &ctx, RUNTIME_MANIFEST, &component).await {
+                Ok(install) => Ok(install),
+                // Mojang publishes no runtime for every platform, and the download can fail.
+                // A newer local JVM is a worse answer than the right one, and a better answer
+                // than no launch at all, so it is the fallback and it says so.
+                Err(source) => match pick(&found, major) {
+                    Some(install) => {
+                        tracing::warn!(
+                            major,
+                            found = install.major,
+                            %source,
+                            "could not install the Mojang runtime; falling back to a newer java"
+                        );
+                        Ok(install.clone())
+                    }
+                    None => Err(source),
+                },
+            }
         })?)
     }
 }

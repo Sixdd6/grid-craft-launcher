@@ -171,6 +171,16 @@ pub fn parse_java_version(s: &str) -> Option<(u32, String)> {
     Some((major, trimmed.to_string()))
 }
 
+/// Picks the JVM whose major version is exactly `major`.
+///
+/// Minecraft names one runtime component per version, and a game built for Java 17 does not
+/// start on Java 25. So a launch asks for this first, and downloads Mojang's runtime when the
+/// machine has no exact match. [`pick`] is the looser rule, kept for the fallback when that
+/// download is not possible.
+pub fn pick_exact(installs: &[JavaInstall], major: u32) -> Option<&JavaInstall> {
+    installs.iter().find(|i| i.major == major)
+}
+
 /// Picks a JVM for a wanted major version: the exact major, else the lowest above it.
 pub fn pick(installs: &[JavaInstall], major: u32) -> Option<&JavaInstall> {
     installs.iter().find(|i| i.major == major).or_else(|| {
@@ -226,6 +236,18 @@ mod tests {
         let all = [install(8), install(21), install(17)];
         assert_eq!(pick(&all, 16).map(|i| i.major), Some(17));
         assert_eq!(pick(&all, 22), None);
+    }
+
+    #[test]
+    fn pick_exact_never_takes_a_higher_major() {
+        let all = [install(21), install(25)];
+        assert_eq!(pick_exact(&all, 17), None, "17 is not on this machine");
+        assert_eq!(pick_exact(&all, 21).map(|i| i.major), Some(21));
+        assert_eq!(
+            pick(&all, 17).map(|i| i.major),
+            Some(21),
+            "the loose rule still climbs, and is only the fallback"
+        );
     }
 
     #[test]

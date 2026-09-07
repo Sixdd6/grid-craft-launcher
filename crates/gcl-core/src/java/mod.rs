@@ -8,7 +8,7 @@ pub mod runtime;
 
 use std::path::PathBuf;
 
-pub use detect::{detect_all, parse_java_version, pick};
+pub use detect::{detect_all, parse_java_version, pick, pick_exact};
 pub use runtime::{RUNTIME_MANIFEST, component_for_major, install_runtime, platform_key};
 
 /// Errors from probing or installing a Java runtime.
