@@ -78,8 +78,9 @@ fn join_classpath(classpath: &[PathBuf]) -> String {
 
 /// Runs every client-side processor of a profile in order.
 ///
-/// A processor whose declared outputs all exist with the right sha1 is skipped, so a repeated
-/// install does no work. Each run writes `<index>-<artifact>.log` under `log_dir`.
+/// A processor whose declared outputs all exist with the right sha1 — the profile's, or the one
+/// recorded in an `<output>.sha1` sidecar by an earlier run — is skipped, so a repeated install
+/// does no work. Each run writes `<index>-<artifact>.log` under `log_dir`.
 #[tracing::instrument(skip_all, fields(processors = profile.processors.len()))]
 pub async fn run_processors(
     runner: &dyn ProcessRunner,
@@ -96,9 +97,18 @@ pub async fn run_processors(
         }
         let coord = MavenCoord::parse(&processor.jar)?;
         let outputs = resolve_outputs(processor, data, root)?;
-        if !outputs.is_empty() && first_bad_output(&outputs).await.is_none() {
-            tracing::debug!(jar = %processor.jar, "processor outputs are current, skipping");
-            continue;
+        if !outputs.is_empty() {
+            match first_bad_output(&outputs).await {
+                None => {
+                    tracing::debug!(jar = %processor.jar, "processor outputs are current, skipping");
+                    continue;
+                }
+                Some(bad) => tracing::debug!(
+                    jar = %processor.jar,
+                    output = %bad.path().display(),
+                    "processor output is missing or stale, running it"
+                ),
+            }
         }
 
         let jar = library_path(&processor.jar, root)?;
@@ -126,9 +136,9 @@ pub async fn run_processors(
             task.fail(format!("exit {code}"));
             return Err(Error::ProcessorFailed { main, code, log });
         }
-        if let Some(path) = first_bad_output(&outputs).await {
-            task.fail(format!("missing output {}", path.display()));
-            return Err(Error::ProcessorOutput { path });
+        if let Err(error) = verify_outputs(&outputs).await {
+            task.fail(error.to_string());
+            return Err(error);
         }
         task.finish();
     }
@@ -174,22 +184,154 @@ fn resolve_outputs(
     Ok(outputs)
 }
 
-/// Returns the first output that is missing or whose sha1 does not match.
-async fn first_bad_output(outputs: &[(PathBuf, String)]) -> Option<PathBuf> {
+/// Why one declared output is not the file the install profile named.
+enum BadOutput {
+    /// Nothing readable is at the path.
+    Missing(PathBuf),
+    /// The file is there but hashes to something else.
+    Mismatch {
+        /// The output.
+        path: PathBuf,
+        /// The sha1 the install profile names.
+        expected: String,
+        /// The sha1 the file on disk has.
+        actual: String,
+    },
+}
+
+impl BadOutput {
+    /// The output this verdict is about.
+    fn path(&self) -> &Path {
+        match self {
+            BadOutput::Missing(path) => path,
+            BadOutput::Mismatch { path, .. } => path,
+        }
+    }
+}
+
+/// Returns the first output that is missing or whose sha1 is neither the profile's nor accepted.
+async fn first_bad_output(outputs: &[(PathBuf, String)]) -> Option<BadOutput> {
     let owned = outputs.to_vec();
     tokio::task::spawn_blocking(move || {
         owned
-            .into_iter()
-            .find(|(path, want)| !matches_sha1(path, want))
-            .map(|(path, _)| path)
+            .iter()
+            .find_map(|(path, want)| check_output(path, want).err())
     })
     .await
-    .unwrap_or_else(|_| outputs.first().map(|(path, _)| path.clone()))
+    .unwrap_or_else(|_| {
+        outputs
+            .first()
+            .map(|(path, _)| BadOutput::Missing(path.clone()))
+    })
 }
 
-/// True when the file at `path` hashes to `want`. A missing or unreadable file is false.
-fn matches_sha1(path: &Path, want: &str) -> bool {
-    sha1_file(path).is_ok_and(|got| got.eq_ignore_ascii_case(want))
+/// Checks one output against the profile's sha1, then against its accepted-hash sidecar.
+fn check_output(path: &Path, want: &str) -> Result<(), BadOutput> {
+    let Ok(actual) = sha1_file(path) else {
+        return Err(BadOutput::Missing(path.to_path_buf()));
+    };
+    if actual.eq_ignore_ascii_case(want) || sidecar_holds(path, &actual) {
+        return Ok(());
+    }
+    Err(BadOutput::Mismatch {
+        path: path.to_path_buf(),
+        expected: want.to_string(),
+        actual,
+    })
+}
+
+/// Path of the sidecar holding the sha1 an output was accepted with: `<output>.sha1`.
+fn sidecar_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".sha1");
+    PathBuf::from(name)
+}
+
+/// True when `<output>.sha1` records exactly the hash the file on disk has now.
+fn sidecar_holds(path: &Path, actual: &str) -> bool {
+    std::fs::read_to_string(sidecar_path(path))
+        .is_ok_and(|noted| noted.trim().eq_ignore_ascii_case(actual))
+}
+
+/// Verifies a finished processor's outputs, accepting a jar the host zlib recompressed.
+///
+/// A missing output is fatal. A hash mismatch is accepted when the archive still reads back
+/// entry by entry with every CRC32 intact: Mojang's bundled `libzip` links against the host
+/// `libz.so.1`, and zlib-ng deflates to a different byte stream than the one Forge hashed into
+/// the install profile. The accepted hash is written to `<output>.sha1` so the next install
+/// skips the processor instead of running it again.
+async fn verify_outputs(outputs: &[(PathBuf, String)]) -> Result<(), Error> {
+    let owned = outputs.to_vec();
+    let first = outputs
+        .first()
+        .map(|(path, _)| path.clone())
+        .unwrap_or_default();
+    tokio::task::spawn_blocking(move || verify_outputs_blocking(&owned))
+        .await
+        .map_err(|source| Error::Io {
+            path: first,
+            source: std::io::Error::other(source),
+        })?
+}
+
+/// The blocking half of [`verify_outputs`]: hashing, reading archives, writing sidecars.
+fn verify_outputs_blocking(outputs: &[(PathBuf, String)]) -> Result<(), Error> {
+    for (path, want) in outputs {
+        match check_output(path, want) {
+            Ok(()) => {}
+            Err(BadOutput::Missing(path)) => return Err(Error::ProcessorOutput { path }),
+            Err(BadOutput::Mismatch {
+                path,
+                expected,
+                actual,
+            }) => {
+                if let Err(source) = archive_reads_cleanly(&path) {
+                    return Err(Error::ProcessorOutputDamaged {
+                        path,
+                        expected,
+                        actual,
+                        source,
+                    });
+                }
+                tracing::warn!(
+                    output = %path.display(),
+                    %expected,
+                    %actual,
+                    "processor output has a different sha1 than the install profile, but every \
+                     zip entry reads back with its CRC32 intact: the host zlib (zlib-ng on \
+                     Fedora and Arch) deflates to different bytes than the stream Forge hashed. \
+                     Accepting it"
+                );
+                write_sidecar(&path, &actual)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Reads every entry of a zip end to end, so a truncated or corrupt archive is an error.
+///
+/// The reader checks each entry's CRC32 against its header when the entry ends.
+fn archive_reads_cleanly(path: &Path) -> Result<(), std::io::Error> {
+    let file = std::fs::File::open(path)?;
+    let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file))
+        .map_err(|source| std::io::Error::other(source.to_string()))?;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|source| std::io::Error::other(source.to_string()))?;
+        std::io::copy(&mut entry, &mut std::io::sink())?;
+    }
+    Ok(())
+}
+
+/// Records the sha1 an output was accepted with next to it.
+fn write_sidecar(path: &Path, actual: &str) -> Result<(), Error> {
+    let sidecar = sidecar_path(path);
+    std::fs::write(&sidecar, format!("{actual}\n")).map_err(|source| Error::Io {
+        path: sidecar,
+        source,
+    })
 }
 
 /// Reads a processor jar's `Main-Class`, off the async thread.

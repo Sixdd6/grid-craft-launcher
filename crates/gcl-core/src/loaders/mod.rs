@@ -85,10 +85,25 @@ pub enum Error {
         log: PathBuf,
     },
     /// A processor ran but did not produce the file it promised.
-    #[error("processor output {path} missing or hash mismatch")]
+    #[error("processor output {path} is missing")]
     ProcessorOutput {
-        /// The output that is missing or wrong.
+        /// The output the processor never wrote.
         path: PathBuf,
+    },
+    /// A processor output has the wrong sha1 and its archive does not read back.
+    #[error(
+        "processor output {path} hash mismatch and the archive is damaged \
+         (expected {expected}, got {actual}): {source}"
+    )]
+    ProcessorOutputDamaged {
+        /// The output that is wrong.
+        path: PathBuf,
+        /// The sha1 the install profile names.
+        expected: String,
+        /// The sha1 the file on disk has.
+        actual: String,
+        /// Why the archive did not read back.
+        source: std::io::Error,
     },
     /// A Forge-like install needs a JVM to run its processors.
     #[error("java runtime required to install {0}")]
