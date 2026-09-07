@@ -47,6 +47,10 @@ struct Shared {
     candidates: Arc<Mutex<Vec<UpdateCandidate>>>,
     /// The manual downloads the loaded instance still needs, by project id.
     pending: Arc<Mutex<Vec<ManualDownload>>>,
+    /// The slug whose data is in `InstanceState` right now. It is what tells a fresh open
+    /// from a re-read of the instance already on screen: only the first one throws away the
+    /// game log and the status line, which no read from disk can fill again.
+    shown: Arc<Mutex<String>>,
 }
 
 impl Shared {
@@ -69,6 +73,16 @@ impl Shared {
     /// Replaces the pending manual downloads.
     fn set_pending(&self, list: Vec<ManualDownload>) {
         *self.pending.lock().unwrap_or_else(|err| err.into_inner()) = list;
+    }
+
+    /// Marks `slug` as the instance on screen, and says whether that is a change.
+    fn take_over(&self, slug: &str) -> bool {
+        let mut shown = self.shown.lock().unwrap_or_else(|err| err.into_inner());
+        if *shown == slug {
+            return false;
+        }
+        *shown = slug.to_string();
+        true
     }
 
     /// The pending manual download with this project id, if the last load carried one.
@@ -470,10 +484,46 @@ struct Loaded {
 /// instead, so a job that lands after the user walked back to the settings screen cannot
 /// drag the editor onto an instance layer, and a refresh cannot wipe the search box.
 fn open(bridge: &Bridge, run: &RunState, shared: &Shared, slug: &str) {
+    // Another instance's data must not be on screen while this one is being read, and a
+    // game log belongs to the game that wrote it. A re-read of the instance already shown
+    // keeps both: the launch that just ended set the status line and filled the log.
+    if shared.take_over(slug)
+        && let Some(window) = bridge.weak().upgrade()
+    {
+        clear_view(&window);
+    }
     shared
         .editor
         .open(bridge, EditTarget::Instance(slug.to_string()));
     load(bridge, run, shared, slug);
+}
+
+/// Empties every property the screen shows, before another instance is read into it.
+///
+/// The prompt's labels are left alone: they are what the prompt says, not what an instance
+/// holds, and the prompt itself is closed here.
+fn clear_view(window: &AppWindow) {
+    let state = window.global::<InstanceState>();
+    state.set_name(SharedString::new());
+    state.set_minecraft(SharedString::new());
+    state.set_loader_label(SharedString::new());
+    state.set_installed(false);
+    state.set_running(false);
+    state.set_status_text(SharedString::new());
+    state.set_tab(0);
+    state.set_content(ModelRc::new(VecModel::from(Vec::<ContentRow>::new())));
+    state.set_pending(ModelRc::new(VecModel::from(Vec::<PendingRow>::new())));
+    state.set_has_options(false);
+    state.set_options(ModelRc::new(VecModel::from(Vec::<SettingRow>::new())));
+    state.set_jvm_min(0);
+    state.set_jvm_max(0);
+    state.set_jvm_extra(SharedString::new());
+    state.set_java_path(SharedString::new());
+    // A game log is the output of one game. An instance nobody has launched has none.
+    state.set_game_log(ModelRc::new(VecModel::from(Vec::<crate::LogLine>::new())));
+    state.set_update_count(0);
+    state.set_prompt_open(false);
+    state.set_prompt_value(SharedString::new());
 }
 
 /// Reads the instance and fills every property the screen shows.

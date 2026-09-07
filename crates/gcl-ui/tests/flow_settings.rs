@@ -30,6 +30,7 @@ fn the_settings_editor_saves_defaults_and_instance_overrides() {
     support::run(async move {
         let app = &driver;
         the_settings_screen_shows_the_catalog(app).await;
+        the_fov_row_reads_in_degrees(app).await;
         a_slider_saves_a_launcher_default(app).await;
         a_switch_saves_a_launcher_default(app).await;
         a_raw_default_save_keeps_the_editor_search(app).await;
@@ -144,6 +145,25 @@ async fn the_settings_screen_shows_the_catalog(app: &TestApp) {
     assert_eq!(
         line(&app.window, "graphicsMode").map(|row| row.control.to_string()),
         Some("choice".to_string())
+    );
+
+    // `fov` is stored as a float in [-1, 1] and set in degrees. The row shows the degrees.
+    let fov = line(&app.window, "fov").expect("a fov row");
+    assert_eq!(fov.control, "slider");
+    assert_eq!(fov.value, "0.0", "what options.txt holds");
+    assert_eq!(fov.number, 70.0, "and what the slider is on");
+    assert_eq!((fov.minimum, fov.maximum), (30.0, 110.0));
+}
+
+/// (a2) The fov row's value label is the degrees, with the degree sign after them.
+async fn the_fov_row_reads_in_degrees(app: &TestApp) {
+    // The label, not the key: "fov" also matches `fovEffectScale`.
+    search(app, "Field of View", "fov").await;
+    app.scroll_to("SettingRow::setting_value");
+    assert_eq!(
+        app.el("SettingRow::setting_value").accessible_label(),
+        Some("70\u{b0}".into()),
+        "the label under the slider is the number a player sets, not the stored float"
     );
 }
 

@@ -150,8 +150,7 @@ async fn open_the_instance(app: &TestApp) {
 /// Waits until the browser has finished loading its sources and its instance list.
 ///
 /// The status line is the last thing one open writes, and it can only hold one of these
-/// three afterwards, so it is the signal that the whole load has landed. Waiting on the
-/// lists instead would pass on the preview content the global declares.
+/// three afterwards, so it is the signal that the whole load has landed.
 async fn wait_for_browser(app: &TestApp) {
     const OPENED: [&str; 3] = [
         "Ready to search",
@@ -175,11 +174,15 @@ async fn searching_and_adding_a_mod_installs_its_file(app: &TestApp) {
 
     app.click("InstanceScreen::add_content_button");
     wait_for_browser(app).await;
+    assert_eq!(
+        app.window.global::<BrowserState>().get_query().to_string(),
+        "",
+        "the browser opens on an empty query: nobody has searched for anything yet"
+    );
     assert!(
         row_titles(&app.window).is_empty(),
-        "opening the browser clears the preview rows the global declares; one of them is \
-         Sodium under the same project id as the fixture, so a leaked row would pass the \
-         search assertions below without any search having run"
+        "and on no hits. A sample row would be Sodium under the same project id as the \
+         fixture, so it would pass the search assertions below without a search having run"
     );
     assert_eq!(
         app.window

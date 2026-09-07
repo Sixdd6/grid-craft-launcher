@@ -1,6 +1,6 @@
 import { LineEdit, ScrollView, SpinBox } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
-import { SettingsState } from "../state.slint";
+import { SettingsEditorState, SettingsState } from "../state.slint";
 import { Button } from "../components/button.slint";
 import { Card } from "../components/card.slint";
 import { SettingsEditor } from "../components/settings-editor.slint";
@@ -367,5 +367,91 @@ export component SettingsScreen inherits Rectangle {
             vertical-alignment: center;
             overflow: elide;
         }
+    }
+}
+
+// Preview only: `just ui-preview screens/settings.slint` renders this one, because a viewer
+// with no `--component` shows the last exported component of the file.
+//
+// `SettingsState` and `SettingsEditorState` both start empty, so the screen on its own would
+// preview with no root, no heap sizes and no settings rows. This component fills both with
+// the sample values they used to carry as their defaults. Nothing in the app instantiates
+// it, and it is the only place the editor's sample rows live — the instance screen's
+// Settings tab mounts the same editor over the same global.
+export component PreviewSettingsScreen inherits SettingsScreen {
+    init => {
+        SettingsState.root_path = "/home/steve/.local/share/grid-craft-launcher";
+        SettingsState.parallel = 8;
+        SettingsState.jvm_min = 1024;
+        SettingsState.jvm_max = 4096;
+        SettingsState.msa_client_id_set = true;
+        SettingsState.status = "Ready";
+        SettingsEditorState.rows = [
+            {
+                key: "Video",
+                label: "Video",
+                group: "Video",
+                control: "group",
+                checked: true,
+                choice_index: 3,
+            },
+            {
+                key: "renderDistance",
+                label: "Render Distance",
+                group: "Video",
+                control: "slider",
+                value: "16",
+                number: 16,
+                minimum: 2,
+                maximum: 32,
+                step: 1,
+                decimals: 0,
+                display_decimals: 0,
+                unit: "",
+                source: "preseed",
+                inherited: false,
+                resettable: true,
+            },
+            {
+                key: "fov",
+                label: "Field of View",
+                group: "Video",
+                control: "slider",
+                value: "0.0",
+                number: 70,
+                minimum: 30,
+                maximum: 110,
+                step: 1,
+                decimals: 3,
+                display_decimals: 0,
+                unit: "\u{b0}",
+                source: "default",
+                inherited: true,
+                resettable: false,
+            },
+            {
+                key: "fullscreen",
+                label: "Fullscreen",
+                group: "Video",
+                control: "toggle",
+                value: "false",
+                checked: false,
+                source: "default",
+                inherited: true,
+                resettable: false,
+            },
+            {
+                key: "graphicsMode",
+                label: "Graphics",
+                group: "Video",
+                control: "choice",
+                value: "1",
+                choices: ["Fast", "Fancy", "Fabulous"],
+                choice_index: 1,
+                source: "default",
+                inherited: true,
+                resettable: false,
+            },
+        ];
     }
 }

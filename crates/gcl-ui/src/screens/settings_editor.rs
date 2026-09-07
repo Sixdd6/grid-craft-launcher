@@ -17,7 +17,7 @@ use gcl_core::settings::doc::{Layer, Row};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::bridge::Bridge;
-use crate::models::settings::{choice_token, stored_value, visible_rows};
+use crate::models::settings::{choice_token, slider_stored_value, stored_value, visible_rows};
 use crate::{AppWindow, SettingsEditorState};
 
 /// Which layer the open screen writes.
@@ -150,6 +150,16 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) -> Editor {
         let (editor, bridge) = (editor.clone(), bridge.clone());
         state.on_changed(move |key, value| {
             let value = stored_value(key.as_str(), value.as_str());
+            save(&editor, &bridge, key.as_str(), &value);
+        });
+    }
+
+    {
+        let (editor, bridge) = (editor.clone(), bridge.clone());
+        // A slider carries the number a user reads, which is degrees for `fov` and the
+        // stored number for everything else. Only this side knows the difference.
+        state.on_slid(move |key, shown| {
+            let value = slider_stored_value(key.as_str(), f64::from(shown));
             save(&editor, &bridge, key.as_str(), &value);
         });
     }

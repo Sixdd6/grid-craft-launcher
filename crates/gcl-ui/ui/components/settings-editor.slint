@@ -85,6 +85,9 @@ export component SettingsEditor inherits VerticalLayout {
             changed(key, value) => {
                 SettingsEditorState.changed(key, value);
             }
+            slid(key, shown) => {
+                SettingsEditorState.slid(key, shown);
+            }
             chose(key, index) => {
                 SettingsEditorState.chose(key, index);
             }

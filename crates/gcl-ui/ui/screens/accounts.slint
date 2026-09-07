@@ -199,3 +199,32 @@ export component AccountsScreen inherits Rectangle {
         }
     }
 }
+
+// Preview only: `just ui-preview screens/accounts.slint` renders this one, because a viewer
+// with no `--component` shows the last exported component of the file.
+//
+// `AccountsState` starts empty, so the screen on its own would preview as an empty list.
+// This component fills the global with the sample rows it used to carry as its defaults.
+// Nothing in the app instantiates it.
+export component PreviewAccountsScreen inherits AccountsScreen {
+    init => {
+        AccountsState.rows = [
+            {
+                id: "b50ad385-829d-3141-a216-7e7d7539ba7f",
+                name: "Notch",
+                kind: "offline",
+                expires: "",
+                active: true,
+            },
+            {
+                id: "069a79f4-44e9-4726-a5be-fca90e38aaf5",
+                name: "Steve",
+                kind: "msa",
+                expires: "2026-09-07 10:22",
+                active: false,
+            },
+        ];
+        AccountsState.msa_available = true;
+        AccountsState.status = "2 account(s)";
+    }
+}

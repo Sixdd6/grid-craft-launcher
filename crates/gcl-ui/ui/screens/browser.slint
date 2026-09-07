@@ -18,13 +18,16 @@ import { SearchBox } from "../components/search-box.slint";
 // ever reports which row was picked. `kind_labels` is rebuilt per source, because a source
 // that cannot serve a kind must not offer it.
 //
-// Every default here is preview content: `just ui-preview screens/browser.slint` shows it.
+// Every property here starts empty, apart from the two label lists that are fixed choices
+// rather than data. `src/screens/browser.rs` fills the rest when the screen is shown, so
+// nothing the user did not ask for is ever on screen. The sample hits the preview needs
+// live in `PreviewBrowserScreen`, at the end of this file.
 export global BrowserState {
     // What the user typed into the search box. The modpack kind reads it twice over: Search
     // looks it up as text, and the Install modpack button takes it as a project id or slug.
-    in-out property <string> query: "sodium";
+    in-out property <string> query: "";
     // Sources that are enabled, in ComboBox order.
-    in-out property <[string]> source_labels: ["modrinth", "curseforge"];
+    in-out property <[string]> source_labels: [];
     // Index into `source_labels`.
     in-out property <int> source_index: 0;
     // Content kinds the chosen source serves, in ComboBox order.
@@ -34,20 +37,20 @@ export global BrowserState {
     // Index into `kind_labels`.
     in-out property <int> kind_index: 0;
     // Minecraft version filter, empty for any.
-    in-out property <string> minecraft: "1.20.1";
+    in-out property <string> minecraft: "";
     // Loader filter: `any`, or one loader slug. Rust reads this one; the ComboBox drives
     // `loader_index`, and `screens/browser.rs` keeps the two in step.
-    in-out property <string> loader: "fabric";
+    in-out property <string> loader: "";
     // Index into `loader_options`. A ComboBox only moves its selection through
     // `current-index`, so this, not `loader`, is what the control binds to.
-    in-out property <int> loader_index: 1;
+    in-out property <int> loader_index: 0;
     // Loader filters the ComboBox offers. `any` means the search is not filtered by loader.
     in-out property <[string]> loader_options: ["any", "fabric", "quilt", "forge", "neoforge"];
 
     // Slug of the instance an Add installs into, empty when none is chosen yet.
-    in-out property <string> target_slug: "fabric-perf";
+    in-out property <string> target_slug: "";
     // Display name of that instance, for the button label.
-    in-out property <string> target_name: "Fabric Performance";
+    in-out property <string> target_name: "";
     // Every instance that could be the target, in ComboBox order. Only used when the browser
     // was opened from the rail, with no instance already on screen.
     in-out property <[string]> target_labels: [];
@@ -59,30 +62,7 @@ export global BrowserState {
     in-out property <bool> fixed_target: false;
 
     // The current page of hits, in the source's own order.
-    in-out property <[SearchRow]> rows: [
-        {
-            source: "modrinth",
-            project_id: "AANobbMI",
-            slug: "sodium",
-            title: "Sodium",
-            description: "A modern rendering engine for Minecraft which greatly improves performance.",
-            author: "jellysquid3",
-            kind: "mod",
-            downloads: "45.2M",
-            page_url: "https://modrinth.com/mod/sodium",
-        },
-        {
-            source: "modrinth",
-            project_id: "gvQqBUqZ",
-            slug: "lithium",
-            title: "Lithium",
-            description: "No-compromises game logic and server optimisation mod.",
-            author: "jellysquid3",
-            kind: "mod",
-            downloads: "31.8M",
-            page_url: "https://modrinth.com/mod/lithium",
-        },
-    ];
+    in-out property <[SearchRow]> rows: [];
     // The current page of modpack hits, shown by the modpack kind only. A pack is installed
     // as its own instance, so these rows are kept apart from `rows`: the two lists have
     // different buttons and only one of them is ever on screen.
@@ -92,11 +72,11 @@ export global BrowserState {
     // How many hits one page asks for.
     in-out property <int> page_size: 20;
     // Whether the source has hits past this page.
-    in-out property <bool> has_more: true;
+    in-out property <bool> has_more: false;
     // True while a search or an install is running.
     in-out property <bool> loading: false;
     // One line about the last thing that happened here.
-    in-out property <string> status: "2 result(s)";
+    in-out property <string> status: "";
 
     // Path typed into the modpack panel's "From file" field.
     in-out property <string> pack_path: "";
@@ -709,5 +689,49 @@ export component BrowserScreen inherits Rectangle {
                 overflow: elide;
             }
         }
+    }
+}
+
+// Preview only: `just ui-preview screens/browser.slint` renders this one, because a viewer
+// with no `--component` shows the last exported component of the file.
+//
+// `BrowserState` starts empty, so the screen on its own would preview as a blank list. This
+// component fills the global with the sample search the screen used to carry as its
+// defaults. Nothing in the app instantiates it.
+export component PreviewBrowserScreen inherits BrowserScreen {
+    init => {
+        BrowserState.query = "sodium";
+        BrowserState.source_labels = ["modrinth", "curseforge"];
+        BrowserState.minecraft = "1.20.1";
+        BrowserState.loader = "fabric";
+        BrowserState.loader_index = 1;
+        BrowserState.target_slug = "fabric-perf";
+        BrowserState.target_name = "Fabric Performance";
+        BrowserState.has_more = true;
+        BrowserState.status = "2 result(s)";
+        BrowserState.rows = [
+            {
+                source: "modrinth",
+                project_id: "AANobbMI",
+                slug: "sodium",
+                title: "Sodium",
+                description: "A modern rendering engine for Minecraft which greatly improves performance.",
+                author: "jellysquid3",
+                kind: "mod",
+                downloads: "45.2M",
+                page_url: "https://modrinth.com/mod/sodium",
+            },
+            {
+                source: "modrinth",
+                project_id: "gvQqBUqZ",
+                slug: "lithium",
+                title: "Lithium",
+                description: "No-compromises game logic and server optimisation mod.",
+                author: "jellysquid3",
+                kind: "mod",
+                downloads: "31.8M",
+                page_url: "https://modrinth.com/mod/lithium",
+            },
+        ];
     }
 }

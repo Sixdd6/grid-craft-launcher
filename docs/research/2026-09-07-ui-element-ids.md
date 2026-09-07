@@ -37,9 +37,12 @@ test presses them with `invoke_accessible_default_action`.
 ## Settings editor
 
 The typed settings editor repeats one `SettingRow` per setting, so every control in it carries
-the same id: `SettingRow::setting_slider`, `setting_switch`, `setting_combo`, `setting_field`,
-and `setting_reset_button`. The row itself sets `accessible-label` to the `options.txt` key and
-`accessible-value` to the stored value, so a test can read a row without knowing its position.
+the same id: `SettingRow::setting_slider`, `setting_value`, `setting_switch`, `setting_combo`,
+`setting_field`, and `setting_reset_button`. The row itself sets `accessible-label` to the
+`options.txt` key and `accessible-value` to the stored value, so a test can read a row without
+knowing its position. `setting_value` is the label beside a slider — the number the user reads,
+in the row's own unit, which is not the stored number for `fov`; its `accessible-label` is the
+text it shows.
 `SettingsEditor::settings_search_field` filters the list down, which is the cheap way to leave
 exactly one row showing. `SettingsEditor::group_toggle` opens and closes one group; its
 `accessible-label` is the group name.
@@ -92,6 +95,7 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/components/search-box.slint` | `SearchBox::search_field` | `LineEdit` |
 | `crates/gcl-ui/ui/components/search-box.slint` | `SearchBox::clear_button` | `Button` |
 | `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::setting_slider` | `Slider` |
+| `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::setting_value` | `Text` |
 | `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::setting_switch` | `Switch` |
 | `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::setting_combo` | `ComboBox` |
 | `crates/gcl-ui/ui/components/setting-row.slint` | `SettingRow::setting_field` | `LineEdit` |

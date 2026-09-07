@@ -63,6 +63,8 @@ pub fn setting_row(row: &Row, edited: Layer) -> SettingRowModel {
         maximum: 0.0,
         step: 1.0,
         decimals: 0,
+        display_decimals: 0,
+        unit: SharedString::new(),
         checked: false,
         choices: ModelRc::new(VecModel::from(Vec::<SharedString>::new())),
         choice_index: -1,
@@ -79,13 +81,17 @@ pub fn setting_row(row: &Row, edited: Layer) -> SettingRowModel {
         // a slider has nowhere to put it, and silently snapping it to a bound would hide a
         // value the file really holds. That covers a value that does not parse and a value
         // that parses outside `[min, max]`.
-        // `display` is the stored-to-shown scaling `fov` needs; nothing reads it yet.
+        //
+        // Every number the slider carries is the number a user reads, not the one
+        // `options.txt` holds: `fov` is stored in `[-1, 1]` and set in degrees. The two are
+        // the same for every other setting, because `to_display` is the identity without a
+        // `display`. `slider_stored_value` is the way back.
         Control::Slider {
             min,
             max,
             step,
             decimals,
-            display: _,
+            display,
         } => {
             let Ok(parsed) = row.value.parse::<f64>() else {
                 return model;
@@ -93,12 +99,17 @@ pub fn setting_row(row: &Row, edited: Layer) -> SettingRowModel {
             if parsed < min || parsed > max {
                 return model;
             }
+            // A negative `mul` would show the range the other way round, so the ends are
+            // sorted rather than mapped one to one.
+            let (low, high) = (setting.to_display(min), setting.to_display(max));
             model.control = "slider".into();
-            model.minimum = min as f32;
-            model.maximum = max as f32;
-            model.step = step as f32;
+            model.minimum = low.min(high) as f32;
+            model.maximum = low.max(high) as f32;
+            model.step = (step * display.map_or(1.0, |d| d.mul)).abs() as f32;
             model.decimals = i32::from(decimals);
-            model.number = parsed.clamp(min, max) as f32;
+            model.display_decimals = i32::from(display.map_or(decimals, |d| d.decimals));
+            model.unit = display.map_or("", |d| d.unit).into();
+            model.number = setting.to_display(parsed) as f32;
         }
         Control::Toggle => {
             model.control = "toggle".into();
@@ -135,6 +146,8 @@ pub fn group_header(name: &str, expanded: bool, count: usize) -> SettingRowModel
         maximum: 0.0,
         step: 1.0,
         decimals: 0,
+        display_decimals: 0,
+        unit: SharedString::new(),
         checked: expanded,
         choices: ModelRc::new(VecModel::from(Vec::<SharedString>::new())),
         choice_index: i32::try_from(count).unwrap_or(i32::MAX),
@@ -196,6 +209,45 @@ pub fn choice_token(key: &str, index: i32) -> Option<&'static str> {
     };
     let index = usize::try_from(index).ok()?;
     values.get(index).map(|(stored, _)| *stored)
+}
+
+/// The text a slider's number is stored as, for the number the user reads.
+///
+/// The inverse of the scaling [`setting_row`] applies: 90 on the `fov` slider is `0.5` in
+/// `options.txt`. The value lands on one of the catalog's own steps, because a `Slider`
+/// reports where the pointer was let go and not the nearest step: a drag that reads 90
+/// degrees would otherwise save 90.28 of them. A key the catalog does not know has no
+/// scaling, no step and no precision to format with, so its number is written as it came.
+pub fn slider_stored_value(key: &str, shown: f64) -> String {
+    let Some(setting) = catalog::find(key) else {
+        return format!("{shown}");
+    };
+    let stored = setting.from_display(shown);
+    let value = match setting.control {
+        Control::Slider {
+            min,
+            max,
+            step,
+            decimals,
+            ..
+        } => {
+            let snapped = snap(stored, min, max, step);
+            match decimals {
+                0 => catalog::Value::Int(snapped.round() as i64),
+                _ => catalog::Value::Float(snapped),
+            }
+        }
+        _ => catalog::Value::Float(stored),
+    };
+    catalog::format_value(setting, &value)
+}
+
+/// `value` moved to the nearest `min + n * step`, and kept inside `[min, max]`.
+fn snap(value: f64, min: f64, max: f64, step: f64) -> f64 {
+    if step <= 0.0 {
+        return value.clamp(min, max);
+    }
+    (min + ((value - min) / step).round() * step).clamp(min, max)
 }
 
 /// The text a control's value is stored as, formatted the way `options.txt` holds it.

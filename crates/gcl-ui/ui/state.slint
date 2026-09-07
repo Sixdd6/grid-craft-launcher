@@ -20,57 +20,14 @@ export global Shell {
 // what the user did to them.
 //
 // `rows` is the visible list: a header line for every group, then that group's settings
-// while the group is open. The search box filters it. Every default here is preview content.
+// while the group is open. The search box filters it.
+//
+// Every property here starts empty. What the app shows is what Rust put here, so a default
+// that carried sample data would be on screen until the first read answered. The sample
+// rows the preview needs live in `PreviewSettingsScreen`, in `screens/settings.slint`.
 export global SettingsEditorState {
     // The visible lines, headers included, in group order.
-    in-out property <[SettingRowModel]> rows: [
-        {
-            key: "Video",
-            label: "Video",
-            group: "Video",
-            control: "group",
-            checked: true,
-            choice_index: 3,
-        },
-        {
-            key: "renderDistance",
-            label: "Render Distance",
-            group: "Video",
-            control: "slider",
-            value: "16",
-            number: 16,
-            minimum: 2,
-            maximum: 32,
-            step: 1,
-            decimals: 0,
-            source: "preseed",
-            inherited: false,
-            resettable: true,
-        },
-        {
-            key: "fullscreen",
-            label: "Fullscreen",
-            group: "Video",
-            control: "toggle",
-            value: "false",
-            checked: false,
-            source: "default",
-            inherited: true,
-            resettable: false,
-        },
-        {
-            key: "graphicsMode",
-            label: "Graphics",
-            group: "Video",
-            control: "choice",
-            value: "1",
-            choices: ["Fast", "Fancy", "Fabulous"],
-            choice_index: 1,
-            source: "default",
-            inherited: true,
-            resettable: false,
-        },
-    ];
+    in-out property <[SettingRowModel]> rows: [];
     // What the search box holds. An empty string shows every group.
     in-out property <string> search: "";
     // True while a save or a reload is running.
@@ -80,8 +37,11 @@ export global SettingsEditorState {
     // What a saved value is called on the open screen: "default" or "override".
     in-out property <string> layer_name: "default";
 
-    // A slider, switch, or text field was set. Carries the key and the stored value.
+    // A switch or a text field was set. Carries the key and the stored value.
     callback changed(string /* key */, string /* value */);
+    // A slider was set. Carries the key and the number the user reads, which is not always
+    // the number `options.txt` holds: `src/screens/settings_editor.rs` scales it back.
+    callback slid(string /* key */, float /* shown */);
     // A choice was picked. Carries the key and the position in `choices`, which Rust maps
     // back to the token `options.txt` stores.
     callback chose(string /* key */, int /* index */);
@@ -101,90 +61,59 @@ export global SettingsEditorState {
 // imports it and `app.slint` imports the screen, which a global declared in `app.slint` could
 // not survive.
 //
-// Every default here is preview content: `just ui-preview screens/instance.slint` shows it.
+// Every property here starts empty: an instance nobody has opened has no name, no content
+// and no log, and `src/screens/instance.rs` fills every one of them from disk. The sample
+// values the preview needs live in `PreviewInstanceScreen`, at the end of this screen's file.
 export global InstanceState {
     // Display name of the instance being shown.
-    in-out property <string> name: "Fabric Performance";
+    in-out property <string> name: "";
     // Its Minecraft version.
-    in-out property <string> minecraft: "1.20.1";
+    in-out property <string> minecraft: "";
     // Its loader and build, already joined for display. "vanilla" when it has no loader.
-    in-out property <string> loader_label: "fabric 0.16.9";
+    in-out property <string> loader_label: "";
     // Whether the version a launch resolves is already in the cache.
-    in-out property <bool> installed: true;
+    in-out property <bool> installed: false;
     // Whether this instance's game is up.
     in-out property <bool> running: false;
     // One line about the last thing that happened here.
-    in-out property <string> status_text: "Ready";
+    in-out property <string> status_text: "";
 
     // Which tab is shown: 0 content, 1 settings, 2 jvm, 3 logs.
     in-out property <int> tab: 0;
 
     // Installed content, in install order.
-    in-out property <[ContentRow]> content: [
-        {
-            project_id: "AANobbMI",
-            source: "modrinth",
-            name: "sodium-fabric-0.5.8",
-            version: "OrgTMPmO",
-            kind: "mod",
-            enabled: true,
-            update_available: true,
-            file_name: "sodium-fabric-0.5.8.jar",
-        },
-        {
-            project_id: "gvQqBUqZ",
-            source: "modrinth",
-            name: "lithium-fabric-0.11.2",
-            version: "ZSNsJrPI",
-            kind: "mod",
-            enabled: false,
-            update_available: false,
-            file_name: "lithium-fabric-0.11.2.jar.disabled",
-        },
-    ];
+    in-out property <[ContentRow]> content: [];
     // Downloads the user still has to fetch by hand.
-    in-out property <[PendingRow]> pending: [
-        {
-            project_id: "1IjD5062",
-            file_name: "continuity-3.0.0.jar",
-            page_url: "https://www.curseforge.com/minecraft/mc-mods/continuity/files/1234",
-            kind: "mod",
-        },
-    ];
+    in-out property <[PendingRow]> pending: [];
     // Whether this instance has an `options.txt` yet. The read-only list of what it holds
     // is only offered once the game has written one.
-    in-out property <bool> has_options: true;
+    in-out property <bool> has_options: false;
     // What `options.txt` holds right now. Read-only: the game owns this file.
-    in-out property <[SettingRow]> options: [
-        { key: "version", value: "3465" },
-        { key: "fov", value: "0.5" },
-    ];
+    in-out property <[SettingRow]> options: [];
 
     // Minimum heap in MiB.
-    in-out property <int> jvm_min: 2048;
+    in-out property <int> jvm_min: 0;
     // Maximum heap in MiB.
-    in-out property <int> jvm_max: 4096;
+    in-out property <int> jvm_max: 0;
     // Extra JVM arguments, space separated as the user typed them.
-    in-out property <string> jvm_extra: "-XX:+UseG1GC";
+    in-out property <string> jvm_extra: "";
     // Path to a specific `java`, empty when the launcher may choose one.
     in-out property <string> java_path: "";
 
-    // Output of the running or last game, oldest first.
-    in-out property <[LogLine]> game_log: [
-        { level: "info", text: "[Render thread/INFO]: Setting user: Steve" },
-        { level: "info", text: "[Render thread/INFO]: Loaded 7 recipes" },
-    ];
+    // Output of the running or last game, oldest first. Empty until a game runs: an
+    // instance that has never been launched has written nothing.
+    in-out property <[LogLine]> game_log: [];
     // Whether the log view follows new lines.
     in-out property <bool> autoscroll: true;
     // How many installed files have a newer version at their source.
-    in-out property <int> update_count: 1;
+    in-out property <int> update_count: 0;
 
     // The one-field prompt this screen owns, shown when a launch found no account and when
     // the instance is renamed.
     in-out property <bool> prompt_open: false;
     // What the open prompt is for: "offline" for the launch name, "rename" for the new name.
     // `src/screens/instance.rs` reads it back to decide what an accepted prompt does.
-    in-out property <string> prompt_mode: "offline";
+    in-out property <string> prompt_mode: "";
     // Headline of that prompt.
     in-out property <string> prompt_title: "Play offline";
     // Label above its field.
@@ -240,33 +169,20 @@ export global InstanceState {
 // global is the seam, the same way `InstanceState` is for the detail view:
 // `src/screens/accounts.rs` binds it, and the screen reads it directly.
 //
-// Every default here is preview content: `just ui-preview screens/accounts.slint` shows it.
+// Every property here starts empty: the account store is read when the screen is shown, and
+// a sample row would be on screen until that read answered. The preview's rows live in
+// `PreviewAccountsScreen`, at the end of this screen's file.
 export global AccountsState {
     // Saved accounts, in the order the store holds them.
-    in-out property <[AccountRow]> rows: [
-        {
-            id: "b50ad385-829d-3141-a216-7e7d7539ba7f",
-            name: "Notch",
-            kind: "offline",
-            expires: "",
-            active: true,
-        },
-        {
-            id: "069a79f4-44e9-4726-a5be-fca90e38aaf5",
-            name: "Steve",
-            kind: "msa",
-            expires: "2026-09-07 10:22",
-            active: false,
-        },
-    ];
+    in-out property <[AccountRow]> rows: [];
     // Whether a Microsoft client id is configured, which is what makes sign-in possible.
-    in-out property <bool> msa_available: true;
+    in-out property <bool> msa_available: false;
     // Why sign-in is off, shown next to the disabled button. Empty while it is on.
     in-out property <string> msa_hint: "";
     // True while a store operation, a refresh, or a sign-in is running.
     in-out property <bool> busy: false;
     // One line about the last thing that happened here.
-    in-out property <string> status: "2 account(s)";
+    in-out property <string> status: "";
 
     // Whether the device-code dialog is up.
     in-out property <bool> device_open: false;
@@ -314,30 +230,31 @@ export global AccountsState {
 // The same seam as `AccountsState`, for `src/screens/settings.rs`. The two key fields are
 // write-only on purpose: a saved key is shown as set or unset and never as its value.
 //
-// Every default here is preview content: `just ui-preview screens/settings.slint` shows it.
+// Every property here starts empty: the config is read when the screen is shown. The
+// preview's values live in `PreviewSettingsScreen`, at the end of this screen's file.
 export global SettingsState {
     // The app root in use right now.
-    in-out property <string> root_path: "/home/steve/.local/share/grid-craft-launcher";
+    in-out property <string> root_path: "";
     // Root typed into the Change field, empty until the user types one.
     in-out property <string> new_root: "";
     // Maximum number of concurrent downloads.
-    in-out property <int> parallel: 8;
+    in-out property <int> parallel: 0;
     // Default minimum heap, in MiB.
-    in-out property <int> jvm_min: 1024;
+    in-out property <int> jvm_min: 0;
     // Default maximum heap, in MiB.
-    in-out property <int> jvm_max: 4096;
+    in-out property <int> jvm_max: 0;
     // Path to a specific `java`, empty when the launcher may choose one.
     in-out property <string> java_path: "";
     // Whether a CurseForge API key is configured, from the config file or the environment.
     in-out property <bool> curseforge_key_set: false;
     // Whether a Microsoft client id is configured.
-    in-out property <bool> msa_client_id_set: true;
+    in-out property <bool> msa_client_id_set: false;
     // What the user typed into the CurseForge key field. Cleared as soon as it is saved.
     in-out property <string> curseforge_key_input: "";
     // What the user typed into the client id field. Cleared as soon as it is saved.
     in-out property <string> msa_client_id_input: "";
     // One line about the last thing that happened here.
-    in-out property <string> status: "Ready";
+    in-out property <string> status: "";
     // PASS/FAIL lines from the last source check, in check order.
     in-out property <[string]> verify_lines: [];
     // True while a save or a source check is running.

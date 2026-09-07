@@ -646,3 +646,62 @@ export component InstanceScreen inherits Rectangle {
         }
     }
 }
+
+// Preview only: `just ui-preview screens/instance.slint` renders this one, because a viewer
+// with no `--component` shows the last exported component of the file.
+//
+// `InstanceState` starts empty, so the screen on its own would preview as a nameless
+// instance with no content and no log. This component fills the global with the sample
+// values it used to carry as its defaults. Nothing in the app instantiates it.
+export component PreviewInstanceScreen inherits InstanceScreen {
+    init => {
+        InstanceState.name = "Fabric Performance";
+        InstanceState.minecraft = "1.20.1";
+        InstanceState.loader_label = "fabric 0.16.9";
+        InstanceState.installed = true;
+        InstanceState.status_text = "Ready";
+        InstanceState.has_options = true;
+        InstanceState.jvm_min = 2048;
+        InstanceState.jvm_max = 4096;
+        InstanceState.jvm_extra = "-XX:+UseG1GC";
+        InstanceState.update_count = 1;
+        InstanceState.content = [
+            {
+                project_id: "AANobbMI",
+                source: "modrinth",
+                name: "sodium-fabric-0.5.8",
+                version: "OrgTMPmO",
+                kind: "mod",
+                enabled: true,
+                update_available: true,
+                file_name: "sodium-fabric-0.5.8.jar",
+            },
+            {
+                project_id: "gvQqBUqZ",
+                source: "modrinth",
+                name: "lithium-fabric-0.11.2",
+                version: "ZSNsJrPI",
+                kind: "mod",
+                enabled: false,
+                update_available: false,
+                file_name: "lithium-fabric-0.11.2.jar.disabled",
+            },
+        ];
+        InstanceState.pending = [
+            {
+                project_id: "1IjD5062",
+                file_name: "continuity-3.0.0.jar",
+                page_url: "https://www.curseforge.com/minecraft/mc-mods/continuity/files/1234",
+                kind: "mod",
+            },
+        ];
+        InstanceState.options = [
+            { key: "version", value: "3465" },
+            { key: "fov", value: "0.5" },
+        ];
+        InstanceState.game_log = [
+            { level: "info", text: "[Render thread/INFO]: Setting user: Steve" },
+            { level: "info", text: "[Render thread/INFO]: Loaded 7 recipes" },
+        ];
+    }
+}

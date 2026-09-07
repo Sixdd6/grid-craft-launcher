@@ -407,8 +407,8 @@ fn open(bridge: &Bridge, shared: &Shared) {
         },
         move |window, opened| {
             let state = window.global::<BrowserState>();
-            // The global's defaults are preview content, so the first open would otherwise
-            // show two hits nobody searched for.
+            // A page of hits belongs to the search that found it. Coming back to the screen
+            // is not that search, so the pager and both lists start over.
             clear_rows(&state);
             let labels: Vec<SharedString> = opened
                 .sources

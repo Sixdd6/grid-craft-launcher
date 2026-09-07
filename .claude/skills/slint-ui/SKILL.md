@@ -69,9 +69,15 @@ screen needs: `Shell.move_selection(current, delta, len)`. A toast is pushed fro
 live in `app.slint` because `app.slint` imports the screens, and a screen importing `app.slint`
 back would cycle.
 
-Give every `*State` property a realistic default. That default is what `just ui-preview
-screens/x.slint` renders with no Rust running — it is the whole point of the preview workflow, so
-an empty or placeholder default defeats it.
+Every `*State` property starts empty: strings `""`, numbers `0`, bools `false`, arrays `[]`. What
+the app shows must be what Rust put there, and a default carrying sample data is on screen until
+the first read answers — that is how a never-launched instance came to show two lines of someone
+else's game log. The exception is a label that is a real default rather than data: `prompt_title`,
+`prompt_label`, `prompt_accept`, `layer_name`, `kind_labels`, `loader_options`, `page_size`.
+
+The other half of that rule is `open`: every `open`/`load` in `src/screens/*.rs` sets every
+property it owns, the empty case included, so a screen never shows the instance before it. After
+adding a property, grep for its setter.
 
 ## Bridge
 
@@ -261,10 +267,18 @@ value as its `EnvFilter` directive, e.g. `GCL_LOG=debug`. `Bridge` writes one li
 ## Preview
 
 `just ui-preview screens/instances.slint` opens slint-viewer with live reload against
-`ui/screens/instances.slint`, rendered with each `*State` global's default property values. Every
-screen file has one: `screens/instances.slint`, `screens/instance.slint`, `screens/browser.slint`,
-`screens/accounts.slint`, `screens/settings.slint`. Give a changed screen realistic defaults before
-previewing, and describe what you saw in your report — the tool has no snapshot output.
+`ui/screens/instances.slint`. The globals start empty, so the sample data lives in one
+**`Preview<Screen>` component per screen file**, last in the file: slint-viewer with no
+`--component` renders the last exported component, and that component's `init` fills the globals
+with the values the screen used to declare as defaults. `PreviewInstancesScreen`,
+`PreviewInstanceScreen`, `PreviewBrowserScreen`, `PreviewAccountsScreen`, `PreviewSettingsScreen`.
+Nothing in the app instantiates one. Add a screen, add its preview; add a `*State` property that
+shows anything, give the preview a value for it.
+
+`slint-viewer --check --style fluent ui/screens/x.slint` compiles one file and prints its
+diagnostics without opening a window — the fastest check after editing a `.slint` file.
+`--screenshot out.png` renders one instead, which needs a display or `xvfb-run`. Describe what you
+saw in your report.
 
 ## Visual direction
 
@@ -321,8 +335,8 @@ previewing, and describe what you saw in your report — the tool has no snapsho
 - Do not put logic in a `.slint` screen file. If it is not layout or a direct property/callback
   binding, it belongs in `src/screens/*.rs`.
 - Do not add a color, spacing, or font literal outside `Theme`.
-- Do not skip a realistic default on a `*State` property — it breaks the preview workflow for
-  everyone after you.
+- Do not give a `*State` property a non-empty default. Sample data goes in that screen's
+  `Preview<Screen>` component.
 
 ## Docs
 

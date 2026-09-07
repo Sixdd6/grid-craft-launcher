@@ -30,6 +30,7 @@ fn the_instances_screen_creates_launches_and_removes_an_instance() {
         let app = &driver;
         an_empty_root_shows_the_empty_state(app).await;
         creating_a_vanilla_instance_adds_a_row(app).await;
+        a_never_launched_instance_has_an_empty_log(app).await;
         creating_a_fabric_instance_installs_the_loader(app).await;
         launching_a_row_runs_the_game_until_stop(app).await;
         a_launch_that_cannot_start_opens_the_error_dialog(app).await;
@@ -127,6 +128,56 @@ async fn creating_a_vanilla_instance_adds_a_row(app: &TestApp) {
         app.launcher.root().instances_dir().join("vanilla").is_dir(),
         "the instance folder is on disk"
     );
+}
+
+/// (b2) The Logs tab of an instance nobody has launched is empty.
+///
+/// The game log is the output of a game that ran. A row of sample text here read as a game
+/// that had started, on an instance whose folder holds no log file at all.
+async fn a_never_launched_instance_has_an_empty_log(app: &TestApp) {
+    let index = row_index(&app.window, "Vanilla");
+    app.click_nth("InstancesScreen::row_open", index);
+    app.wait_until(
+        "the detail screen to show the instance",
+        |window| {
+            window.global::<App>().get_screen() == Screen::Instance
+                && window.global::<InstanceState>().get_name() == "Vanilla"
+        },
+        QUICK,
+    )
+    .await;
+    // Tab 3 is Logs.
+    app.el_nth("TabBar::tab_entry", 3)
+        .invoke_accessible_default_action();
+    support::pump();
+
+    let log: Vec<String> = app
+        .window
+        .global::<InstanceState>()
+        .get_game_log()
+        .iter()
+        .map(|line| line.text.to_string())
+        .collect();
+    assert!(
+        log.is_empty(),
+        "this instance has never been launched, so it has written no log. It shows: {log:?}"
+    );
+    assert_eq!(
+        app.window
+            .global::<InstanceState>()
+            .get_status_text()
+            .to_string(),
+        "",
+        "and nothing has happened to it yet"
+    );
+
+    app.click("InstanceScreen::back_button");
+    app.wait_until(
+        "the list to come back",
+        |window| window.global::<App>().get_screen() == Screen::Instances,
+        QUICK,
+    )
+    .await;
 }
 
 /// (c) Create with Fabric: the build list loads, and the loader is installed after the create.

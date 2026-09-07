@@ -110,7 +110,12 @@ export global InstancesState {
     // Slug the yes/no modal is asking about.
     in-out property <string> confirm_slug;
 
-    // Re-read the instance list from disk.
+    // The screen was shown: re-read the list from disk, keeping the rows already on screen
+    // until the new ones arrive. A CLI launch, or one started from the detail screen, moves
+    // the last-launched stamp under a list nobody has pressed Refresh on.
+    callback open();
+    // Re-read the instance list from disk. Unlike `open`, this one says it is loading, so
+    // the Refresh button the user pressed shows that something is happening.
     callback refresh();
     // The search box changed. Carries the new filter.
     callback filter_changed(string);
@@ -158,6 +163,17 @@ export component AppWindow inherits Window {
     changed shown_slug => {
         if (self.shown_slug != "") {
             InstanceState.load(self.shown_slug);
+        }
+    }
+
+    // Whether the instance list is up. It re-reads the list every time it is shown, for the
+    // same reason the other screens do: Rust cannot watch a property, so navigating to the
+    // screen is what triggers the read.
+    property <bool> instances_open: App.screen == Screen.instances;
+
+    changed instances_open => {
+        if (self.instances_open) {
+            InstancesState.open();
         }
     }
 

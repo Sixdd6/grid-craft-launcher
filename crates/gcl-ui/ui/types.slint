@@ -80,6 +80,12 @@ export struct SettingRow {
 // carries the group name in `label`, how many settings it holds in `choice_index`, and
 // whether it is open in `checked`. Everything else is a setting row: `value` is the string
 // `options.txt` would hold, and the typed fields are the same value read for its control.
+//
+// A slider row is carried in the numbers a user reads, not the numbers `options.txt` holds:
+// `number`, `minimum`, `maximum` and `step` are already scaled, `unit` is what follows the
+// number, and `display_decimals` says how many digits it is written with. `decimals` stays
+// the stored precision, which only `src/models/settings.rs` uses. For every setting but
+// `fov` the two are the same number.
 export struct SettingRowModel {
     key: string,
     label: string,
@@ -91,6 +97,8 @@ export struct SettingRowModel {
     maximum: float,
     step: float,
     decimals: int,
+    display_decimals: int,
+    unit: string,
     checked: bool,
     choices: [string],
     choice_index: int,

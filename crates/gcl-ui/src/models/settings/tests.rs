@@ -60,6 +60,54 @@ fn a_float_slider_keeps_its_decimals_and_a_value_outside_the_range_stays_a_text_
 }
 
 #[test]
+fn the_fov_row_is_shown_in_degrees_and_saved_as_the_float_options_txt_holds() {
+    // `fov:0.0` is 70 degrees, and the range [-1, 1] is 30 to 110.
+    let model = setting_row(&row("fov", "0.0", Layer::Default), Layer::Preseed);
+    assert_eq!(model.control, "slider");
+    assert_eq!(
+        model.number, 70.0,
+        "the slider is on the number a player reads"
+    );
+    assert_eq!(model.minimum, 30.0);
+    assert_eq!(model.maximum, 110.0);
+    assert_eq!(model.step, 1.0, "0.025 stored is one degree shown");
+    assert_eq!(model.display_decimals, 0, "degrees are whole numbers");
+    assert_eq!(
+        model.decimals, 3,
+        "and the stored float keeps its own precision"
+    );
+    assert_eq!(model.unit, "\u{b0}");
+    assert_eq!(
+        model.value, "0.0",
+        "the row still carries what the file holds"
+    );
+
+    // Dragging that slider to 90 degrees saves the float Minecraft reads.
+    assert_eq!(slider_stored_value("fov", 90.0), "0.5");
+    assert_eq!(slider_stored_value("fov", 70.0), "0.0");
+    assert_eq!(slider_stored_value("fov", 110.0), "1.0");
+    assert_eq!(slider_stored_value("fov", 30.0), "-1.0");
+
+    // A drag reports where the pointer was let go, not the nearest step. 90.28 degrees is
+    // what the label rounds to 90, so 90 degrees is what is saved.
+    assert_eq!(slider_stored_value("fov", 90.28), "0.5");
+}
+
+#[test]
+fn a_slider_with_no_display_scaling_shows_and_saves_the_stored_number() {
+    let model = setting_row(&row("renderDistance", "16", Layer::Preseed), Layer::Preseed);
+    assert_eq!(model.display_decimals, 0);
+    assert_eq!(model.unit, "");
+    assert_eq!(model.number, 16.0);
+
+    // An integer slider saves an integer, and a float one keeps its decimals.
+    assert_eq!(slider_stored_value("renderDistance", 24.0), "24");
+    assert_eq!(slider_stored_value("gamma", 0.75), "0.75");
+    // A key the catalog does not know has no scaling to undo.
+    assert_eq!(slider_stored_value("madeUpKey", 3.5), "3.5");
+}
+
+#[test]
 fn a_slider_value_that_does_not_parse_stays_a_text_row() {
     // `bright` is not a number, so no slider position stands for it. The row falls back to
     // the text control, where the value a file really holds is on screen and editable.

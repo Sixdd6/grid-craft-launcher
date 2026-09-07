@@ -24,7 +24,16 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState) {
     {
         let bridge = bridge.clone();
         let running = running.clone();
-        state.on_refresh(move || load(&bridge, &running));
+        // The screen was shown again. The rows on it stay until the new ones arrive: the
+        // loading state hides them, and a list that blinks empty on every visit is worse
+        // than one that is a moment out of date.
+        state.on_open(move || load(&bridge, &running, Quiet::Yes));
+    }
+
+    {
+        let bridge = bridge.clone();
+        let running = running.clone();
+        state.on_refresh(move || load(&bridge, &running, Quiet::No));
     }
 
     {
@@ -113,12 +122,23 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState) {
         state.on_launch(move |slug| launch(&bridge, &running, slug.as_str()));
     }
 
-    load(bridge, &running);
+    load(bridge, &running, Quiet::No);
+}
+
+/// Whether a read says it is running. A quiet read leaves the rows already on screen alone.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Quiet {
+    /// Set the loading flag, which the screen shows instead of the rows.
+    No,
+    /// Leave the loading flag alone: the old rows stay until the new ones land.
+    Yes,
 }
 
 /// Reads every instance and its installed flag, then rebuilds the list.
-fn load(bridge: &Bridge, running: &RunState) {
-    if let Some(window) = bridge.weak().upgrade() {
+fn load(bridge: &Bridge, running: &RunState, quiet: Quiet) {
+    if quiet == Quiet::No
+        && let Some(window) = bridge.weak().upgrade()
+    {
         window.global::<InstancesState>().set_loading(true);
     }
     let running = running.clone();
@@ -349,7 +369,7 @@ fn create_instance(
             state.set_create_name(SharedString::new());
             // The instance exists now, so show it before the install starts: a loader install
             // that fails must not leave the new instance out of the list.
-            load(&after, &running);
+            load(&after, &running, Quiet::No);
             if loader != Loader::None {
                 install_loader(&after, &running, &slug);
             }
@@ -369,7 +389,7 @@ fn install_loader(bridge: &Bridge, running: &RunState, slug: &str) {
     bridge.run(
         "Install loader",
         move |launcher| launcher.install_loader(&slug).map(|_| ()),
-        move |_window, ()| load(&after, &running),
+        move |_window, ()| load(&after, &running, Quiet::No),
     );
 }
 
@@ -410,7 +430,7 @@ fn confirm_delete(bridge: &Bridge, running: &RunState) {
     bridge.run(
         "Delete instance",
         move |launcher| Ok(launcher.instances().delete(&slug)?),
-        move |_window, ()| load(&after, &running),
+        move |_window, ()| load(&after, &running, Quiet::No),
     );
 }
 

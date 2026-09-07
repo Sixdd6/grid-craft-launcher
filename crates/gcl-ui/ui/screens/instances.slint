@@ -12,39 +12,8 @@ import { Shell } from "../state.slint";
 // Pure layout. `rows` is already filtered by Rust; `filter` only carries what the user typed
 // back out, so the owner can re-filter and set `rows` again.
 export component InstancesScreen inherits Rectangle {
-    // Instances to show, in display order.
-    in property <[InstanceRow]> rows: [
-        {
-            slug: "vanilla",
-            name: "Vanilla 1.21",
-            minecraft: "1.21",
-            loader: "none",
-            loader_version: "",
-            last_launched: "2026-09-05 21:14",
-            installed: true,
-            running: false,
-        },
-        {
-            slug: "fabric-perf",
-            name: "Fabric Performance",
-            minecraft: "1.20.1",
-            loader: "fabric",
-            loader_version: "0.16.9",
-            last_launched: "2026-09-06 08:02",
-            installed: true,
-            running: true,
-        },
-        {
-            slug: "create-above",
-            name: "Create: Above and Beyond",
-            minecraft: "1.18.2",
-            loader: "forge",
-            loader_version: "40.2.21",
-            last_launched: "",
-            installed: false,
-            running: false,
-        },
-    ];
+    // Instances to show, in display order. `app.slint` binds it to `InstancesState.rows`.
+    in property <[InstanceRow]> rows: [];
     // What the user typed into the search box.
     in-out property <string> filter;
     // Row the keyboard is on, or -1 while nothing is chosen. Arrow keys move it, Enter opens
@@ -248,5 +217,47 @@ export component InstancesScreen inherits Rectangle {
                 }
             }
         }
+    }
+}
+
+// Preview only: `just ui-preview screens/instances.slint` renders this one, because a viewer
+// with no `--component` shows the last exported component of the file.
+//
+// The screen's own `rows` starts empty, the way the app starts it, so the preview is what
+// carries the sample list. Nothing in the app instantiates this.
+export component PreviewInstancesScreen inherits Rectangle {
+    InstancesScreen {
+        rows: [
+            {
+                slug: "vanilla",
+                name: "Vanilla 1.21",
+                minecraft: "1.21",
+                loader: "none",
+                loader_version: "",
+                last_launched: "2026-09-05 21:14",
+                installed: true,
+                running: false,
+            },
+            {
+                slug: "fabric-perf",
+                name: "Fabric Performance",
+                minecraft: "1.20.1",
+                loader: "fabric",
+                loader_version: "0.16.9",
+                last_launched: "2026-09-06 08:02",
+                installed: true,
+                running: true,
+            },
+            {
+                slug: "create-above",
+                name: "Create: Above and Beyond",
+                minecraft: "1.18.2",
+                loader: "forge",
+                loader_version: "40.2.21",
+                last_launched: "",
+                installed: false,
+                running: false,
+            },
+        ];
     }
 }

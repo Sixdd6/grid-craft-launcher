@@ -5,10 +5,11 @@ import { Button } from "button.slint";
 
 // One setting, edited with the control its catalog entry names.
 //
-// Pure layout. The row reports what the user did and never decides what it means: the value
-// a slider sends is its number formatted with the row's own `decimals`, and a choice sends
-// the position it picked, which `src/screens/settings_editor.rs` maps back to the token
-// `options.txt` stores.
+// Pure layout. The row reports what the user did and never decides what it means: a slider
+// sends the number a user reads and a choice sends the position it picked, and
+// `src/screens/settings_editor.rs` turns either one into the value `options.txt` stores.
+// That is why a slider has its own callback: `fov` is shown in degrees and stored as a
+// float in [-1, 1], so only Rust may write it.
 //
 // A slider saves when the drag ends, or `commit_delay` after the last change when no release
 // follows — an arrow key, or a screen reader's increment — so one drag is one save and not
@@ -19,6 +20,7 @@ export component SettingRow inherits Rectangle {
     // False while a save is running: every control is dead until the rows come back.
     in property <bool> enabled: true;
     callback changed(string /* key */, string /* value */);
+    callback slid(string /* key */, float /* shown */);
     callback chose(string /* key */, int /* index */);
     callback reset(string /* key */);
 
@@ -73,17 +75,22 @@ export component SettingRow inherits Rectangle {
                     }
                     released(value) => {
                         commit.running = false;
-                        root.changed(root.entry.key, value.to-fixed(root.entry.decimals));
+                        root.slid(root.entry.key, value);
                     }
                 }
 
-                Text {
-                    text: setting_slider.value.to-fixed(root.entry.decimals);
+                // The number a user reads, in the row's own unit, following the thumb while
+                // it is dragged. A test reads it through the accessible label.
+                setting_value := Text {
+                    text: setting_slider.value.to-fixed(root.entry.display_decimals)
+                        + root.entry.unit;
                     color: Theme.text;
                     font-size: Theme.font-size;
                     vertical-alignment: center;
                     horizontal-alignment: right;
                     width: Theme.status-width;
+                    accessible-role: text;
+                    accessible-label: self.text;
                 }
             }
 
@@ -92,8 +99,7 @@ export component SettingRow inherits Rectangle {
                 running: false;
                 triggered => {
                     self.running = false;
-                    root.changed(
-                        root.entry.key, setting_slider.value.to-fixed(root.entry.decimals));
+                    root.slid(root.entry.key, setting_slider.value);
                 }
             }
         }
