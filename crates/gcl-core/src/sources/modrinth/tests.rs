@@ -18,6 +18,7 @@ const VERSIONS_SODIUM: &str =
 const VERSION_FILES: &str =
     include_str!("../../../../../tests/fixtures/modrinth/version_files_lookup.json");
 const SEARCH_TYPES: &str = include_str!("../../../../../tests/fixtures/modrinth/search_types.json");
+const SEARCH_PACKS: &str = include_str!("../../../../../tests/fixtures/modrinth/search_packs.json");
 
 /// A client with no backoff, so a retry in a failing test does not stall the suite.
 fn client() -> HttpClient {
@@ -678,4 +679,57 @@ async fn search_text_is_url_encoded() {
         .search(&mod_query("a b&c=d"))
         .await
         .expect("search succeeds");
+}
+
+#[tokio::test]
+async fn search_packs_asks_for_the_modpack_project_type() {
+    let server = MockServer::start().await;
+    let source = serve(&server, "/search", SEARCH_PACKS).await;
+    let q = SearchQuery {
+        text: "fabulously".to_string(),
+        minecraft: Some("1.20.1".to_string()),
+        // A loader on a pack query is ignored: a pack states its loader in the pack index.
+        loader: Some(Loader::Fabric),
+        limit: 3,
+        ..SearchQuery::default()
+    };
+
+    let page = source.search_packs(&q).await.expect("search packs");
+
+    assert_eq!(page.total, 92);
+    assert_eq!(page.offset, 0);
+    assert_eq!(page.hits.len(), 3);
+    assert!(page.hits.iter().all(|h| h.is_pack), "{:?}", page.hits);
+    let hit = &page.hits[0];
+    assert_eq!(hit.source, SourceId::Modrinth);
+    assert_eq!(hit.project_id, "1KVo5zza");
+    assert_eq!(hit.slug, "fabulously-optimized");
+    assert_eq!(hit.title, "Fabulously Optimized");
+    assert_eq!(hit.author, "robotkoer");
+    assert_eq!(hit.downloads, 16_857_076);
+    assert_eq!(
+        hit.page_url,
+        "https://modrinth.com/modpack/fabulously-optimized"
+    );
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    let search = requests.first().expect("one search request");
+    let facets = search
+        .url
+        .query_pairs()
+        .find(|(k, _)| k == "facets")
+        .map(|(_, v)| v.to_string())
+        .expect("a facets parameter");
+    assert_eq!(
+        facets, r#"[["project_type:modpack"],["versions:1.20.1"]]"#,
+        "no loader facet on a pack search"
+    );
+}
+
+#[tokio::test]
+async fn a_mod_search_hit_is_not_a_pack() {
+    let server = MockServer::start().await;
+    let source = serve(&server, "/search", SEARCH_SODIUM).await;
+    let page = source.search(&mod_query("sodium")).await.expect("search");
+    assert!(page.hits.iter().all(|h| !h.is_pack), "{:?}", page.hits);
 }

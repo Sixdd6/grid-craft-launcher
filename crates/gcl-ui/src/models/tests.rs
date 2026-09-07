@@ -99,6 +99,7 @@ fn search_row_formats_the_download_count() {
         description: "A rendering engine".into(),
         author: "jellysquid3".into(),
         kind: ContentKind::Mod,
+        is_pack: false,
         downloads: 12_345,
         icon_url: None,
         page_url: "https://modrinth.com/mod/sodium".into(),

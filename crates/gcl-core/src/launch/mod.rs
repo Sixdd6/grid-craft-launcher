@@ -12,7 +12,7 @@ pub mod spawn;
 
 pub use command::{JvmSettings, LaunchCommand, LaunchInputs, build};
 pub use crash::crash_hint;
-pub use spawn::{RunningGame, spawn, wait};
+pub use spawn::{ChildHandle, RunningGame, force_stop, request_stop, spawn, wait};
 
 /// Errors building or running a launch command.
 #[derive(Debug, thiserror::Error)]
@@ -36,6 +36,20 @@ pub enum Error {
         /// The underlying I/O error.
         source: std::io::Error,
     },
+    /// The game could not be signalled.
+    #[error("could not stop pid {pid}: {source}")]
+    Stop {
+        /// Process id the stop was aimed at.
+        pid: u32,
+        /// The underlying I/O error.
+        source: std::io::Error,
+    },
+    /// A stop reached a game that had already exited.
+    #[error("the game has already exited")]
+    AlreadyExited,
+    /// No game this launcher started is running for this instance.
+    #[error("no game is running for {0}")]
+    NotRunning(String),
     /// Laying out the legacy asset tree failed.
     #[error(transparent)]
     Legacy(#[from] crate::mojang::assets::LegacyError),

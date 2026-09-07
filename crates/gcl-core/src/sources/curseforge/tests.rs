@@ -200,9 +200,12 @@ async fn search_builds_the_query_and_maps_hits() {
         limit: 3,
     };
     let page = source(&server).search(&q).await.expect("search");
-    assert_eq!(page.total, 3);
+    // The fixture holds four hits; the fourth is a modpack, whose class is not a
+    // `ContentKind`, so it drops out of a mod search.
+    assert_eq!(page.total, 4);
     assert_eq!(page.offset, 0);
     assert_eq!(page.hits.len(), 3);
+    assert!(page.hits.iter().all(|h| !h.is_pack), "{:?}", page.hits);
 
     let hit = &page.hits[0];
     assert_eq!(hit.source, SourceId::CurseForge);
@@ -860,5 +863,57 @@ async fn a_body_that_does_not_parse_is_a_bad_response() {
             }
         ),
         "got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn search_packs_sends_the_modpack_class_id_and_keeps_only_packs() {
+    let server = MockServer::start().await;
+    mount_classes(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/v1/mods/search"))
+        .and(header("x-api-key", KEY))
+        .and(query_param("classId", "4471"))
+        .and(query_param("gameVersion", "1.20.1"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(SEARCH))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let q = SearchQuery {
+        text: "all the mods".into(),
+        minecraft: Some("1.20.1".into()),
+        // A loader on a pack query is ignored: a pack states its loader in `manifest.json`.
+        loader: Some(Loader::Fabric),
+        ..SearchQuery::default()
+    };
+    let page = source(&server)
+        .search_packs(&q)
+        .await
+        .expect("search packs");
+
+    // Only the one hit whose class is Modpacks survives; the three mod hits drop out.
+    assert_eq!(page.hits.len(), 1);
+    let hit = &page.hits[0];
+    assert!(hit.is_pack);
+    assert_eq!(hit.source, SourceId::CurseForge);
+    assert_eq!(hit.project_id, "520914");
+    assert_eq!(hit.slug, "all-the-mods-9");
+    assert_eq!(hit.title, "All the Mods 9");
+    assert_eq!(hit.author, "ATMTeam");
+    assert_eq!(
+        hit.page_url,
+        "https://www.curseforge.com/minecraft/modpacks/all-the-mods-9"
+    );
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    let search = requests
+        .iter()
+        .find(|r| r.url.path() == "/v1/mods/search")
+        .expect("search request");
+    assert!(
+        !search.url.query_pairs().any(|(k, _)| k == "modLoaderType"),
+        "got {}",
+        search.url
     );
 }

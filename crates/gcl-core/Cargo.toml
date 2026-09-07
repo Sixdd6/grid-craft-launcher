@@ -32,6 +32,10 @@ uuid.workspace = true
 time.workspace = true
 zip.workspace = true
 
+# Unix-only: `SIGTERM` then `SIGKILL` for `Launcher::stop_instance`.
+[target.'cfg(unix)'.dependencies]
+nix.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 insta.workspace = true

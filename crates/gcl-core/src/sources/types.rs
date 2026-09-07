@@ -86,6 +86,12 @@ pub struct SearchHit {
     pub author: String,
     /// Content kind.
     pub kind: ContentKind,
+    /// Whether this hit is a modpack, which only [`super::Source::search_packs`] returns.
+    ///
+    /// A modpack is not a [`ContentKind`], so a pack hit reports [`ContentKind::Mod`] and
+    /// sets this flag; its `page_url` comes from [`pack_page_url`]. Every hit from
+    /// [`super::Source::search`] has it `false`.
+    pub is_pack: bool,
     /// Total download count.
     pub downloads: u64,
     /// Icon image URL, when the source has one.

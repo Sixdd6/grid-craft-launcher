@@ -1052,3 +1052,97 @@ async fn list_worlds_reads_the_folders_under_saves() {
     .await
     .expect("blocking task");
 }
+
+/// A stand-in for `java`: it reports its start, then waits until a `SIGTERM` arrives.
+///
+/// The sleep runs in the background and `wait` is interrupted by the signal, so the trap
+/// runs at once rather than after the sleep. Its output goes to `/dev/null`, so the
+/// orphaned sleep does not hold the game log pipes open after the shell exits with 143,
+/// the code a shell reports for "terminated by SIGTERM".
+#[cfg(unix)]
+const FAKE_JAVA: &str = "#!/bin/sh\n\
+     trap 'kill $pid 2>/dev/null; exit 143' TERM\n\
+     echo started\n\
+     sleep 30 >/dev/null 2>&1 &\n\
+     pid=$!\n\
+     wait $pid\n";
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_instance_terminates_the_game_and_clears_the_registry() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    let server = MockServer::start().await;
+    mock_vanilla(&server, MC).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let uri = server.uri();
+
+    tokio::task::spawn_blocking(move || {
+        let launcher = launcher(&dir, Some(uri), None);
+        let mut instance = launcher
+            .instances()
+            .create("Pack", MC, Loader::None, None, &BTreeMap::new())
+            .expect("create instance");
+        let java = dir.path().join("fake-java");
+        std::fs::write(&java, FAKE_JAVA).expect("write the stand-in java");
+        std::fs::set_permissions(&java, std::fs::Permissions::from_mode(0o755))
+            .expect("make it executable");
+        instance.config.jvm.java_path = Some(java);
+        instance.save().expect("save instance");
+        let slug = instance.slug.clone();
+
+        assert!(launcher.running_slugs().is_empty(), "nothing runs yet");
+        let running = launcher
+            .launch_instance_async(&slug, None, Some("tester"))
+            .expect("launch");
+        assert_eq!(launcher.running_slugs(), vec![slug.clone()]);
+        assert!(running.pid.is_some(), "the game reports a pid");
+
+        // The stand-in prints `started` once its trap is in place. Without this wait the
+        // signal can arrive during shell startup, which kills it before the trap exists.
+        let ready = Instant::now();
+        while !std::fs::read_to_string(&running.log_path)
+            .unwrap_or_default()
+            .contains("started")
+        {
+            assert!(
+                ready.elapsed() < Duration::from_secs(10),
+                "the stand-in java never started"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        let started = Instant::now();
+        launcher.stop_instance(&slug).expect("stop");
+        let stopped = started.elapsed();
+        assert!(
+            stopped < Duration::from_secs(2),
+            "SIGTERM was enough: {stopped:?}"
+        );
+
+        let outcome = running.wait_blocking(&launcher).expect("wait");
+        let LaunchOutcome::Exited { code, .. } = outcome else {
+            panic!("expected an exit, got {outcome:?}");
+        };
+        assert_eq!(code, 143, "the stand-in traps SIGTERM and exits 143");
+        assert!(
+            launcher.running_slugs().is_empty(),
+            "the wait task cleared the registry"
+        );
+
+        let err = launcher.stop_instance(&slug).expect_err("nothing runs now");
+        assert!(
+            matches!(err, gcl_core::Error::Launch(gcl_core::launch::Error::NotRunning(ref s)) if *s == slug),
+            "got {err:?}"
+        );
+        let err = launcher.stop_instance("nope").expect_err("no such instance");
+        assert!(
+            matches!(err, gcl_core::Error::Launch(gcl_core::launch::Error::NotRunning(_))),
+            "got {err:?}"
+        );
+        dir
+    })
+    .await
+    .expect("blocking task");
+}

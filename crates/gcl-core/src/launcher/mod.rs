@@ -3,9 +3,10 @@
 //! It owns the one tokio runtime, the app root, the config, the HTTP client, the event
 //! channel, and the cancellation token. Binaries never build a runtime of their own.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard};
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
@@ -171,6 +172,12 @@ impl Endpoints {
     }
 }
 
+/// How long [`Launcher::stop_instance`] lets the game save and exit before it kills it.
+pub const STOP_GRACE: Duration = Duration::from_secs(10);
+
+/// How often [`Launcher::stop_instance`] checks whether the game has exited.
+const STOP_POLL: Duration = Duration::from_millis(250);
+
 /// The `${launcher_name}` every launch command reports.
 pub const LAUNCHER_NAME: &str = "grid-craft-launcher";
 
@@ -274,6 +281,21 @@ pub struct Launcher {
     process_runner: Option<Arc<dyn ProcessRunner>>,
     /// The refresh-token store, opened on first use by [`Launcher::secrets`].
     secrets: OnceLock<Box<dyn SecretStore>>,
+    /// The games this launcher started that have not exited, by instance slug.
+    ///
+    /// [`Launcher::start`] fills it, the waiting task clears its entry when the game exits,
+    /// and [`Launcher::stop_instance`] reads it. It is an [`Arc`] because that task outlives
+    /// the call that started it and cannot borrow the launcher.
+    running: Arc<Mutex<HashMap<String, RunningEntry>>>,
+}
+
+/// One running game, as [`Launcher::stop_instance`] needs it.
+#[derive(Clone, Debug)]
+struct RunningEntry {
+    /// Process id, for the unix signal path.
+    pid: Option<u32>,
+    /// The child process, for the platforms with no signals.
+    child: crate::launch::ChildHandle,
 }
 
 impl Launcher {
@@ -331,6 +353,7 @@ impl Launcher {
             endpoints,
             process_runner: None,
             secrets: OnceLock::new(),
+            running: Arc::new(Mutex::new(HashMap::new())),
         };
         Ok((launcher, receiver))
     }
@@ -932,13 +955,34 @@ impl Launcher {
         let sink = self.events.clone();
         let target = log_path.clone();
         let game = self.block_on(async move { crate::launch::spawn(&cmd, target, sink).await })?;
-        let pid = game.child.id();
+        let pid = game.pid;
         let slug = instance.slug.clone();
         let path = log_path.clone();
         instance.config.last_launched = Some(now_rfc3339());
         instance.save()?;
+        // Registered before the waiting task starts, so a stop that comes right after this
+        // call returns finds the game.
+        self.running
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(
+                slug.clone(),
+                RunningEntry {
+                    pid,
+                    child: game.child(),
+                },
+            );
+        let registry = Arc::clone(&self.running);
+        let registered = slug.clone();
         let wait = self.runtime.spawn(async move {
-            let code = crate::launch::wait(game).await?;
+            let waited = crate::launch::wait(game).await;
+            // Cleared before the outcome is posted, so a caller that hears the game exited
+            // never sees it in `running_slugs`.
+            registry
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .remove(&registered);
+            let code = waited?;
             // Written again on exit, so the timestamp survives an edit made while the game
             // ran and a reader can tell a finished launch from a running one by the log.
             instance.config.last_launched = Some(now_rfc3339());
@@ -1043,6 +1087,65 @@ impl Launcher {
     pub fn search(&self, id: SourceId, q: &SearchQuery) -> Result<SearchPage, crate::Error> {
         let source = self.source(id)?;
         Ok(self.block_on(async { source.search(q).await })?)
+    }
+
+    /// Searches one source for modpacks matching `q`. Blocks.
+    ///
+    /// `q.kind` and `q.loader` are ignored; every hit has [`crate::sources::SearchHit::is_pack`]
+    /// set. Feed a hit's `project_id` to [`Launcher::import_modpack`]'s source form.
+    pub fn search_packs(&self, id: SourceId, q: &SearchQuery) -> Result<SearchPage, crate::Error> {
+        let source = self.source(id)?;
+        Ok(self.block_on(async { source.search_packs(q).await })?)
+    }
+
+    /// Slugs of the games this launcher started that have not exited, in name order.
+    pub fn running_slugs(&self) -> Vec<String> {
+        let mut slugs: Vec<String> = self
+            .running
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .keys()
+            .cloned()
+            .collect();
+        slugs.sort();
+        slugs
+    }
+
+    /// Stops the game running for `slug`. Blocks until it has exited.
+    ///
+    /// It asks first: `SIGTERM` on unix, a kill through the child handle elsewhere. The game
+    /// then has [`STOP_GRACE`] to save and exit; the registry entry disappearing is the
+    /// signal that it did. A game still there at the deadline is killed outright.
+    ///
+    /// This is [`crate::launch::Error::NotRunning`] when this launcher started no game for
+    /// `slug`, which includes a game started by another process.
+    #[tracing::instrument(skip(self))]
+    pub fn stop_instance(&self, slug: &str) -> Result<(), crate::Error> {
+        let entry = self
+            .running
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .get(slug)
+            .cloned()
+            .ok_or_else(|| crate::launch::Error::NotRunning(slug.to_string()))?;
+        self.block_on(async move {
+            crate::launch::request_stop(&entry.child, entry.pid).await?;
+            let deadline = std::time::Instant::now() + STOP_GRACE;
+            while std::time::Instant::now() < deadline {
+                tokio::time::sleep(STOP_POLL).await;
+                if !self
+                    .running
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .contains_key(slug)
+                {
+                    return Ok(());
+                }
+            }
+            tracing::warn!(slug, "the game ignored the stop request; killing it");
+            crate::launch::force_stop(&entry.child, entry.pid).await?;
+            Ok(())
+        })
     }
 
     /// Installs a project into an instance, following its required dependencies. Blocks.

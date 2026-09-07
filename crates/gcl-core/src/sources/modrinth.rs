@@ -14,7 +14,7 @@ use crate::instances::model::Loader;
 
 use super::{
     ContentKind, Dependency, DependencyKind, Error, Project, ReleaseKind, SearchHit, SearchPage,
-    SearchQuery, Source, SourceId, Version, VersionFile, VersionFilter, page_url,
+    SearchQuery, Source, SourceId, Version, VersionFile, VersionFilter, pack_page_url, page_url,
 };
 
 /// Production base URL for the Modrinth API.
@@ -186,9 +186,58 @@ impl Source for Modrinth {
                     description: hit.description,
                     author: hit.author,
                     kind,
+                    is_pack: false,
                     downloads: hit.downloads,
                     icon_url: hit.icon_url,
                 })
+            })
+            .collect();
+        Ok(SearchPage {
+            hits,
+            total: raw.total_hits,
+            offset: raw.offset,
+        })
+    }
+
+    #[tracing::instrument(skip(self))]
+    async fn search_packs(&self, q: &SearchQuery) -> Result<SearchPage, Error> {
+        // `project_type:modpack` is the only kind facet a pack search needs. No loader
+        // facet: a modpack states its loader in the pack index, not in its categories.
+        let mut facets: Vec<Vec<String>> = vec![vec!["project_type:modpack".to_string()]];
+        if let Some(mc) = &q.minecraft {
+            facets.push(vec![format!("versions:{mc}")]);
+        }
+        let url = format!(
+            "{}/search?query={}&index=relevance&limit={}&offset={}&facets={}",
+            self.base,
+            encode(&q.text),
+            q.limit,
+            q.offset,
+            encode(&json_facets(&facets))
+        );
+
+        let raw: RawSearch = self
+            .http
+            .get_json(&url)
+            .await
+            .map_err(|e| map_err(e, "search", None))?;
+        let hits = raw
+            .hits
+            .into_iter()
+            .map(|hit| SearchHit {
+                source: ID,
+                page_url: pack_page_url(ID, &hit.slug),
+                project_id: hit.project_id,
+                slug: hit.slug,
+                title: hit.title,
+                description: hit.description,
+                author: hit.author,
+                // A modpack has no `ContentKind` of its own; `is_pack` is what a caller
+                // reads. `Mod` is the placeholder, as it is in every pack hit.
+                kind: ContentKind::Mod,
+                is_pack: true,
+                downloads: hit.downloads,
+                icon_url: hit.icon_url,
             })
             .collect();
         Ok(SearchPage {

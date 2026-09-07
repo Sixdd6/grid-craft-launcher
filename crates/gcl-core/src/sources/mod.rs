@@ -38,6 +38,12 @@ pub enum Error {
         /// Content kind that is not supported.
         kind: ContentKind,
     },
+    /// This source cannot search modpacks.
+    #[error("{source_id} does not support modpack search")]
+    UnsupportedPacks {
+        /// Source that was queried.
+        source_id: SourceId,
+    },
     /// This source is disabled, typically for a missing API key.
     #[error("{source_id} is disabled: {reason}")]
     Disabled {
@@ -99,6 +105,17 @@ pub trait Source: Send + Sync {
     fn supported_kinds(&self) -> &[ContentKind];
     /// Searches for projects matching `q`.
     async fn search(&self, q: &SearchQuery) -> Result<SearchPage, Error>;
+    /// Searches for modpacks matching `q`.
+    ///
+    /// A modpack is not a [`ContentKind`], so it has its own search: `q.kind` and
+    /// `q.loader` are ignored and every hit reports [`SearchHit::is_pack`] `true`. The
+    /// default is [`Error::UnsupportedPacks`], for a source that has no modpacks.
+    async fn search_packs(&self, q: &SearchQuery) -> Result<SearchPage, Error> {
+        let _ = q;
+        Err(Error::UnsupportedPacks {
+            source_id: self.id(),
+        })
+    }
     /// Fetches one project by id or slug.
     async fn project(&self, id_or_slug: &str) -> Result<Project, Error>;
     /// Lists a project's versions, optionally filtered.

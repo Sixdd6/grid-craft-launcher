@@ -18,7 +18,7 @@ use crate::instances::model::Loader;
 
 use super::{
     ContentKind, Dependency, DependencyKind, Error, Project, ReleaseKind, SearchHit, SearchPage,
-    SearchQuery, Source, SourceId, Version, VersionFile, VersionFilter, page_url,
+    SearchQuery, Source, SourceId, Version, VersionFile, VersionFilter, pack_page_url, page_url,
 };
 
 /// Production base URL for the CurseForge Core API.
@@ -437,10 +437,67 @@ impl Source for CurseForge {
                         .map(|a| a.name.clone())
                         .unwrap_or_default(),
                     kind,
+                    is_pack: false,
                     downloads: m.download_count,
                     icon_url: m.logo.and_then(|l| l.thumbnail_url),
                     slug: m.slug,
                 })
+            })
+            .collect();
+        Ok(SearchPage {
+            hits,
+            total: pagination.total_count,
+            offset: pagination.index,
+        })
+    }
+
+    #[tracing::instrument(skip(self))]
+    async fn search_packs(&self, q: &SearchQuery) -> Result<SearchPage, Error> {
+        let classes = self.class_ids().await?;
+        let mut url = format!(
+            "{}/v1/mods/search?gameId={GAME_ID}&sortField=2&sortOrder=desc&pageSize={}&index={}&searchFilter={}&classId={}",
+            self.base,
+            q.limit.min(PAGE_SIZE as u32),
+            q.offset,
+            encode(&q.text),
+            classes.modpacks
+        );
+        if let Some(mc) = &q.minecraft {
+            url.push_str("&gameVersion=");
+            url.push_str(&encode(mc));
+        }
+        // No `modLoaderType`: a pack states its loader in `manifest.json`, and the filter
+        // would drop packs whose files do not name one.
+
+        let raw: Envelope<Vec<RawMod>> = self
+            .get(&url)
+            .await
+            .map_err(|e| map_err(e, "search", None))?;
+        let pagination = raw.pagination.unwrap_or_default();
+        let hits = raw
+            .data
+            .into_iter()
+            // The class filter is the server's job; this drops anything else it sends,
+            // so a hit is never reported as a pack when it is a mod.
+            .filter(|m| m.class_id == Some(classes.modpacks))
+            .map(|m| SearchHit {
+                source: ID,
+                page_url: pack_page_url(ID, &m.slug),
+                project_id: m.id.to_string(),
+                title: m.name,
+                description: m.summary,
+                author: m
+                    .authors
+                    .first()
+                    .map(|a| a.name.clone())
+                    .unwrap_or_default(),
+                // A modpack has no `ContentKind` of its own; `is_pack` is what a caller
+                // reads. `Mod` is the placeholder, as it is in every pack hit.
+                kind: ContentKind::Mod,
+                is_pack: true,
+                downloads: m.download_count,
+                icon_url: m.logo.and_then(|l| l.thumbnail_url),
+                slug: m.slug,
             })
             .collect();
         Ok(SearchPage {

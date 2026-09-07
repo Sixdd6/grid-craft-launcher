@@ -1,0 +1,181 @@
+{
+    "hits": [
+        {
+            "project_id": "1KVo5zza",
+            "project_type": "modpack",
+            "all_project_types": [
+                "modpack"
+            ],
+            "slug": "fabulously-optimized",
+            "author": "robotkoer",
+            "author_id": "2avTeeAE",
+            "organization": "Fabulously Optimized",
+            "organization_id": "d8z9840y",
+            "title": "Fabulously Optimized",
+            "description": "Beautiful graphics, speedy performance and familiar features in a simple package. Chaos Cubed beta!",
+            "categories": [
+                "fabric",
+                "lightweight",
+                "multiplayer",
+                "optimization"
+            ],
+            "display_categories": [
+                "lightweight",
+                "multiplayer",
+                "optimization"
+            ],
+            "versions": [
+                "1.16.5",
+                "1.17.1",
+                "1.18.1",
+                "1.18.2",
+                "1.19",
+                "1.19.1",
+                "1.19.2",
+                "1.19.3",
+                "1.19.4",
+                "1.20",
+                "1.20.1",
+                "1.20.2",
+                "1.20.3",
+                "1.20.4",
+                "1.20.5",
+                "1.20.6",
+                "1.21",
+                "1.21.1",
+                "1.21.2",
+                "1.21.3",
+                "1.21.4",
+                "1.21.5",
+                "1.21.6",
+                "1.21.7",
+                "1.21.8",
+                "1.21.9",
+                "1.21.10",
+                "1.21.11",
+                "26.1",
+                "26.1.1",
+                "26.1.2",
+                "26.2"
+            ],
+            "downloads": 16857076,
+            "follows": 4787,
+            "icon_url": "https://cdn.modrinth.com/data/1KVo5zza/d8152911f8fd5d7e9a8c499fe89045af81fe816e_96.webp",
+            "date_created": "2022-02-10T06:28:19.045034+00:00",
+            "date_modified": "2026-08-30T14:07:56.116361+00:00",
+            "latest_version": "dW11Fn4e",
+            "license": "BSD-3-Clause",
+            "client_side": "required",
+            "server_side": "unsupported",
+            "environment": [
+                "client_only"
+            ],
+            "disclosure_types": [],
+            "gallery": [
+                "https://cdn.modrinth.com/data/1KVo5zza/images/ce41746dbf8f3d2a9661875c18b5667778233ccf_350.webp",
+                "https://cdn.modrinth.com/data/1KVo5zza/images/044a5b9cb85394be95656a1ebcfe135466420da9.png",
+                "https://cdn.modrinth.com/data/1KVo5zza/images/9d5ddd3392ce89295caa1030ca930f71f5c6b49a_350.webp",
+                "https://cdn.modrinth.com/data/1KVo5zza/images/f9168d6fa21a53865de8e86a1e730f3bd32a4371_350.webp",
+                "https://cdn.modrinth.com/data/1KVo5zza/images/d37b5277d1309c51d4d032543dded49f6c805b76_350.webp",
+                "https://cdn.modrinth.com/data/1KVo5zza/images/486ccc239c9e54f93ecbd2fb258d96d19a1d572b_350.webp",
+                "https://cdn.modrinth.com/data/1KVo5zza/images/61f57fc2b1791edc74232d70fe1079ef89a70247_350.webp",
+                "https://cdn.modrinth.com/data/1KVo5zza/images/12d6802eeb5e0114b75624be4ae3cd062fe4634a_350.webp"
+            ],
+            "featured_gallery": "https://cdn.modrinth.com/data/1KVo5zza/images/38f70f307f1a0b17d8ed4526d1636317e8c12d1d_350.webp",
+            "color": 13813933
+        },
+        {
+            "project_id": "jsIRQiqh",
+            "project_type": "modpack",
+            "all_project_types": [
+                "modpack"
+            ],
+            "slug": "fabulouslynyalamised",
+            "author": "Koishukaze",
+            "author_id": "btPAIxZg",
+            "organization": null,
+            "organization_id": null,
+            "title": "Fabulously Nyalamised",
+            "description": "A personal fork of Fabulously Optimized with my own additions",
+            "categories": [
+                "fabric",
+                "optimization"
+            ],
+            "display_categories": [
+                "optimization"
+            ],
+            "versions": [
+                "1.19.4",
+                "1.20",
+                "1.20.1"
+            ],
+            "downloads": 3462,
+            "follows": 2,
+            "icon_url": "https://cdn.modrinth.com/data/jsIRQiqh/d3bb4d2fc3f11e3cd7660e361d4c7392a1f08592_96.webp",
+            "date_created": "2023-05-08T21:17:02.642881+00:00",
+            "date_modified": "2023-07-06T08:05:28.169482+00:00",
+            "latest_version": "IADNB5FF",
+            "license": "LicenseRef-All-Rights-Reserved",
+            "client_side": "required",
+            "server_side": "unsupported",
+            "environment": [
+                "client_only"
+            ],
+            "disclosure_types": [],
+            "gallery": [
+                "https://cdn.modrinth.com/data/jsIRQiqh/images/e41211c1d605a9e07290b2bbb8c369c2eb6360f5_350.webp"
+            ],
+            "featured_gallery": "https://cdn.modrinth.com/data/jsIRQiqh/images/9d63747ec3e1e2eece5319f12f7ba50da0f30034_350.webp",
+            "color": 11310205
+        },
+        {
+            "project_id": "LYvxyJbb",
+            "project_type": "modpack",
+            "all_project_types": [
+                "modpack"
+            ],
+            "slug": "create-fabulously-2",
+            "author": "DarkLuck",
+            "author_id": "lA1BZISN",
+            "organization": null,
+            "organization_id": null,
+            "title": "Create Fabulously 2",
+            "description": "Highly Optimized Create Modpack for Technical Redstone Player.",
+            "categories": [
+                "adventure",
+                "fabric",
+                "lightweight",
+                "optimization",
+                "quilt",
+                "technology"
+            ],
+            "display_categories": [
+                "adventure",
+                "lightweight",
+                "technology"
+            ],
+            "versions": [
+                "1.20.1"
+            ],
+            "downloads": 2544,
+            "follows": 0,
+            "icon_url": "https://cdn.modrinth.com/data/LYvxyJbb/260be9ee4e269a6467bbf9b9a3bfb926d042b789_96.webp",
+            "date_created": "2023-10-29T06:43:35.803960+00:00",
+            "date_modified": "2023-11-05T02:02:38.740360+00:00",
+            "latest_version": "OC6KRJ2o",
+            "license": "MIT",
+            "client_side": "required",
+            "server_side": "required",
+            "environment": [
+                "client_and_server"
+            ],
+            "disclosure_types": [],
+            "gallery": [],
+            "featured_gallery": "https://cdn.modrinth.com/data/LYvxyJbb/images/85e6505e879c3456dde4d37d0792d9943a0e9416_350.webp",
+            "color": 4928794
+        }
+    ],
+    "offset": 0,
+    "limit": 3,
+    "total_hits": 92
+}

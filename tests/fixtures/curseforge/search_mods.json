@@ -182,12 +182,73 @@
       "isAvailable": true,
       "thumbsUpCount": 0,
       "rating": 0
+    },
+    {
+      "id": 520914,
+      "gameId": 432,
+      "name": "All the Mods 9",
+      "slug": "all-the-mods-9",
+      "links": {
+        "websiteUrl": "https://www.curseforge.com/minecraft/modpacks/all-the-mods-9",
+        "wikiUrl": "",
+        "issuesUrl": "",
+        "sourceUrl": ""
+      },
+      "summary": "All the mods 9 is the latest in the All the Mods series.",
+      "status": 4,
+      "downloadCount": 9123456,
+      "isFeatured": true,
+      "primaryCategoryId": 4471,
+      "categories": [
+        {
+          "id": 4471,
+          "gameId": 432,
+          "name": "Modpacks",
+          "slug": "modpacks",
+          "url": "https://www.curseforge.com/minecraft/modpacks",
+          "iconUrl": "https://media.forgecdn.net/avatars/44/71/637239028160000000.png",
+          "dateModified": "2018-03-01T00:00:00Z",
+          "isClass": true,
+          "classId": null,
+          "parentCategoryId": null,
+          "displayIndex": 1
+        }
+      ],
+      "classId": 4471,
+      "authors": [
+        {
+          "id": 96700,
+          "name": "ATMTeam",
+          "url": "https://www.curseforge.com/members/atmteam"
+        }
+      ],
+      "logo": {
+        "id": 888001,
+        "modId": 520914,
+        "title": "atm9.png",
+        "description": "",
+        "thumbnailUrl": "https://media.forgecdn.net/avatars/thumbnails/888/1/256/256/atm9.png",
+        "url": "https://media.forgecdn.net/avatars/888/1/atm9.png"
+      },
+      "screenshots": [],
+      "mainFileId": 5230381,
+      "latestFiles": [],
+      "latestFilesIndexes": [],
+      "latestEarlyAccessFilesIndexes": [],
+      "dateCreated": "2019-04-30T02:33:52.07Z",
+      "dateModified": "2026-08-15T10:02:11.5Z",
+      "dateReleased": "2026-08-15T10:02:11.5Z",
+      "allowModDistribution": true,
+      "gamePopularityRank": 5,
+      "isAvailable": true,
+      "thumbsUpCount": 0,
+      "rating": 0
     }
   ],
   "pagination": {
     "index": 0,
     "pageSize": 50,
-    "resultCount": 3,
-    "totalCount": 3
+    "resultCount": 4,
+    "totalCount": 4
   }
 }

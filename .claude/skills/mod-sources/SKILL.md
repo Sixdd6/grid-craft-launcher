@@ -15,6 +15,7 @@ pub trait Source: Send + Sync {
     fn id(&self) -> SourceId;                                   // Modrinth | CurseForge
     fn supported_kinds(&self) -> &[ContentKind];                // Mod, ResourcePack, Shader, DataPack, World
     async fn search(&self, q: &SearchQuery) -> Result<SearchPage, Error>;
+    async fn search_packs(&self, q: &SearchQuery) -> Result<SearchPage, Error>;  // modpacks; default: UnsupportedPacks
     async fn project(&self, id_or_slug: &str) -> Result<Project, Error>;
     async fn versions(&self, project_id: &str, f: &VersionFilter) -> Result<Vec<Version>, Error>;
     async fn version(&self, version_id: &str) -> Result<Version, Error>;
@@ -25,6 +26,13 @@ pub trait Source: Send + Sync {
 }
 pub type BoxSource = std::sync::Arc<dyn Source>;
 ```
+
+`search_packs` is the modpack search: a modpack is not a `ContentKind`, so it has its own
+call. Modrinth sends the facet `[["project_type:modpack"]]` plus `[["versions:<mc>"]]` when
+the query names a Minecraft version; CurseForge sends `classId=<modpacks>`. Neither sends a
+loader filter: a pack states its loader in its index, not in its categories. Every hit has
+`SearchHit.is_pack = true`, reports `ContentKind::Mod` as a placeholder kind, and links
+through `pack_page_url`. Hits from `search` always have `is_pack = false`.
 
 Modrinth answers `resolve_by_fingerprint` with `Ok(vec![])` (no fingerprint endpoint);
 CurseForge answers `resolve_by_hash` the same way (no hash endpoint). `as_modrinth` and

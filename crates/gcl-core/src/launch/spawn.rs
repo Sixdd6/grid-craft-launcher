@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc::UnboundedSender;
@@ -11,11 +13,25 @@ use super::Error;
 use super::command::LaunchCommand;
 use crate::events::{Event, EventSink, LogLevel};
 
+/// A shared handle to the game's child process.
+///
+/// [`wait`] and a stop both reach the process through this. It holds `None` once the game
+/// has exited and [`wait`] has dropped the child.
+pub type ChildHandle = Arc<tokio::sync::Mutex<Option<tokio::process::Child>>>;
+
+/// How often [`wait`] checks whether the game has exited.
+///
+/// It polls instead of awaiting the child, so the lock on [`ChildHandle`] is free between
+/// checks and a stop can take it while the game runs.
+const POLL: Duration = Duration::from_millis(100);
+
 /// A running game process and the tasks draining its output.
 #[derive(Debug)]
 pub struct RunningGame {
-    /// The child process. Take it to kill the game.
-    pub child: tokio::process::Child,
+    /// The child process, shared with whoever wants to stop the game.
+    child: ChildHandle,
+    /// Process id of the game, read at spawn. `None` if it exited before it was read.
+    pub pid: Option<u32>,
     /// The file both output streams are appended to.
     pub log_path: PathBuf,
     /// The program that was started, named in a [`Error::Spawn`] if waiting fails.
@@ -96,7 +112,8 @@ pub async fn spawn(
     }));
 
     Ok(RunningGame {
-        child,
+        pid: child.id(),
+        child: Arc::new(tokio::sync::Mutex::new(Some(child))),
         log_path,
         program: cmd.program.clone(),
         tasks,
@@ -104,18 +121,99 @@ pub async fn spawn(
     })
 }
 
+impl RunningGame {
+    /// The shared child handle, for a caller that wants to stop the game.
+    pub fn child(&self) -> ChildHandle {
+        self.child.clone()
+    }
+}
+
+/// Asks the game to exit.
+///
+/// Unix sends `SIGTERM` to `pid`, which the JVM turns into a clean shutdown; a process that
+/// has already gone is not an error. Other platforms have no signal, so the child is killed
+/// through its handle, the same as [`force_stop`].
+pub async fn request_stop(child: &ChildHandle, pid: Option<u32>) -> Result<(), Error> {
+    #[cfg(unix)]
+    {
+        let _ = child;
+        signal(pid, nix::sys::signal::Signal::SIGTERM)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        kill_child(child).await
+    }
+}
+
+/// Kills the game outright: `SIGKILL` on unix, a kill through the handle elsewhere.
+pub async fn force_stop(child: &ChildHandle, pid: Option<u32>) -> Result<(), Error> {
+    #[cfg(unix)]
+    {
+        let _ = child;
+        signal(pid, nix::sys::signal::Signal::SIGKILL)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        kill_child(child).await
+    }
+}
+
+/// Sends one signal to `pid`. A pid that is already gone (`ESRCH`) is a success: the
+/// caller wanted the process stopped, and it is.
+#[cfg(unix)]
+fn signal(pid: Option<u32>, signal: nix::sys::signal::Signal) -> Result<(), Error> {
+    let pid = pid.ok_or(Error::AlreadyExited)?;
+    match nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), signal) {
+        Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
+        Err(errno) => Err(Error::Stop {
+            pid,
+            source: std::io::Error::from_raw_os_error(errno as i32),
+        }),
+    }
+}
+
+/// Kills the child through its handle, for a platform with no signals.
+#[cfg(not(unix))]
+async fn kill_child(child: &ChildHandle) -> Result<(), Error> {
+    let mut guard = child.lock().await;
+    let running = guard.as_mut().ok_or(Error::AlreadyExited)?;
+    let pid = running.id().unwrap_or_default();
+    running
+        .start_kill()
+        .map_err(|source| Error::Stop { pid, source })
+}
+
 /// Waits for the game to exit, drains the rest of its output, and returns the exit code.
 ///
-/// A process killed by a signal reports `-1`.
+/// A process killed by a signal reports `-1`. The child is dropped before this returns, so
+/// a stop that comes afterwards finds nothing to signal.
 pub async fn wait(game: RunningGame) -> Result<i32, Error> {
     let RunningGame {
-        mut child,
+        child,
+        pid: _,
         log_path: _,
         program,
         tasks,
         sink,
     } = game;
-    let waited = child.wait().await;
+    let waited = loop {
+        let mut guard = child.lock().await;
+        let Some(running) = guard.as_mut() else {
+            break Err(std::io::Error::other("the game process is already gone"));
+        };
+        match running.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) => {}
+            Err(err) => break Err(err),
+        }
+        drop(guard);
+        tokio::time::sleep(POLL).await;
+    };
+    // The child is dropped here, so a later stop reports "not running" rather than
+    // signalling a pid the system has already handed to something else.
+    *child.lock().await = None;
     // The reader tasks are joined either way: a failed wait still leaves two tasks holding
     // the output pipes, and dropping them would lose the last lines of the log.
     for task in tasks {
