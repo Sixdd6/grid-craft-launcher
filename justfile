@@ -65,10 +65,12 @@ bump-version version:
 
 # Drive the real window with real X input on Xvfb and report PASS or FAIL.
 #
-# Needs `Xvfb`, ImageMagick's `import`, and python-xlib. The GUI runs over a throwaway root
-# on display :97, `scripts/ui-xtest.py` sends the clicks and keys through XTest, and the
-# check reads the GUI log for the jobs the run must have raised. Screenshots and the log stay
-# in the temp root, whose path is printed at the end.
+# Needs the network, `Xvfb`, `xdpyinfo` (x11-utils), ImageMagick's `import`, and python3-xlib.
+# Xvfb picks its own free display through `-displayfd`, so no fixed number and no stale lock
+# can break the run. The GUI runs over a throwaway root, `scripts/ui-xtest.py` sends the
+# clicks and keys through XTest, and the check reads the GUI log for the jobs the run must
+# have raised. Every wait is a poll with a bounded timeout, not a fixed sleep. The temp root
+# is removed on PASS and kept on failure, with its path printed.
 #
 # This is the only test that goes through hit-testing, pointer grabs, and X input focus. The
 # flow tests in `crates/gcl-ui/tests` drive the same window through the Slint testing backend,
@@ -80,20 +82,49 @@ ui-xtest:
     root=$(mktemp -d gcl-xtest-XXXXXX --tmpdir)
     app=""
     xvfb=""
-    trap 'for p in $app $xvfb; do kill "$p" 2>/dev/null || true; done; echo "shots and log: $root"' EXIT
-    Xvfb :97 -screen 0 1200x760x24 >"$root/xvfb.log" 2>&1 &
+    ok=0
+    cleanup() {
+        for p in $app $xvfb; do kill "$p" 2>/dev/null || true; done
+        # Wait as well as kill: an Xvfb that is still running holds its lock file, and the
+        # next run would find a display that answers and then dies under it.
+        for p in $app $xvfb; do wait "$p" 2>/dev/null || true; done
+        if [ "$ok" = 1 ]; then rm -rf "$root"; else echo "shots and log kept in: $root"; fi
+    }
+    trap cleanup EXIT
+    # Poll `cmd` every half second until it succeeds, or fail after `limit` seconds.
+    wait_for() {
+        what="$1"; limit="$2"; shift 2
+        deadline=$((SECONDS + limit))
+        until eval "$*"; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+                echo "timeout: waited ${limit}s for $what"
+                return 1
+            fi
+            sleep 0.5
+        done
+    }
+    # `-displayfd 3` makes Xvfb choose a free display and write its number to fd 3.
+    Xvfb -displayfd 3 -screen 0 1200x760x24 3>"$root/display" >"$root/xvfb.log" 2>&1 &
     xvfb=$!
-    sleep 2
-    env -u WAYLAND_DISPLAY DISPLAY=:97 GCL_ROOT="$root" GCL_LOG=info \
+    wait_for "Xvfb to name its display" 30 '[ -s "$root/display" ]'
+    disp=":$(tr -d '[:space:]' <"$root/display")"
+    echo "display: $disp"
+    wait_for "the X server on $disp" 30 "xdpyinfo -display '$disp' >/dev/null 2>&1"
+    env -u WAYLAND_DISPLAY DISPLAY="$disp" GCL_ROOT="$root" GCL_LOG=info \
         target/debug/grid-craft-launcher >"$root/gui.log" 2>&1 &
     app=$!
-    sleep 6
-    # Create a Fabric instance, open it, open Rename, close it with Escape, then navigate
-    # with one click: the click after an Escape is the one a mounted-but-closed dialog ate.
-    GCL_XTEST_DISPLAY=:97 python3 scripts/ui-xtest.py focus \
+    wait_for "the app to start" 60 'grep -q "gui start" "$root/gui.log"'
+    # Create a Fabric instance. `focus` waits for the window itself, so no sleep here.
+    timeout 180 env GCL_XTEST_DISPLAY="$disp" python3 scripts/ui-xtest.py focus \
         click:1070,29 sleep:3 click:600,310 type:smoke \
         click:600,468 sleep:1 click:600,512 sleep:3 \
-        click:813,541 sleep:8 shot:"$root/created.png" \
+        click:813,541
+    wait_for "the instance to be created and the loader installed" 180 \
+        '[ -d "$root/instances/smoke" ] && grep -q "Install loader" "$root/gui.log"'
+    # Open it, open Rename, close it with Escape, then navigate with one click: the click
+    # after an Escape is the one a mounted-but-closed dialog ate.
+    timeout 180 env GCL_XTEST_DISPLAY="$disp" python3 scripts/ui-xtest.py focus \
+        shot:"$root/created.png" \
         click:250,75 sleep:2 click:933,37 sleep:2 key:Escape sleep:1 \
         click:68,181 sleep:2 shot:"$root/accounts.png"
     fail=0
@@ -119,4 +150,4 @@ ui-xtest:
         echo "missing: the click after Escape was lost"
         fail=1
     fi
-    if [ "$fail" = 0 ]; then echo PASS; else echo FAIL; exit 1; fi
+    if [ "$fail" = 0 ]; then ok=1; echo PASS; else echo FAIL; exit 1; fi

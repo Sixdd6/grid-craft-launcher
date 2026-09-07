@@ -7,7 +7,8 @@ Every step is one argument, applied in order:
                        `grid-craft-launcher`); needed once before any `type` or `key`
     click:X,Y          move the pointer there, press button 1, release it
     drag:X1,Y1,X2,Y2   press at the first point, move in ten steps, release at the second
-    type:TEXT          type the text, one key at a time
+    type:TEXT          type the text, one key at a time; a character the layout only
+                       reaches with Shift (uppercase letters, `_`, `:`) is typed with it
     key:NAME           press one key by keysym name, e.g. `Escape` or `Return`
     sleep:SECONDS      wait
     shot:PATH          save a PNG of the root window
@@ -26,7 +27,22 @@ from Xlib import X, XK, display
 from Xlib.ext import xtest
 
 DISPLAY = os.environ.get("GCL_XTEST_DISPLAY") or os.environ.get("DISPLAY") or ":99"
-d = display.Display(DISPLAY)
+
+# The X connection. `main` opens it, so an import of this file costs nothing and a server
+# that is not there is reported by name rather than as a traceback.
+d = None
+
+# The keysym name for a character a keysym name cannot be read from directly.
+CHAR_NAMES = {
+    " ": "space",
+    "_": "underscore",
+    "-": "minus",
+    ".": "period",
+    ":": "colon",
+    "/": "slash",
+    ",": "comma",
+    "=": "equal",
+}
 
 
 def click(x, y, hold=0.05):
@@ -42,20 +58,42 @@ def click(x, y, hold=0.05):
 
 
 def key(keysym_name):
+    """Press and release one key, named by its keysym, e.g. `Escape` or `underscore`.
+
+    A keysym that the layout only reaches with Shift — every uppercase letter, and `_` and
+    `:` on a US layout — is sent with Shift held, so `type:My_Pack` types what it says. The
+    layout itself says which those are: the keycode carries the plain keysym at level 0 and
+    the shifted one at level 1.
+    """
     ks = XK.string_to_keysym(keysym_name)
+    if ks == 0:
+        raise SystemExit(f"no keysym named `{keysym_name}`")
     kc = d.keysym_to_keycode(ks)
+    if kc == 0:
+        raise SystemExit(f"keysym `{keysym_name}` is not on the keyboard layout of {DISPLAY}")
+    shifted = d.keycode_to_keysym(kc, 0) != ks and d.keycode_to_keysym(kc, 1) == ks
+    shift = d.keysym_to_keycode(XK.string_to_keysym("Shift_L")) if shifted else 0
+    if shifted and shift == 0:
+        raise SystemExit(f"`{keysym_name}` needs Shift, which is not on the layout of {DISPLAY}")
+    if shifted:
+        xtest.fake_input(d, X.KeyPress, shift)
+        d.sync()
+        time.sleep(0.02)
     xtest.fake_input(d, X.KeyPress, kc)
     d.sync()
     time.sleep(0.03)
     xtest.fake_input(d, X.KeyRelease, kc)
     d.sync()
+    if shifted:
+        time.sleep(0.02)
+        xtest.fake_input(d, X.KeyRelease, shift)
+        d.sync()
     time.sleep(0.08)
 
 
 def typ(s):
     for ch in s:
-        name = {" ": "space"}.get(ch, ch)
-        key(name)
+        key(CHAR_NAMES.get(ch, ch))
 
 
 def drag(x1, y1, x2, y2):
@@ -121,6 +159,11 @@ def shot(name):
 
 
 def main(steps):
+    global d
+    try:
+        d = display.Display(DISPLAY)
+    except Exception as err:
+        raise SystemExit(f"cannot open the X display {DISPLAY}: {err}")
     for step in steps:
         kind, _, arg = step.partition(":")
         if kind == "click":

@@ -255,3 +255,35 @@ fn layer_names_are_the_words_the_source_column_shows() {
     assert_eq!(layer_name(Layer::File), "file");
     assert_eq!(layer_name(Layer::Override), "override");
 }
+
+/// The text the slider's value label shows, as `components/setting-row.slint` builds it:
+/// `setting_slider.value.to-fixed(entry.display_decimals) + entry.unit`.
+///
+/// The binding lives in Slint, so this mirrors it. The rendered label is read back from a
+/// real window in `tests/flow_settings.rs`.
+fn slider_label(model: &crate::SettingRowModel) -> String {
+    format!(
+        "{:.*}{}",
+        usize::try_from(model.display_decimals).unwrap_or(0),
+        model.number,
+        model.unit
+    )
+}
+
+#[test]
+fn a_slider_label_reads_in_the_display_unit_and_precision() {
+    // A row with a `display`: the label is the degrees, not the stored float, and it is
+    // written with the display's own precision rather than the stored `decimals`.
+    let fov = setting_row(&row("fov", "0.0", Layer::Default), Layer::Preseed);
+    assert_eq!(slider_label(&fov), "70\u{b0}");
+    assert_eq!(fov.decimals, 3, "the stored float has three");
+    let wide = setting_row(&row("fov", "1.0", Layer::Default), Layer::Preseed);
+    assert_eq!(slider_label(&wide), "110\u{b0}");
+
+    // A row with no `display`: the stored number, no unit, at the stored precision.
+    let render = setting_row(&row("renderDistance", "16", Layer::Preseed), Layer::Preseed);
+    assert_eq!(slider_label(&render), "16");
+    let gamma = setting_row(&row("gamma", "0.75", Layer::File), Layer::Override);
+    assert_eq!(gamma.display_decimals, gamma.decimals);
+    assert_eq!(slider_label(&gamma), "0.75");
+}

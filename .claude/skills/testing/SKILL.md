@@ -358,8 +358,13 @@ Rules:
 - **A clipped element cannot be clicked.** A `ScrollView` draws only its viewport, but the
   element tree still reports a row half past the bottom edge, with a position and a size. A
   pointer aimed at its middle then lands on nothing. `scroll_to(id)` therefore scrolls until
-  the element sits completely inside every `ScrollView::flickable` it overlaps, and
-  `click` fails with both rectangles when it is asked to press something outside one.
+  the element sits completely inside every `ScrollView::flickable` it overlaps, and `click`
+  fails with both rectangles when it is asked to press something outside one — the whole
+  rectangle, not only its middle, because a row drawn cut in half is not a row a user clicks.
+  `scroll_to` scrolls *toward* the element: up while it is above the viewport, down while it
+  is below, so a row already past the top edge is reached rather than walked away from. It
+  checks after its last scroll as well as before each one, so the step that brings the
+  element in is never the one that reports failure.
 - No flow test opens a display, reaches the network, or touches the keyring.
 
 ### Real X input: `just ui-xtest`
@@ -369,15 +374,28 @@ window manager, and no pointer grabs. Three defects lived in exactly that gap: a
 overlay ate the click after an Escape, shortcuts that died with the screen that held the focus,
 and a button that only looked pressable. `just ui-xtest` is the check that sees them.
 
-It builds `gcl-ui`, starts `Xvfb :97` at 1200x760, runs the debug GUI over a throwaway root
-with `GCL_LOG=info`, drives it with `scripts/ui-xtest.py`, and prints PASS or FAIL by reading
-the GUI log for the jobs the run must have raised. The temp root keeps the log and the PNGs;
-the recipe prints its path.
+It needs the network, `Xvfb`, `xdpyinfo`, ImageMagick's `import`, and python3-xlib. It builds
+`gcl-ui`, starts `Xvfb -displayfd` at 1200x760 — Xvfb picks a free display and names it, so no
+fixed number and no stale lock file can break the run — runs the debug GUI over a throwaway
+root with `GCL_LOG=info`, drives it with `scripts/ui-xtest.py`, and prints PASS or FAIL by
+reading the GUI log for the jobs the run must have raised. The temp root is removed on PASS and
+kept on failure, with its path printed.
+
+Every wait is a poll with a bounded timeout, not a fixed sleep: `xdpyinfo -display` for the X
+server, the `gui start` line in the GUI log for the app, and `instances/smoke` on disk plus the
+`Install loader` job for the install. Each python drive runs under `timeout 180`. The exit trap
+kills *and* waits for the Xvfb pid: an Xvfb that is still running holds its lock.
 
 `scripts/ui-xtest.py` sends every event through the XTest extension, so the app sees them as a
 user's. Steps, applied in order: `focus[:wm-class]`, `click:X,Y`, `drag:X1,Y1,X2,Y2`,
 `type:TEXT`, `key:NAME`, `sleep:SECONDS`, `shot:PATH`. The display comes from
-`GCL_XTEST_DISPLAY`, else `DISPLAY`.
+`GCL_XTEST_DISPLAY`, else `DISPLAY`, and `main` opens it, so a server that is not there is
+named rather than raising a traceback at import.
+
+- **A key the layout only reaches with Shift is typed with Shift.** `key` reads the keycode's
+  level 0 and level 1 keysyms to decide, so `type:My_Pack` types what it says; uppercase
+  letters and `_ - . : /` all work. A keysym name the layout does not carry fails loudly
+  instead of pressing keycode 0.
 
 - **`focus` first, always.** A bare Xvfb runs no window manager, so nothing hands out the input
   focus and every key goes to the root window. The step finds the window by its WM class

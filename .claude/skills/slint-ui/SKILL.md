@@ -224,7 +224,8 @@ while writing a screen:
   with arrow keys, because a `ComboBox` exposes no accessible set-value action. It presses Up
   until `accessible_value` stops changing, then Down `index` times.
 - Only what is drawn is in the element tree. A control below the fold of a `ScrollView` needs
-  `app.scroll_to(id)` first.
+  `app.scroll_to(id)` first: it scrolls toward the element until the whole rectangle is inside
+  the viewport, and `click` refuses an element that is not.
 - `crates/gcl-ui/build.rs` gates element names on `PROFILE == "debug"`, not `DEBUG`: `DEBUG`
   reports the debug-info level, so a release profile with debug info on would ship the names.
   `SLINT_EMIT_DEBUG_INFO=1` forces them.

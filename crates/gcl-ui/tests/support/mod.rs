@@ -428,23 +428,19 @@ impl TestApp {
     /// UI one, so it fails here with the two rectangles rather than as a silent no-op later:
     /// the caller wanted a [`TestApp::scroll_to`] first.
     fn click_element(&self, element: &ElementHandle) {
+        // The whole rectangle has to be inside the viewport, not only its middle: a row
+        // whose middle is still on screen but whose lower half is clipped is drawn cut in
+        // half, and a click on it is not the click a user could make.
+        assert!(
+            self.fully_in_view(element),
+            "`{}` at {:?} sized {:?} is not fully inside a scroll viewport ({:?}); \
+             scroll it into view first",
+            element.id().unwrap_or_default(),
+            element.absolute_position(),
+            element.size(),
+            self.viewports()
+        );
         let position = center_of(element);
-        for (at, size) in self.viewports() {
-            let overlaps = at.x < element.absolute_position().x + element.size().width
-                && at.x + size.width > element.absolute_position().x
-                && at.y < element.absolute_position().y + element.size().height
-                && at.y + size.height > element.absolute_position().y;
-            let inside = position.x >= at.x
-                && position.x <= at.x + size.width
-                && position.y >= at.y
-                && position.y <= at.y + size.height;
-            assert!(
-                !overlaps || inside,
-                "the middle of `{}` is at {position:?}, outside the scroll viewport at \
-                 {at:?} sized {size:?}; scroll it into view first",
-                element.id().unwrap_or_default()
-            );
-        }
         let window = self.window.window();
         let button = slint::platform::PointerEventButton::Left;
         window.dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
@@ -581,18 +577,50 @@ impl TestApp {
     /// still swallows a pointer click aimed at its middle. The loop therefore runs until
     /// [`TestApp::fully_in_view`] holds, not until [`TestApp::has`] does.
     pub fn scroll_to(&self, id: &str) {
-        for _ in 0..SCROLL_STEPS {
-            if let Some(element) = self.all(id).first()
-                && self.fully_in_view(element)
-            {
-                return;
+        // `0..=SCROLL_STEPS` so the state after the last scroll is checked too: the range
+        // runs one more time than it scrolls, and the last pass only reads.
+        for step in 0..=SCROLL_STEPS {
+            let direction = match self.all(id).first() {
+                Some(element) if self.fully_in_view(element) => return,
+                // Toward the element: back up when it is above the viewport, on down when
+                // it is below. A fixed direction walks away from a row that is already past
+                // the top edge and never reaches it.
+                Some(element) => self.scroll_direction(element),
+                None => -1.0,
+            };
+            if step == SCROLL_STEPS {
+                break;
             }
-            self.scroll(-SCROLL_STEP);
+            self.scroll(direction * SCROLL_STEP);
         }
         panic!(
             "`{id}` never came fully into view. Showing: {:?}",
             self.ids()
         );
+    }
+
+    /// Which way to scroll to bring `element` into view: `1.0` for up, `-1.0` for down.
+    ///
+    /// The scroll view an element belongs to is the one it sits inside horizontally, so a
+    /// second scroll view beside it does not decide the direction. An element that is inside
+    /// every viewport it belongs to, and still not fully in view, is scrolled down, which is
+    /// the direction a flow wants for a list it has not walked yet.
+    fn scroll_direction(&self, element: &ElementHandle) -> f32 {
+        let at = element.absolute_position();
+        let size = element.size();
+        let centre_x = at.x + size.width / 2.0;
+        for (view_at, view_size) in self.viewports() {
+            if centre_x < view_at.x || centre_x > view_at.x + view_size.width {
+                continue;
+            }
+            if at.y < view_at.y {
+                return 1.0;
+            }
+            if at.y + size.height > view_at.y + view_size.height {
+                return -1.0;
+            }
+        }
+        -1.0
     }
 
     /// Sends one key press and release to whatever holds the focus.

@@ -125,7 +125,6 @@ export component InstanceScreen inherits Rectangle {
                     text: "Stop";
                     kind: "danger";
                     visible: InstanceState.running;
-                    enabled: InstanceState.running;
                     clicked => {
                         InstanceState.stop();
                     }
