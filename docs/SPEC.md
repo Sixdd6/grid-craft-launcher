@@ -44,11 +44,11 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 
 ## R6 Accounts
 
-- R6.1 Microsoft login with the device-code flow. Refresh tokens live in the OS keyring, with a file fallback and a warning when no keyring is present.
+- R6.1 Microsoft login with the device-code flow. Refresh tokens live in the OS keyring, with a file fallback and a warning when no keyring is present. The fallback file is `<root>/secrets.json`, created at permission `0600` (owner read and write only) so a refresh token on disk is never readable by another user.
 - R6.2 Offline account with a username; UUID derived from `OfflinePlayer:<name>`.
 - R6.3 Multiple accounts, one selected as active.
-- R6.4 If Microsoft login fails or no network, the user can still launch with an offline account.
-- R6.5 Without `GCL_MSA_CLIENT_ID`, Microsoft login is hidden and offline mode stays available.
+- R6.4 If Microsoft login fails or no network, the user can still launch with an offline account. `gcl launch` prints a one-line hint (`use --offline-user <name> to play offline`) on any `Auth` error, so this path is discoverable from the failure itself.
+- R6.5 Without `GCL_MSA_CLIENT_ID`, Microsoft login is hidden and offline mode stays available. A saved Microsoft account whose cached token has not gone stale still launches without a client id configured; only a refresh (a stale token, or a client id-driven sign-in) needs one.
 
 ## R7 Content sources
 

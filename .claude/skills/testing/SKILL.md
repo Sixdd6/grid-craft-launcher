@@ -61,6 +61,63 @@ another host. Tests, `cargo run`, `just e2e`, and `just e2e-modpack` all run deb
 nothing that uses the overrides changes. A release binary under test needs
 `Launcher::open_with_endpoints` instead.
 
+### MSA wiremock pattern
+
+The six-step Microsoft login chain (see the `msa-auth` skill) runs against one `MockServer`,
+one mock path per step:
+
+```rust
+let server = MockServer::start().await;
+let ep = MsaEndpoints {
+    device_code: format!("{}/devicecode", server.uri()),
+    token: format!("{}/token", server.uri()),
+    xbl: format!("{}/xbl", server.uri()),
+    xsts: format!("{}/xsts", server.uri()),
+    mc_login: format!("{}/mclogin", server.uri()),
+    profile: format!("{}/profile", server.uri()),
+};
+let msa = Msa::new(HttpClient::new()?.with_backoff(vec![Duration::ZERO; 3]), ep, client_id);
+```
+
+`crates/gcl-core/src/auth/msa_tests.rs` and `session_tests.rs` build `MsaEndpoints` and `Msa`
+this way; `Endpoints.msa` is the same shape one layer up, for a test that goes through
+`Launcher::open_with_endpoints` instead of building `Msa` directly. A poll sequence
+(`authorization_pending` then success, or `slow_down` then success) is served with a `Respond`
+impl that answers a different body each call — see `msa_tests.rs`'s `Sequence` type.
+
+Use `MemoryStore` (`auth::secrets::MemoryStore::new()`) as the secret store in any test that
+signs in or refreshes: no real keyring, nothing left behind after the run. A `Launcher`-level
+test wires it in with `Launcher::open_with_endpoints(root, endpoints).with_secret_store(Box::new(MemoryStore::new()))`,
+called before anything touches `Launcher::secrets()` — the store is a `OnceCell`, so the first
+call wins. A test that exercises the real `open_default` fallback path instead (choosing
+between the keyring and `FileStore`) sets `GCL_NO_KEYRING=1` first, so it forces the file store
+and never touches a developer's real keyring; unset it afterward or scope it to the process
+running under `GCL_ROOT`. `secrets_tests.rs` covers `FileStore`'s 0600 permission and
+`KeyringStore::probe` directly.
+
+### Recording-sleep pattern
+
+`session::login_device_code` takes a `sleep: &SleepFn` so a test can drive the poll loop with
+no real waiting. Build one that appends every requested `Duration` to a shared `Vec` and
+resolves immediately:
+
+```rust
+fn recording_sleep() -> (Arc<Mutex<Vec<Duration>>>, impl Fn(Duration) -> BoxFuture<'static, ()> + Send + Sync) {
+    let waits = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&waits);
+    let sleep = move |d: Duration| {
+        recorder.lock().expect("lock").push(d);
+        Box::pin(std::future::ready(())) as BoxFuture<'static, ()>
+    };
+    (waits, sleep)
+}
+```
+
+Assert on `waits.lock().unwrap()` afterward: how many polls ran, and whether a `slow_down`
+answer added the extra five seconds to the interval. See `session_tests.rs` for the full
+pattern, including a test that runs the code past its `expires_in_secs` and asserts
+`Error::DeviceCodeExpired`.
+
 ### FakeSource
 
 `content` and `modpacks` unit tests do not need wiremock for a content source: a `FakeSource`

@@ -33,6 +33,7 @@ just run-cli account add-offline you
 just run-cli instance create fab --minecraft 1.20.1 --loader fabric
 just run-cli content search sodium
 just run-cli content add fab --source modrinth --project sodium
+just run-cli account add-msa
 just run-cli launch fab --dry-run
 just run-cli modpack install --source modrinth --project fabulously-optimized --name fo
 just e2e
@@ -50,6 +51,29 @@ Copy `.env.example` to `.env` and fill in:
 - `GCL_MSA_CLIENT_ID`: an Azure app registration approved for the Minecraft API. Without it, Microsoft login is disabled and offline mode works.
 
 The launcher reads env first, then `config.toml` in its root directory.
+
+## Microsoft login
+
+Microsoft login needs your own Azure app registration; the repo ships no client id.
+
+1. In the Azure Portal, go to Microsoft Entra ID → App registrations → New registration.
+2. Supported account types: personal Microsoft accounts.
+3. Platform: Mobile and desktop applications. Redirect URI:
+   `https://login.microsoftonline.com/common/oauth2/nativeclient`. No client secret needed.
+4. Turn on "Allow public client flows".
+5. Submit the Minecraft launcher approval form, linked from
+   https://help.minecraft.net/hc/en-us/articles/16254801392141. Until Microsoft approves it,
+   sign-in fails at the last step with an "invalid app registration" error.
+6. Put the app's client id in `.env` as `GCL_MSA_CLIENT_ID`.
+
+Then sign in:
+
+```bash
+just run-cli account add-msa
+```
+
+Without `GCL_MSA_CLIENT_ID`, Microsoft login is disabled and offline mode works
+(`just run-cli account add-offline <name>`).
 
 ## Layout
 

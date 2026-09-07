@@ -5,6 +5,15 @@ Researched 2026-09-06. Source of truth for the `msa-auth` skill and the crate li
 
 ## A. Microsoft account authentication
 
+**Implementation status (plan 4, 2026-09-06):** implemented in `gcl-core/src/auth/` (`msa`,
+`secrets`, `session`) and `gcl-cli`'s `account` and `debug verify-source msa` commands. Every
+step of the chain is covered by wiremock tests against a mock server, including the XErr
+table, the poll loop's slow-down and expiry handling, and refresh-token rotation. It has not
+been verified against the real Microsoft, Xbox Live, and Minecraft services endpoints: this
+development machine has no Azure app registration. The keyring storage uses the `keyring`
+crate's 4.x API, which resolves the native backend on the first `Entry::new` call rather than
+needing a separate setup step.
+
 ### App registration
 
 1. Azure Portal → Microsoft Entra ID → App registrations → New registration.

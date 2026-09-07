@@ -27,10 +27,10 @@ Add a row here when you add a module.
 | `modpacks` | detect and parse `.mrpack` and CurseForge pack zips into a `PackPlan`; `import`/`import_plan` build a new instance from one; `mrpack` and `curseforge` submodules hold the per-format manifest parsers; `fetch_pack` downloads a pack's own archive from a source | `sources`, `content`, `instances`, `loaders` |
 | `instances` | instance layout, `instance.toml`, `instances::content` (`place_file`, `place_world`, `set_enabled`, `remove`, `installed`, `file_path`, `target_dir`), `list` skips unparsable instances with a warning; instance creation preseeds `options.txt` through `settings` | `paths`, `settings`, `sources` (for `SourceId`), `download` (for `link_or_copy`) |
 | `settings` | `options.txt` preseed (`apply_preseed`) and keyed overrides (`apply_overrides_to`), plus `validate_key`/`validate_value`. Takes a game directory and a map, so it does not depend on `instances` | `paths` |
-| `auth` | offline accounts (`auth::offline`) and the account store (`auth::store`, `accounts.json`); `LaunchIdentity` placeholders. The Microsoft device-code chain is plan 4 | `paths` |
+| `auth` | offline accounts (`auth::offline`) and the account store (`auth::store`, `accounts.json`); `LaunchIdentity` placeholders. `auth::msa` (`Msa`, `MsaEndpoints`, the six-step login chain, `Error`); `auth::secrets` (`SecretStore` trait, `KeyringStore`, `FileStore`, `MemoryStore`, `open_default`); `auth::session` (`LoginCtx`, `login_device_code`, `complete_chain`, `refresh_account`, `ensure_fresh`) | `paths`, `http` |
 | `launch` | `launch::command::build` turns an `InstallPlan`, account, instance, and JVM settings into a `LaunchCommand`; `launch::spawn` starts and streams it | `instances`, `mojang`, `auth` |
 | `events` | `Progress` and `LogLine` event types and the channel | none |
-| `launcher` | `Launcher` handle: owns the tokio runtime, root, config, HttpClient, event channel, and cancellation token; every binary entry point goes through it. Orchestrates `install_loader`, `install_instance`, `launch_instance`, `java_for_version`, `apply_settings_overrides`, and the content and modpack flows below (`sources`, `search`, `add_content`, `list_content`, `remove_content`, `set_content_enabled`, `check_updates`, `apply_updates`, `pending_manual`, `import_manual_file`, `import_modpack_file`, `import_modpack`, `configured_or_detected_java`). `sources()` builds Modrinth always and CurseForge only when a `CURSEFORGE_API_KEY` was found when this launcher opened; the list is built once and cached, so changing the key needs a new `Launcher`. `Endpoints::from_env()` reads `GCL_MOJANG_BASE_URL`, `GCL_FABRIC_BASE_URL`, `GCL_QUILT_BASE_URL`, `GCL_FORGE_META_BASE_URL`, `GCL_FORGE_MAVEN_BASE_URL`, `GCL_NEOFORGE_BASE_URL`, `GCL_MODRINTH_BASE_URL`, and `GCL_CURSEFORGE_BASE_URL` (all test-only, and read in a debug build only: a release build returns `Endpoints::default()` whatever the environment holds); `open_with_endpoints` is the test seam that takes `Endpoints` directly and reads no environment | `config`, `http`, `events`, `paths`, `download`, `mojang`, `java`, `instances`, `loaders`, `auth`, `launch`, `settings`, `sources`, `content`, `modpacks` |
+| `launcher` | `Launcher` handle: owns the tokio runtime, root, config, HttpClient, event channel, and cancellation token; every binary entry point goes through it. Orchestrates `install_loader`, `install_instance`, `launch_instance`, `java_for_version`, `apply_settings_overrides`, and the content and modpack flows below (`sources`, `search`, `add_content`, `list_content`, `remove_content`, `set_content_enabled`, `check_updates`, `apply_updates`, `pending_manual`, `import_manual_file`, `import_modpack_file`, `import_modpack`, `configured_or_detected_java`), plus `msa_available`, `msa_login(on_code)`, `msa_refresh(id_or_name)`, and `secrets()` (lazy: opens the OS keyring or falls back to a file on first use; `with_secret_store` overrides it for tests). `sources()` builds Modrinth always and CurseForge only when a `CURSEFORGE_API_KEY` was found when this launcher opened; the list is built once and cached, so changing the key needs a new `Launcher`. `Endpoints::from_env()` reads `GCL_MOJANG_BASE_URL`, `GCL_FABRIC_BASE_URL`, `GCL_QUILT_BASE_URL`, `GCL_FORGE_META_BASE_URL`, `GCL_FORGE_MAVEN_BASE_URL`, `GCL_NEOFORGE_BASE_URL`, `GCL_MODRINTH_BASE_URL`, `GCL_CURSEFORGE_BASE_URL`, and the six `Endpoints.msa` overrides `GCL_MSA_DEVICE_URL`, `GCL_MSA_TOKEN_URL`, `GCL_MSA_XBL_URL`, `GCL_MSA_XSTS_URL`, `GCL_MSA_MC_URL`, and `GCL_MSA_PROFILE_URL` (all test-only, and read in a debug build only: a release build returns `Endpoints::default()` whatever the environment holds). `GCL_NO_KEYRING=1` is the matching override for `secrets()`: it forces the file store, also debug-only, so tests never write to a developer's real keyring. `open_with_endpoints` is the test seam that takes `Endpoints` directly and reads no environment | `config`, `http`, `events`, `paths`, `download`, `mojang`, `java`, `instances`, `loaders`, `auth`, `launch`, `settings`, `sources`, `content`, `modpacks` |
 
 Rules:
 
@@ -56,6 +56,38 @@ Rules:
 6. `launch::build`: build the `LaunchCommand`.
 7. `launch::spawn` and `launch::wait`: start Java and stream its output, unless `dry_run` is
    set, in which case the command is returned unstarted.
+
+## Login flow
+
+`session::login_device_code(ctx, on_code, sleep)` drives the Microsoft sign-in:
+
+1. `msa::start_device_code`: ask for a device code. `on_code` is called once with it, so the
+   caller can show the code and the verification link.
+2. Poll `msa::poll_device_code_once` in a loop, sleeping `interval_secs` between calls (via
+   `sleep`, so a test can record the wait instead of really waiting). `SlowDown` adds five
+   seconds to the interval; a summed wait past the code's `expires_in_secs` is
+   `Error::DeviceCodeExpired`.
+3. On approval, `session::complete_chain` runs Xbox Live, XSTS, the Minecraft login, and the
+   profile read, then builds an `Account`.
+4. The refresh token goes to the secret store (`ctx.secrets.put`); the account goes to
+   `accounts.json` (`ctx.accounts.add`), becoming active only if it is the first account.
+
+`session::refresh_account` redeems a saved refresh token the same way, but writes the rotated
+refresh token as soon as the token endpoint answers, before the Xbox and Minecraft steps run:
+Microsoft has already invalidated the old token by then, so a later failure must not lose the
+new one. `session::ensure_fresh` calls it only when the cached Minecraft token expires within
+`REFRESH_MARGIN` (5 minutes) of `now`, or carries no readable expiry.
+
+## Launch identity
+
+`Launcher::launch_instance` calls `ensure_fresh` before install, so a Microsoft account's
+token is refreshed ahead of the game needing it. Without a configured client id,
+`ensure_fresh` is skipped: a token that is still valid launches as-is, but one that is
+expiring is `Error::Disabled`, since there is no client id to refresh it with. An offline
+account is never touched. `Account::launch_identity_with(client_id)` then builds the launch
+placeholders: a Microsoft account gets `user_type = "msa"`, its cached token (or `"0"` when
+there is none) as `auth_access_token`, its xuid (or empty), and the given client id; an
+offline account always gets `"0"`, `"legacy"`, and empty xuid and client id.
 
 ## Content flow
 
