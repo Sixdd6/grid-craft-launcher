@@ -29,14 +29,10 @@ pub fn build(
     let weak = window.as_weak();
     app.on_navigate(move |screen| {
         if let Some(window) = weak.upgrade() {
-            let app = window.global::<App>();
-            // The rail is the only caller, and it names no instance. Clearing the slug is
-            // what tells the browser it was opened on its own, so it offers the whole
-            // instance list as targets instead of adding to whatever was last open.
-            if screen != Screen::Instance {
-                app.set_current_slug("".into());
-            }
-            app.set_screen(screen);
+            // The slug is left alone: the rail's Instance entry goes back to whatever was
+            // last open, and the browser says which target it means with
+            // `BrowserState.fixed_target` instead.
+            window.global::<App>().set_screen(screen);
         }
     });
 

@@ -17,7 +17,10 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
 use crate::bridge::{Bridge, show_error, warn};
 use crate::models::{content_row, pending_row, setting_rows};
 use crate::state::RunState;
-use crate::{App, AppWindow, ContentRow, InstanceState, LogLine, PendingRow, Screen, SettingRow};
+use crate::{
+    App, AppWindow, BrowserState, ContentRow, InstanceState, LogLine, PendingRow, Screen,
+    SettingRow,
+};
 
 /// Smallest heap the JVM tab offers, in MiB. Matches the `SpinBox` bounds in the screen.
 const HEAP_MIN_MIB: i32 = 512;
@@ -258,7 +261,10 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState) {
         let weak = bridge.weak().clone();
         state.on_add_content(move || {
             // `App.current_slug` is already this instance, which is what the browser adds to.
+            // `fixed_target` says so: it drops the browser's target ComboBox and prefills the
+            // search filters from this instance. The rail clears it again.
             if let Some(window) = weak.upgrade() {
+                window.global::<BrowserState>().set_fixed_target(true);
                 window.global::<App>().set_screen(Screen::Browser);
             }
         });

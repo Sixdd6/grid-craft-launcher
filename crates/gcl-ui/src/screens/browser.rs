@@ -42,6 +42,15 @@ struct Target {
     loader: String,
 }
 
+/// A project the world chooser is open for, and the kind the row it came from named.
+#[derive(Clone)]
+struct Pending {
+    /// Project id at the source.
+    project: String,
+    /// The row's own kind, which is what the add installs as.
+    kind: Option<ContentKind>,
+}
+
 /// What the screen's indices and its modals stand for.
 ///
 /// The labels in the Slint models carry no ids, so the lists behind them live here. Cloning
@@ -52,8 +61,8 @@ struct Shared {
     sources: Arc<Mutex<Vec<SourceId>>>,
     /// Instances that can be a target, in the order `target_labels` shows them.
     targets: Arc<Mutex<Vec<Target>>>,
-    /// The project the world chooser is open for.
-    pending_world: Arc<Mutex<Option<String>>>,
+    /// The project the world chooser is open for, with the kind its row named.
+    pending_world: Arc<Mutex<Option<Pending>>>,
     /// The project the name prompt is open for.
     pending_pack: Arc<Mutex<Option<String>>>,
 }
@@ -98,7 +107,7 @@ impl Shared {
     }
 
     /// Remembers, or forgets, the project the world chooser is open for.
-    fn set_pending_world(&self, project: Option<String>) {
+    fn set_pending_world(&self, project: Option<Pending>) {
         *self
             .pending_world
             .lock()
@@ -106,7 +115,7 @@ impl Shared {
     }
 
     /// Takes the project the world chooser was open for.
-    fn take_pending_world(&self) -> Option<String> {
+    fn take_pending_world(&self) -> Option<Pending> {
         self.pending_world
             .lock()
             .unwrap_or_else(|err| err.into_inner())
@@ -187,12 +196,12 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
             };
             let state = window.global::<BrowserState>();
             state.set_source_index(index);
-            state.set_page(0);
             // A source that cannot serve a kind must not offer it, so the list is rebuilt
             // and whatever the user had picked is pulled back into range.
             if let Some(source) = shared.source_at(index) {
                 set_kinds(&state, source);
             }
+            clear_rows(&state);
         });
     }
 
@@ -202,7 +211,7 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
             if let Some(window) = bridge.weak().upgrade() {
                 let state = window.global::<BrowserState>();
                 state.set_kind_index(index);
-                state.set_page(0);
+                clear_rows(&state);
             }
         });
     }
@@ -223,13 +232,17 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
     {
         let bridge = bridge.clone();
         let shared = shared.clone();
-        state.on_add(move |project_id| add(&bridge, &shared, project_id.as_str(), None));
+        state.on_add(move |project_id, kind| {
+            add(&bridge, &shared, project_id.as_str(), kind.as_str(), None)
+        });
     }
 
     {
         let bridge = bridge.clone();
         let shared = shared.clone();
-        state.on_pick_world(move |project_id| pick_world(&bridge, &shared, project_id.as_str()));
+        state.on_pick_world(move |project_id, kind| {
+            pick_world(&bridge, &shared, project_id.as_str(), kind.as_str())
+        });
     }
 
     {
@@ -240,10 +253,16 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
                 return;
             };
             window.global::<BrowserState>().set_choice_open(false);
-            let Some(project) = shared.take_pending_world() else {
+            let Some(pending) = shared.take_pending_world() else {
                 return;
             };
-            add(&bridge, &shared, &project, Some(world.to_string()));
+            install(
+                &bridge,
+                &shared,
+                &pending.project,
+                pending.kind,
+                Some(world.to_string()),
+            );
         });
     }
 
@@ -336,15 +355,18 @@ fn open(bridge: &Bridge, shared: &Shared) {
             }
 
             shared.set_targets(opened.targets.clone());
+            // The detail screen's Add content sets `fixed_target`; the rail clears it. A
+            // fixed target with no slug behind it can only be a bug, so the ComboBox is
+            // offered rather than leaving the screen with nothing to add to.
             let slug = window.global::<App>().get_current_slug().to_string();
-            if slug.is_empty() {
+            if slug.is_empty() || !state.get_fixed_target() {
                 let names: Vec<SharedString> = opened
                     .targets
                     .iter()
                     .map(|target| target.name.as_str().into())
                     .collect();
                 let index = clamp_index(state.get_target_index().max(0), opened.targets.len());
-                state.set_choose_target(true);
+                state.set_fixed_target(false);
                 state.set_target_labels(ModelRc::new(VecModel::from(names)));
                 state.set_target_index(index);
                 apply_target(&state, shared.target_at(index).as_ref());
@@ -352,7 +374,6 @@ fn open(bridge: &Bridge, shared: &Shared) {
                 // The shell already names the instance, so the ComboBox would only offer a
                 // choice the user has made. An instance that vanished under us keeps its
                 // slug as its label, and the add fails with a clear error.
-                state.set_choose_target(false);
                 state.set_target_labels(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
                 state.set_target_index(-1);
                 match shared.target_for(&slug) {
@@ -412,8 +433,26 @@ fn search(bridge: &Bridge, shared: &Shared) {
     );
 }
 
+/// Adds one row, asking for a world first when the row is a data pack.
+///
+/// `kind` is the row's own kind, not the Type selector's: the selector can be changed after a
+/// search, and the rows on screen keep the kind they were found with.
+fn add(bridge: &Bridge, shared: &Shared, project_id: &str, kind: &str, world: Option<String>) {
+    if world.is_none() && needs_world(kind) {
+        pick_world(bridge, shared, project_id, kind);
+        return;
+    }
+    install(bridge, shared, project_id, ContentKind::parse(kind), world);
+}
+
 /// Installs one project into the chosen instance, into `world` when it is a data pack.
-fn add(bridge: &Bridge, shared: &Shared, project_id: &str, world: Option<String>) {
+fn install(
+    bridge: &Bridge,
+    shared: &Shared,
+    project_id: &str,
+    kind: Option<ContentKind>,
+    world: Option<String>,
+) {
     let Some(window) = bridge.weak().upgrade() else {
         return;
     };
@@ -427,11 +466,10 @@ fn add(bridge: &Bridge, shared: &Shared, project_id: &str, world: Option<String>
         state.set_status("Pick an instance to add to first".into());
         return;
     }
-    let kind = ContentKind::parse(&kind_label(&state));
     let request = add_request(source, project_id, kind, world);
 
     state.set_loading(true);
-    state.set_status("Installing…".into());
+    state.set_status("Installing\u{2026}".into());
     run_reporting(
         bridge,
         "Add content",
@@ -448,15 +486,15 @@ fn add(bridge: &Bridge, shared: &Shared, project_id: &str, world: Option<String>
 
 /// Asks which world a data pack goes into, then adds it.
 ///
-/// Anything that is not a data pack is added straight away, so the screen can send every row
-/// through here without knowing the rule.
-fn pick_world(bridge: &Bridge, shared: &Shared, project_id: &str) {
+/// Anything that is not a data pack is installed straight away, so the screen can send every
+/// row through here without knowing the rule.
+fn pick_world(bridge: &Bridge, shared: &Shared, project_id: &str, kind: &str) {
     let Some(window) = bridge.weak().upgrade() else {
         return;
     };
     let state = window.global::<BrowserState>();
-    if ContentKind::parse(&kind_label(&state)) != Some(ContentKind::DataPack) {
-        add(bridge, shared, project_id, None);
+    if !needs_world(kind) {
+        install(bridge, shared, project_id, ContentKind::parse(kind), None);
         return;
     }
     let slug = state.get_target_slug().to_string();
@@ -465,7 +503,11 @@ fn pick_world(bridge: &Bridge, shared: &Shared, project_id: &str) {
         return;
     }
 
-    let (shared, project) = (shared.clone(), project_id.to_string());
+    let pending = Pending {
+        project: project_id.to_string(),
+        kind: ContentKind::parse(kind),
+    };
+    let shared = shared.clone();
     state.set_loading(true);
     run_reporting(
         bridge,
@@ -485,7 +527,7 @@ fn pick_world(bridge: &Bridge, shared: &Shared, project_id: &str) {
             }
             let options: Vec<SharedString> =
                 worlds.iter().map(|name| name.as_str().into()).collect();
-            shared.set_pending_world(Some(project));
+            shared.set_pending_world(Some(pending));
             state.set_choice_options(ModelRc::new(VecModel::from(options)));
             state.set_choice_index(0);
             state.set_choice_open(true);
@@ -562,6 +604,14 @@ pub fn page_bounds(page: i32, page_size: i32, hits_len: usize, total: u64) -> bo
     }
     let offset = page.max(0) as u64 * page_size as u64;
     total > offset + hits_len as u64
+}
+
+/// Whether a row has to name a world before it can be added.
+///
+/// The row's own kind decides, never the Type selector: a data pack found before the selector
+/// moved is still a data pack, and adding it without a world would drop it in `mods/`.
+pub fn needs_world(row_kind: &str) -> bool {
+    ContentKind::parse(row_kind) == Some(ContentKind::DataPack)
 }
 
 /// Builds the request one Add sends.
@@ -661,6 +711,16 @@ fn set_kinds(state: &BrowserState<'_>, source: SourceId) {
     let index = clamp_index(state.get_kind_index(), labels.len());
     state.set_kind_labels(ModelRc::new(VecModel::from(labels)));
     state.set_kind_index(index);
+}
+
+/// Drops the page on screen and goes back to page one.
+///
+/// A hit found under one source or kind must not stay on screen under another: its Add would
+/// still work, but the list would claim results the filters did not ask for.
+fn clear_rows(state: &BrowserState<'_>) {
+    state.set_page(0);
+    state.set_has_more(false);
+    state.set_rows(ModelRc::new(VecModel::from(Vec::<SearchRow>::new())));
 }
 
 /// The kind the filters name, or an empty string when the source offers none.

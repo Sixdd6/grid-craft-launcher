@@ -46,8 +46,10 @@ export global BrowserState {
     in-out property <[string]> target_labels: [];
     // Index into `target_labels`, or -1 when nothing is chosen.
     in-out property <int> target_index: -1;
-    // Whether the target ComboBox is shown, which it is when no instance was already open.
-    in-out property <bool> choose_target: false;
+    // Whether the target is already decided, which it is when the browser was opened from
+    // an instance's detail screen. The rail clears it, and the target ComboBox is shown
+    // whenever it is false.
+    in-out property <bool> fixed_target: false;
 
     // The current page of hits, in the source's own order.
     in-out property <[SearchRow]> rows: [
@@ -104,8 +106,10 @@ export global BrowserState {
     callback next_page();
     // Show the previous page of the same search.
     callback prev_page();
-    // A row's Add button was pressed. Carries the project id.
-    callback add(string /* project_id */);
+    // A row's Add button was pressed. Carries the project id and the row's own kind, which
+    // is what decides how it installs: the Type selector can be changed after a search, and
+    // the rows on screen keep the kind they were found with.
+    callback add(string /* project_id */, string /* kind */);
     // A modpack is to be installed as a new instance. Carries the project id or slug.
     callback install_pack(string /* project_id */);
     // The source ComboBox changed. Carries its new index.
@@ -115,8 +119,8 @@ export global BrowserState {
     // The target ComboBox changed. Carries its new index.
     callback set_target(int);
     // A data pack row's Add button was pressed: ask which world it goes into. Carries the
-    // project id.
-    callback pick_world(string /* project_id */);
+    // project id and the row's own kind.
+    callback pick_world(string /* project_id */, string /* kind */);
     // The world chooser was accepted. Carries the world picked.
     callback choice_ok(string /* world */);
     // The world chooser was dismissed.
@@ -264,7 +268,7 @@ export component BrowserScreen inherits Rectangle {
             Rectangle { horizontal-stretch: 1; }
 
             // A modpack becomes its own instance, so it has no target to choose.
-            if BrowserState.choose_target && !root.modpack_mode: Text {
+            if !BrowserState.fixed_target && !root.modpack_mode: Text {
                 text: "Add to";
                 color: Theme.text-muted;
                 font-size: Theme.font-size-small;
@@ -272,7 +276,7 @@ export component BrowserScreen inherits Rectangle {
                 horizontal-stretch: 0;
             }
 
-            if BrowserState.choose_target && !root.modpack_mode: ComboBox {
+            if !BrowserState.fixed_target && !root.modpack_mode: ComboBox {
                 width: 200px;
                 model: BrowserState.target_labels;
                 current-index: BrowserState.target_index;
@@ -435,9 +439,9 @@ export component BrowserScreen inherits Rectangle {
                             } else if (row.kind == "datapack") {
                                 // A data pack lives inside one world, so it needs one named
                                 // before anything is downloaded.
-                                BrowserState.pick_world(row.project_id);
+                                BrowserState.pick_world(row.project_id, row.kind);
                             } else {
-                                BrowserState.add(row.project_id);
+                                BrowserState.add(row.project_id, row.kind);
                             }
                         }
                     }

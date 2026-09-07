@@ -2,8 +2,8 @@ use gcl_core::instances::model::{ContentKind, Loader};
 use gcl_core::sources::SourceId;
 
 use super::{
-    add_request, clamp_index, kinds_for, manual_note, page_bounds, parse_loader, result_status,
-    source_status,
+    add_request, clamp_index, kinds_for, manual_note, needs_world, page_bounds, parse_loader,
+    result_status, source_status,
 };
 
 #[test]
@@ -134,4 +134,35 @@ fn clamp_index_holds_an_index_inside_the_list() {
     assert_eq!(clamp_index(3, 2), 1);
     assert_eq!(clamp_index(-1, 2), 0);
     assert_eq!(clamp_index(0, 0), -1, "an empty list has no index");
+}
+
+#[test]
+fn needs_world_reads_the_row_kind_not_the_selector() {
+    // The Type selector is not an argument, which is the point: a data pack row found before
+    // the selector moved still needs a world, and a mod row still does not.
+    assert!(needs_world("datapack"));
+    assert!(!needs_world("mod"));
+    assert!(!needs_world("resourcepack"));
+    assert!(!needs_world("shader"));
+    assert!(!needs_world("world"));
+    assert!(
+        !needs_world("modpack"),
+        "a modpack is not added to an instance"
+    );
+    assert!(!needs_world(""), "an unknown kind lets the project decide");
+}
+
+#[test]
+fn a_datapack_row_keeps_its_kind_in_the_request() {
+    // What the stale-row fix protects: the kind comes from the row, so the request still
+    // installs as a data pack into the world the chooser named.
+    let kind = ContentKind::parse("datapack");
+    let request = add_request(
+        SourceId::Modrinth,
+        "abc",
+        kind,
+        Some("New World".to_string()),
+    );
+    assert_eq!(request.kind, Some(ContentKind::DataPack));
+    assert_eq!(request.world.as_deref(), Some("New World"));
 }

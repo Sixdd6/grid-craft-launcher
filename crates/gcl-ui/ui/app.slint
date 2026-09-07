@@ -185,6 +185,11 @@ export component AppWindow inherits Window {
         Rail {
             current: App.screen;
             navigate(target) => {
+                // The rail names no instance, so the browser reached from it offers every
+                // instance as a target. Only the detail screen's Add content sets this.
+                if (target == Screen.browser) {
+                    BrowserState.fixed_target = false;
+                }
                 App.navigate(target);
             }
         }
