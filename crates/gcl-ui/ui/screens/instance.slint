@@ -116,10 +116,11 @@ export component InstanceScreen inherits Rectangle {
                 alignment: center;
                 horizontal-stretch: 0;
                 stop_button := Button {
-                    // Stopping the game is not in the MVP: core has no kill. The button is
-                    // here, and disabled, so the shape of the screen does not change later.
+                    // Only a running game can be stopped, so the button is live exactly while
+                    // Launch is not.
                     text: "Stop";
-                    enabled: false;
+                    kind: "danger";
+                    enabled: InstanceState.running;
                     clicked => {
                         InstanceState.stop();
                     }

@@ -280,8 +280,10 @@ one a real pack could ever use. Leave it empty in anything that talks to a real 
 
 ## gcl-ui
 
-- No display in CI, so nothing here builds a real `AppWindow` in a test. Instead, every module
-  that would otherwise need one splits its logic into a pure helper and tests that directly:
+- Two layers. Pure helpers are unit tested next to the code; whole flows are driven through the
+  Slint testing backend, which needs no display. Prefer a helper test; reach for a flow test when
+  the question is "does this button do anything".
+- Every module splits its logic into a pure helper and tests that directly:
   `events::apply` (folds a batch of core `Event`s into the task list and log, no window),
   `events::prune_finished` and `toasts::prune`/`push` (age rows and toasts out by a given
   `Instant`), `keys::key_to_screen` and `keys::move_selection` (keyboard rules), `state::RunState`
@@ -298,10 +300,33 @@ one a real pack could ever use. Leave it empty in anything that talks to a real 
   by clicking through the built app, it usually means logic leaked into a `.slint` file or an
   `app.rs` closure that should have stayed in a testable helper.
 
+### GUI flow tests
+
+`crates/gcl-ui/tests/flow_instances.rs` builds the real `AppWindow` over a real `Launcher` and
+clicks through it. `tests/support/mod.rs` is the harness:
+
+- `TestApp::new()`: a temp root, a wiremock host serving a synthetic vanilla version and the
+  Fabric fixtures, a stand-in `java` shell script at `<root>/fake-java` that records its argument
+  list and waits for a signal, `Launcher::open_with_endpoints(...).with_secret_store(MemoryStore)`
+  with `config.jvm.java_path` pointing at that script, and `gcl_ui::app::build`.
+- `app.click(id)`, `app.type_into(id, text)`, `app.select_combo(id, index)`, `app.el(id)`. Ids are
+  `<Component>::<name>` from `docs/research/2026-09-07-ui-element-ids.md`; either `_` or `-`
+  works. `click` fails when the control is disabled, which is the whole point.
+- `app.wait_until(what, pred, timeout)` / `wait_for(id)` yield to the event loop, so the bridge's
+  worker threads post their results back exactly as they do in the app.
+- `support::run(flow)` starts the event loop, runs the flow, quits, and re-raises any panic.
+
+Rules: one Slint backend per process, so one test binary drives one window and runs its flows in
+order. `i-slint-backend-testing` needs element names in the generated code, which
+`crates/gcl-ui/build.rs` emits for a debug build (or with `SLINT_EMIT_DEBUG_INFO=1`). A
+`ComboBox` has no accessible set-value action, so `select_combo` opens the popup with
+`accessible-action-expand` and drives it with arrow keys. Nothing in a flow test reaches the
+network or the keyring.
+
 ## What not to do
 
 - No network in unit or CLI tests.
 - No `sleep` to wait for async work; await the future.
 - No tests that depend on ordering or shared global state.
-- No gcl-ui test that builds a real `AppWindow` or opens a display; keep logic in a pure helper
-  and test that instead.
+- No gcl-ui test that opens a display. A flow test builds a real `AppWindow` on the Slint testing
+  backend, which draws nothing; keep everything else in a pure helper and test that instead.

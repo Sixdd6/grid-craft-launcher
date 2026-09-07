@@ -1938,17 +1938,21 @@ dependencies = [
 name = "gcl-ui"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "gcl-core",
  "i-slint-backend-testing",
  "png",
+ "serde_json",
  "slint",
  "slint-build",
+ "tempfile",
  "time",
  "tokio",
  "tokio-util",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "wiremock",
 ]
 
 [[package]]

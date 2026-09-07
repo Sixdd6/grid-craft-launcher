@@ -9,14 +9,14 @@ export component EmptyState inherits Rectangle {
         alignment: center;
         spacing: Theme.gap;
 
-        Text {
+        empty_title := Text {
             text: root.title;
             color: Theme.text;
             font-size: Theme.font-size-title;
             horizontal-alignment: center;
         }
 
-        if root.message != "": Text {
+        if root.message != "": empty_message := Text {
             text: root.message;
             color: Theme.text-muted;
             font-size: Theme.font-size;

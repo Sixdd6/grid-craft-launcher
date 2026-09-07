@@ -121,8 +121,8 @@ export global InstanceState {
     callback load(string);
     // Start the game.
     callback launch();
-    // Stop the game. Disabled in the MVP: core has no kill, so this is a no-op that only
-    // reports why. Kept so the button has one place to grow into.
+    // Stop the game: `Launcher::stop_instance` signals the child. The launch thread is what
+    // reports the exit, so nothing else changes here.
     callback stop();
     // Install everything a launch needs, without starting the game.
     callback install();

@@ -26,6 +26,9 @@ screen opened that dialog.
   `rail_settings`.
 - Tab entries: `tab_entry` on `TabBar`, one per tab, in tab order.
 
+The Slint compiler writes an element name with `-` in place of `_`, so `find_by_element_id`
+answers to `InstancesScreen::create-button`. The GUI flow harness accepts either spelling.
+
 Every `Button`, `ListRow`, rail entry, tab entry, and the task panel's chevron also sets
 `accessible-role: button` and `accessible-action-default`, so a test presses them with
 `invoke_accessible_default_action`.
@@ -49,6 +52,8 @@ Every `Button`, `ListRow`, rail entry, tab entry, and the task panel's chevron a
 | `crates/gcl-ui/ui/components/dialog.slint` | `Dialog::panel` | `VerticalLayout` |
 | `crates/gcl-ui/ui/components/dialog.slint` | `Dialog::cancel_button` | `Button` |
 | `crates/gcl-ui/ui/components/dialog.slint` | `Dialog::confirm_button` | `Button` |
+| `crates/gcl-ui/ui/components/empty-state.slint` | `EmptyState::empty_title` | `Text` |
+| `crates/gcl-ui/ui/components/empty-state.slint` | `EmptyState::empty_message` | `Text` |
 | `crates/gcl-ui/ui/components/list-row.slint` | `ListRow::row_touch` | `TouchArea` |
 | `crates/gcl-ui/ui/components/progress-panel.slint` | `ProgressPanel::beat` | `Timer` |
 | `crates/gcl-ui/ui/components/progress-panel.slint` | `ProgressPanel::panel_toggle` | `Rectangle` |

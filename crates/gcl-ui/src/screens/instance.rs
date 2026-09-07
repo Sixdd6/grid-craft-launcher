@@ -112,15 +112,28 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState) {
     }
 
     {
-        let weak = bridge.weak().clone();
+        let bridge = bridge.clone();
         state.on_stop(move || {
-            // The MVP has no way to stop the game: `RunningLaunch` carries a pid, not a
-            // handle that can kill it. Say so rather than doing nothing silently.
-            if let Some(window) = weak.upgrade() {
-                window
-                    .global::<InstanceState>()
-                    .set_status_text("Stopping the game is not supported yet".into());
-            }
+            let Some(slug) = shown_slug(&bridge) else {
+                return;
+            };
+            status(&bridge, "Stopping…");
+            // The launch thread is the one that reports the exit, so nothing is done here on
+            // success: `launch_flow` rewrites the status and the running flag when the game
+            // goes. A failure is carried, not returned, so a game that ended on its own
+            // between the click and the signal is not an error dialog.
+            bridge.run(
+                "Stop instance",
+                move |launcher| Ok(launcher.stop_instance(&slug)),
+                |window, result| {
+                    if let Err(err) = result {
+                        tracing::warn!(error = %crate::bridge::error_chain(&err), "stop failed");
+                        window
+                            .global::<InstanceState>()
+                            .set_status_text("The game was not running".into());
+                    }
+                },
+            );
         });
     }
 
