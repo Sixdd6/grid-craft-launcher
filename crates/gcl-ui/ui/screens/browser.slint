@@ -204,7 +204,7 @@ export component BrowserScreen inherits Rectangle {
                 horizontal-stretch: 0;
             }
 
-            SearchBox {
+            search_box := SearchBox {
                 placeholder: root.modpack_mode
                     ? "Modpack id or slug"
                     : "Search Modrinth or CurseForge";
@@ -222,7 +222,7 @@ export component BrowserScreen inherits Rectangle {
                 }
             }
 
-            if !root.modpack_mode: Button {
+            if !root.modpack_mode: search_button := Button {
                 text: "Search";
                 kind: "primary";
                 enabled: !BrowserState.loading;
@@ -245,7 +245,7 @@ export component BrowserScreen inherits Rectangle {
                 horizontal-stretch: 0;
             }
 
-            ComboBox {
+            source_combo := ComboBox {
                 width: 130px;
                 model: BrowserState.source_labels;
                 current-index: BrowserState.source_index;
@@ -263,7 +263,7 @@ export component BrowserScreen inherits Rectangle {
                 horizontal-stretch: 0;
             }
 
-            ComboBox {
+            kind_combo := ComboBox {
                 width: 140px;
                 model: BrowserState.kind_labels;
                 current-index: BrowserState.kind_index;
@@ -280,7 +280,7 @@ export component BrowserScreen inherits Rectangle {
                 horizontal-stretch: 0;
             }
 
-            LineEdit {
+            mc_field := LineEdit {
                 width: 100px;
                 placeholder-text: "any";
                 text <=> BrowserState.minecraft;
@@ -297,7 +297,7 @@ export component BrowserScreen inherits Rectangle {
                 horizontal-stretch: 0;
             }
 
-            ComboBox {
+            loader_combo := ComboBox {
                 width: 120px;
                 model: root.loader_options;
                 current-value <=> BrowserState.loader;
@@ -314,7 +314,7 @@ export component BrowserScreen inherits Rectangle {
                 horizontal-stretch: 0;
             }
 
-            if !BrowserState.fixed_target && !root.modpack_mode: ComboBox {
+            if !BrowserState.fixed_target && !root.modpack_mode: target_combo := ComboBox {
                 width: 200px;
                 model: BrowserState.target_labels;
                 current-index: BrowserState.target_index;
@@ -357,7 +357,7 @@ export component BrowserScreen inherits Rectangle {
                 HorizontalLayout {
                     alignment: center;
 
-                    Button {
+                    install_pack_button := Button {
                         text: "Install modpack";
                         kind: "primary";
                         enabled: BrowserState.query != "" && !BrowserState.loading;
@@ -383,7 +383,7 @@ export component BrowserScreen inherits Rectangle {
                         horizontal-stretch: 1;
                     }
 
-                    LineEdit {
+                    pack_path_field := LineEdit {
                         placeholder-text: "Path to the modpack archive";
                         text <=> BrowserState.pack_path;
                         width: 360px;
@@ -392,7 +392,7 @@ export component BrowserScreen inherits Rectangle {
                         }
                     }
 
-                    Button {
+                    install_file_button := Button {
                         text: "Install from file";
                         enabled: BrowserState.pack_path != "" && !BrowserState.loading;
                         clicked => {
@@ -457,7 +457,7 @@ export component BrowserScreen inherits Rectangle {
                 width: 100%;
                 height: 100%;
 
-                for row[i] in BrowserState.rows: ListRow {
+                for row[i] in BrowserState.rows: row_open := ListRow {
                     height: 3 * Theme.font-size + 3 * Theme.gap + Theme.pad;
                     selected: i == root.selected;
                     clicked => {
@@ -540,7 +540,7 @@ export component BrowserScreen inherits Rectangle {
                         alignment: center;
                         horizontal-stretch: 0;
 
-                        Button {
+                        row_install := Button {
                             text: row.kind == "modpack"
                                 ? "Install modpack"
                                 : (root.has_target
@@ -565,7 +565,7 @@ export component BrowserScreen inherits Rectangle {
             spacing: Theme.gap;
             height: Theme.row-height;
 
-            if !root.modpack_mode: Button {
+            if !root.modpack_mode: prev_button := Button {
                 text: "Prev";
                 enabled: BrowserState.page > 0 && !BrowserState.loading;
                 clicked => {
@@ -573,7 +573,7 @@ export component BrowserScreen inherits Rectangle {
                 }
             }
 
-            if !root.modpack_mode: Button {
+            if !root.modpack_mode: next_button := Button {
                 text: "Next";
                 enabled: BrowserState.has_more && !BrowserState.loading;
                 clicked => {

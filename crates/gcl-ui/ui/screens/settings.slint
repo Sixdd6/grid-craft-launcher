@@ -66,7 +66,7 @@ export component SettingsScreen inherits Rectangle {
                         spacing: Theme.gap;
                         height: Theme.row-height;
 
-                        LineEdit {
+                        root_path_field := LineEdit {
                             placeholder-text: "Path to another app root";
                             text <=> SettingsState.new_root;
                             horizontal-stretch: 1;
@@ -75,7 +75,7 @@ export component SettingsScreen inherits Rectangle {
                             }
                         }
 
-                        Button {
+                        root_change_button := Button {
                             text: "Change";
                             enabled: SettingsState.new_root != "" && !SettingsState.busy;
                             clicked => {
@@ -110,7 +110,7 @@ export component SettingsScreen inherits Rectangle {
 
                         Rectangle { horizontal-stretch: 1; }
 
-                        Button {
+                        parallel_apply_button := Button {
                             text: "Apply";
                             enabled: !SettingsState.busy;
                             clicked => {
@@ -136,7 +136,7 @@ export component SettingsScreen inherits Rectangle {
                             horizontal-stretch: 0;
                         }
 
-                        LineEdit {
+                        memory_min_field := LineEdit {
                             placeholder-text: "1024";
                             text <=> root.min_text;
                             width: 110px;
@@ -150,7 +150,7 @@ export component SettingsScreen inherits Rectangle {
                             horizontal-stretch: 0;
                         }
 
-                        LineEdit {
+                        memory_max_field := LineEdit {
                             placeholder-text: "4096";
                             text <=> root.max_text;
                             width: 110px;
@@ -177,13 +177,13 @@ export component SettingsScreen inherits Rectangle {
                             horizontal-stretch: 0;
                         }
 
-                        LineEdit {
+                        java_path_field := LineEdit {
                             placeholder-text: "empty: let the launcher choose";
                             text <=> SettingsState.java_path;
                             horizontal-stretch: 1;
                         }
 
-                        Button {
+                        java_apply_button := Button {
                             text: "Apply";
                             enabled: !SettingsState.busy;
                             clicked => {
@@ -212,14 +212,14 @@ export component SettingsScreen inherits Rectangle {
                             horizontal-stretch: 0;
                         }
 
-                        LineEdit {
+                        curseforge_key_field := LineEdit {
                             placeholder-text: "paste a key, or leave empty to clear";
                             input-type: password;
                             text <=> SettingsState.curseforge_key_input;
                             horizontal-stretch: 1;
                         }
 
-                        Button {
+                        curseforge_key_button := Button {
                             text: SettingsState.curseforge_key_input == ""
                                 ? "Clear"
                                 : "Save";
@@ -245,14 +245,14 @@ export component SettingsScreen inherits Rectangle {
                             horizontal-stretch: 0;
                         }
 
-                        LineEdit {
+                        msa_client_id_field := LineEdit {
                             placeholder-text: "paste a client id, or leave empty to clear";
                             input-type: password;
                             text <=> SettingsState.msa_client_id_input;
                             horizontal-stretch: 1;
                         }
 
-                        Button {
+                        msa_client_id_button := Button {
                             text: SettingsState.msa_client_id_input == "" ? "Clear" : "Save";
                             enabled: !SettingsState.busy;
                             clicked => {
@@ -283,7 +283,7 @@ export component SettingsScreen inherits Rectangle {
                         wrap: word-wrap;
                     }
 
-                    for row in SettingsState.game_defaults: HorizontalLayout {
+                    for row in SettingsState.game_defaults: default_row := HorizontalLayout {
                         spacing: Theme.gap;
                         height: Theme.row-height;
 
@@ -305,7 +305,7 @@ export component SettingsScreen inherits Rectangle {
                             overflow: elide;
                         }
 
-                        Button {
+                        row_delete := Button {
                             text: "Remove";
                             kind: "danger";
                             enabled: !SettingsState.busy;
@@ -319,19 +319,19 @@ export component SettingsScreen inherits Rectangle {
                         spacing: Theme.gap;
                         height: Theme.row-height;
 
-                        LineEdit {
+                        default_key_field := LineEdit {
                             placeholder-text: "key, e.g. renderDistance";
                             text <=> root.new_key;
                             width: 180px;
                         }
 
-                        LineEdit {
+                        default_value_field := LineEdit {
                             placeholder-text: "value";
                             text <=> root.new_value;
                             horizontal-stretch: 1;
                         }
 
-                        Button {
+                        default_add_button := Button {
                             text: "Add";
                             kind: "primary";
                             enabled: root.new_key != "" && !SettingsState.busy;
@@ -360,7 +360,7 @@ export component SettingsScreen inherits Rectangle {
                             horizontal-stretch: 1;
                         }
 
-                        Button {
+                        verify_button := Button {
                             text: "Verify sources";
                             enabled: !SettingsState.busy;
                             clicked => {

@@ -21,6 +21,18 @@ export component Button inherits Rectangle {
     background: root.base;
     opacity: root.enabled ? 1.0 : 0.5;
 
+    // The testing backend presses a button through its default accessible action, and a
+    // screen reader reads `accessible-label`. Both need these four lines; `Rectangle` has no
+    // button behaviour of its own.
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if (root.enabled) {
+            root.clicked();
+        }
+    }
+
     label := Text {
         text: root.text;
         color: root.label-color;

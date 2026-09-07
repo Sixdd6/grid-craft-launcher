@@ -86,7 +86,7 @@ export component Dialog inherits Rectangle {
                     alignment: end;
                     spacing: Theme.gap;
 
-                    Button {
+                    cancel_button := Button {
                         text: root.close-text;
                         // The closing button leads only while it is the sole action.
                         kind: root.confirm-text == "" ? "primary" : "secondary";
@@ -95,7 +95,7 @@ export component Dialog inherits Rectangle {
                         }
                     }
 
-                    if root.confirm-text != "": Button {
+                    if root.confirm-text != "": confirm_button := Button {
                         text: root.confirm-text;
                         kind: root.danger ? "danger" : "primary";
                         enabled: root.confirm-enabled;

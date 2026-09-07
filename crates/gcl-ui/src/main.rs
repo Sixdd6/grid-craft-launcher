@@ -1,33 +1,35 @@
-//! Desktop UI entry point. Core logic stays in `gcl-core`; this crate renders and forwards events.
+//! The launcher binary: parse the command line, start logging, build the window, run it.
+//!
+//! Everything else lives in the `gcl_ui` library, so integration tests can build the same
+//! window this binary does.
 
-slint::include_modules!();
-
-mod app;
-mod bridge;
-mod events;
-mod keys;
-mod launch_flow;
-mod models;
-mod screens;
-mod state;
-mod toasts;
-
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use gcl_core::Launcher;
 use gcl_core::events::Event;
-use slint::ComponentHandle;
+use gcl_ui::{AppWindow, app, bridge, logging};
+use slint::{ComponentHandle, RenderingState};
 
 /// How long `--smoke` keeps the window open before it quits the event loop.
 const SMOKE_DELAY: Duration = Duration::from_millis(500);
+
+/// How long `--screenshot` waits before it grabs the window.
+///
+/// The first frame is drawn before this fires, so the shell, the rail, and the instances list
+/// are all on screen by the time the snapshot is taken.
+const SHOT_DELAY: Duration = Duration::from_millis(700);
 
 /// What the command line asked for.
 #[derive(Debug)]
 struct Args {
     /// Open the window, run one synthetic task, and quit. For CI and a first-run check.
     smoke: bool,
+    /// Open the window, write a PNG of it to this path, and quit.
+    screenshot: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -53,6 +55,10 @@ fn run() -> Result<(), String> {
         Launcher::new(None).map_err(|err| bridge::error_chain(&err) + " (could not start)")?;
     let launcher = Arc::new(launcher);
 
+    // Held to the end of `run`, so the log writer's worker thread outlives the event loop.
+    let _log_guard = logging::init(launcher.root());
+    tracing::info!(version = gcl_core::VERSION, "gui start");
+
     let window = app::build(Arc::clone(&launcher), rx).map_err(|err| err.to_string())?;
 
     if args.smoke {
@@ -62,7 +68,72 @@ fn run() -> Result<(), String> {
         });
     }
 
+    if let Some(path) = args.screenshot {
+        arm_screenshot(&window, path)?;
+    }
+
     window.run().map_err(|err| err.to_string())
+}
+
+/// Arranges for one PNG of the window to be written, then quits the event loop.
+///
+/// The snapshot has to be taken inside the renderer's `AfterRendering` callback. The FemtoVG
+/// renderer reads the OpenGL back buffer, and that buffer only holds the frame between the
+/// draw and the buffer swap; asking for it from a plain timer gives a blank image. So the
+/// timer only raises a flag and asks for a redraw, and the callback below does the work on
+/// the frame that redraw produces.
+fn arm_screenshot(window: &AppWindow, path: PathBuf) -> Result<(), String> {
+    let wanted = Arc::new(AtomicBool::new(false));
+
+    let weak = window.as_weak();
+    let flag = Arc::clone(&wanted);
+    window
+        .window()
+        .set_rendering_notifier(move |state, _api| {
+            if !matches!(state, RenderingState::AfterRendering)
+                || !flag.swap(false, Ordering::SeqCst)
+            {
+                return;
+            }
+            if let Some(window) = weak.upgrade()
+                && let Err(message) = screenshot(&window, &path)
+            {
+                eprintln!("error: {message}");
+            }
+            let _ = slint::quit_event_loop();
+        })
+        .map_err(|err| format!("could not watch the renderer: {err}"))?;
+
+    let weak = window.as_weak();
+    slint::Timer::single_shot(SHOT_DELAY, move || {
+        wanted.store(true, Ordering::SeqCst);
+        if let Some(window) = weak.upgrade() {
+            window.window().request_redraw();
+        }
+    });
+    Ok(())
+}
+
+/// Writes a PNG of the window's current frame to `path`.
+fn screenshot(window: &AppWindow, path: &std::path::Path) -> Result<(), String> {
+    let buffer = window
+        .window()
+        .take_snapshot()
+        .map_err(|err| format!("could not take a snapshot: {err}"))?;
+    let (width, height) = (buffer.width(), buffer.height());
+    let file = std::fs::File::create(path)
+        .map_err(|err| format!("could not create {}: {err}", path.display()))?;
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder
+        .write_header()
+        .map_err(|err| format!("could not write the PNG header: {err}"))?;
+    writer
+        .write_image_data(buffer.as_bytes())
+        .map_err(|err| format!("could not write the PNG data: {err}"))?;
+    tracing::info!(path = %path.display(), width, height, "screenshot written");
+    Ok(())
 }
 
 /// Sends synthetic events through the sink, so a smoke run exercises the forwarder.
@@ -96,12 +167,22 @@ fn smoke(launcher: &Launcher) {
 
 /// Reads the command line. `Ok(None)` means the caller asked for help or the version.
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
-    let mut parsed = Args { smoke: false };
+    let mut parsed = Args {
+        smoke: false,
+        screenshot: None,
+    };
+    let mut want_path = false;
     for arg in args {
+        if want_path {
+            parsed.screenshot = Some(PathBuf::from(arg));
+            want_path = false;
+            continue;
+        }
         match arg.as_str() {
             // `just run-ui -- --smoke` passes the separator through; ignore it.
             "--" => continue,
             "--smoke" => parsed.smoke = true,
+            "--screenshot" => want_path = true,
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return Ok(None);
@@ -113,6 +194,9 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Args>, String
             other => return Err(format!("unknown argument `{other}`\n\n{USAGE}")),
         }
     }
+    if want_path {
+        return Err(format!("`--screenshot` needs a path\n\n{USAGE}"));
+    }
     Ok(Some(parsed))
 }
 
@@ -123,9 +207,10 @@ GRID Craft Launcher
 Usage: grid-craft-launcher [OPTIONS]
 
 Options:
-  --smoke        Open the window, run one synthetic task, then quit
-  -h, --help     Print this help
-  -V, --version  Print the version";
+  --smoke              Open the window, run one synthetic task, then quit
+  --screenshot <PATH>  Open the window, write a PNG of it to PATH, then quit
+  -h, --help           Print this help
+  -V, --version        Print the version";
 
 #[cfg(test)]
 mod tests {
@@ -145,6 +230,7 @@ mod tests {
             .expect("parses")
             .expect("runs");
         assert!(!args.smoke);
+        assert!(args.screenshot.is_none());
     }
 
     #[test]
@@ -153,6 +239,23 @@ mod tests {
             .expect("parses")
             .expect("runs");
         assert!(args.smoke);
+    }
+
+    #[test]
+    fn parse_args_reads_the_screenshot_path() {
+        let args = parse_args(["--screenshot".to_string(), "/tmp/a.png".to_string()].into_iter())
+            .expect("parses")
+            .expect("runs");
+        assert_eq!(
+            args.screenshot.as_deref(),
+            Some(std::path::Path::new("/tmp/a.png"))
+        );
+    }
+
+    #[test]
+    fn parse_args_rejects_a_screenshot_without_a_path() {
+        let err = parse_args(["--screenshot".to_string()].into_iter()).expect_err("rejected");
+        assert!(err.contains("--screenshot"));
     }
 
     #[test]

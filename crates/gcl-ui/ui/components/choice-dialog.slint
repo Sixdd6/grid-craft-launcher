@@ -71,12 +71,19 @@ export component ChoiceDialog inherits Rectangle {
                     width: parent.width - Theme.gap;
                     height: parent.height - Theme.gap;
 
-                    for option[i] in root.options: Rectangle {
+                    // One id for every option, as in `TabBar`: a test takes the nth handle.
+                    for option[i] in root.options: choice_row := Rectangle {
                         height: Theme.row-height;
                         border-radius: Theme.radius;
                         background: i == root.index
                             ? Theme.accent.with-alpha(0.18)
                             : (touch.has-hover ? Theme.surface-hover : Colors.transparent);
+
+                        accessible-role: button;
+                        accessible-label: option;
+                        accessible-action-default => {
+                            root.index = i;
+                        }
 
                         touch := TouchArea {
                             clicked => {

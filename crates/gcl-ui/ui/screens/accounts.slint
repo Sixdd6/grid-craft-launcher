@@ -48,7 +48,7 @@ export component AccountsScreen inherits Rectangle {
                 horizontal-stretch: 1;
             }
 
-            Button {
+            add_offline_button := Button {
                 text: "Add offline";
                 enabled: !AccountsState.busy;
                 clicked => {
@@ -56,7 +56,7 @@ export component AccountsScreen inherits Rectangle {
                 }
             }
 
-            Button {
+            sign_in_button := Button {
                 text: "Sign in with Microsoft";
                 kind: "primary";
                 enabled: AccountsState.msa_available && !AccountsState.busy;
@@ -107,7 +107,7 @@ export component AccountsScreen inherits Rectangle {
             width: 100%;
             height: 100%;
 
-                for row[i] in AccountsState.rows: ListRow {
+                for row[i] in AccountsState.rows: row_open := ListRow {
                     // The active account and the keyboard row are both highlighted; while
                     // nothing is chosen with the keyboard only the active one is.
                     selected: row.active || i == root.selected;
@@ -158,7 +158,7 @@ export component AccountsScreen inherits Rectangle {
                         overflow: elide;
                     }
 
-                    Button {
+                    row_select := Button {
                         text: "Select";
                         enabled: !row.active && !AccountsState.busy;
                         clicked => {
@@ -168,7 +168,7 @@ export component AccountsScreen inherits Rectangle {
 
                     // Shown on every row so the buttons line up, but only a Microsoft account
                     // has a saved sign-in to renew.
-                    Button {
+                    row_refresh := Button {
                         text: "Refresh";
                         enabled: row.kind == "msa" && !AccountsState.busy;
                         clicked => {
@@ -176,7 +176,7 @@ export component AccountsScreen inherits Rectangle {
                         }
                     }
 
-                    Button {
+                    row_delete := Button {
                         text: "Remove";
                         kind: "danger";
                         enabled: !AccountsState.busy;

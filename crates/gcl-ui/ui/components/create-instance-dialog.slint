@@ -126,13 +126,13 @@ export component CreateInstanceDialog inherits Rectangle {
                 font-size: Theme.font-size-small;
             }
 
-            ComboBox {
+            version_combo := ComboBox {
                 model: root.version_labels;
                 current-index <=> root.version_index;
                 enabled: root.version_labels.length > 0;
             }
 
-            CheckBox {
+            snapshots_check := CheckBox {
                 text: "Show snapshots";
                 checked <=> root.show_snapshots;
             }
@@ -143,7 +143,7 @@ export component CreateInstanceDialog inherits Rectangle {
                 font-size: Theme.font-size-small;
             }
 
-            ComboBox {
+            loader_combo := ComboBox {
                 model: root.loader_names;
                 current-index <=> root.loader_index;
             }
@@ -162,7 +162,7 @@ export component CreateInstanceDialog inherits Rectangle {
                 vertical-alignment: center;
             }
 
-            if root.loader_index > 0 && !root.loading_loader_versions: ComboBox {
+            if root.loader_index > 0 && !root.loading_loader_versions: loader_version_combo := ComboBox {
                 model: root.loader_version_labels;
                 current-index <=> root.loader_version_index;
                 enabled: root.loader_version_labels.length > 0;

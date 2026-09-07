@@ -4,7 +4,7 @@ import {
     Screen, SearchRow, SettingRow, TaskRow, ToastRow, VersionRow
 } from "types.slint";
 import { AccountsState, InstanceState, SettingsState, Shell } from "state.slint";
-import { TextEdit } from "std-widgets.slint";
+import { Palette, TextEdit } from "std-widgets.slint";
 import { Rail } from "components/rail.slint";
 import { ChoiceDialog } from "components/choice-dialog.slint";
 import { ConfirmDialog } from "components/confirm-dialog.slint";
@@ -135,6 +135,14 @@ export global InstancesState {
 export component AppWindow inherits Window {
     title: "GRID Craft Launcher";
     background: Theme.bg;
+
+    // std-widgets (ComboBox, LineEdit, TextEdit, SpinBox, ...) read their own colors from the
+    // style's `Palette`, which no `Theme` token reaches. Setting the scheme here is the one
+    // switch that makes them match the dark shell.
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+    }
+
     min-width: 960px;
     min-height: 600px;
     preferred-width: 1200px;

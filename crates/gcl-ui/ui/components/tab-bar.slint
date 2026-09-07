@@ -11,7 +11,9 @@ export component TabBar inherits Rectangle {
     HorizontalLayout {
         spacing: Theme.gap;
 
-        for tab[index] in root.tabs: Rectangle {
+        // Every entry carries the same id: a repeater cannot give each one its own. A test
+        // takes the nth handle `find_by_element_id` yields, in tab order.
+        for tab[index] in root.tabs: tab_entry := Rectangle {
             border-radius: Theme.radius;
             horizontal-stretch: 0;
             min-width: label.preferred-width + 2 * Theme.pad;
@@ -25,6 +27,13 @@ export component TabBar inherits Rectangle {
                 font-size: Theme.font-size;
                 vertical-alignment: center;
                 horizontal-alignment: center;
+            }
+
+            accessible-role: button;
+            accessible-label: tab;
+            accessible-action-default => {
+                root.current = index;
+                root.changed(index);
             }
 
             touch := TouchArea {

@@ -14,6 +14,12 @@ component Entry inherits Rectangle {
         ? Theme.accent.with-alpha(0.18)
         : (touch.has-hover ? Theme.surface-hover : Colors.transparent);
 
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+
     touch := TouchArea {
         clicked => { root.clicked(); }
     }
@@ -62,31 +68,31 @@ export component Rail inherits Rectangle {
             vertical-alignment: center;
         }
 
-        Entry {
+        rail_instances := Entry {
             index-text: "1";
             label: "Instances";
             active: root.current == Screen.instances;
             clicked => { root.navigate(Screen.instances); }
         }
-        Entry {
+        rail_instance := Entry {
             index-text: "2";
             label: "Instance";
             active: root.current == Screen.instance;
             clicked => { root.navigate(Screen.instance); }
         }
-        Entry {
+        rail_browser := Entry {
             index-text: "3";
             label: "Browse";
             active: root.current == Screen.browser;
             clicked => { root.navigate(Screen.browser); }
         }
-        Entry {
+        rail_accounts := Entry {
             index-text: "4";
             label: "Accounts";
             active: root.current == Screen.accounts;
             clicked => { root.navigate(Screen.accounts); }
         }
-        Entry {
+        rail_settings := Entry {
             index-text: "5";
             label: "Settings";
             active: root.current == Screen.settings;

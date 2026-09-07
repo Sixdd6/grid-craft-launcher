@@ -85,7 +85,7 @@ export component InstancesScreen inherits Rectangle {
 
             Rectangle { horizontal-stretch: 1; }
 
-            SearchBox {
+            search_box := SearchBox {
                 placeholder: "Filter instances";
                 text <=> root.filter;
                 moved_down => {
@@ -95,7 +95,7 @@ export component InstancesScreen inherits Rectangle {
                 width: 280px;
             }
 
-            Button {
+            create_button := Button {
                 text: "Create";
                 kind: "primary";
                 clicked => {
@@ -103,7 +103,7 @@ export component InstancesScreen inherits Rectangle {
                 }
             }
 
-            Button {
+            refresh_button := Button {
                 text: "Refresh";
                 enabled: !root.loading;
                 clicked => {
@@ -162,7 +162,7 @@ export component InstancesScreen inherits Rectangle {
                 width: 100%;
                 height: 100%;
 
-                for row[i] in root.rows: ListRow {
+                for row[i] in root.rows: row_open := ListRow {
                     height: Theme.row-height + Theme.gap;
                     selected: i == root.selected;
                     clicked => {
@@ -222,7 +222,7 @@ export component InstancesScreen inherits Rectangle {
                     VerticalLayout {
                         alignment: center;
                         horizontal-stretch: 0;
-                        Button {
+                        row_launch := Button {
                             // A launch installs whatever is missing, so an instance that was
                             // never installed can still be started. Only a running game blocks it.
                             text: row.running ? "Running" : "Launch";
@@ -237,7 +237,7 @@ export component InstancesScreen inherits Rectangle {
                     VerticalLayout {
                         alignment: center;
                         horizontal-stretch: 0;
-                        Button {
+                        row_delete := Button {
                             text: "Delete";
                             clicked => {
                                 root.delete(row.slug);

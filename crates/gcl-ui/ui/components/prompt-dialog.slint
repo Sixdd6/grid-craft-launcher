@@ -29,7 +29,7 @@ export component PromptDialog inherits Rectangle {
     // collect one line of text.
     changed open => {
         if (root.open) {
-            field.focus();
+            name_field.focus();
         }
     }
 
@@ -59,7 +59,7 @@ export component PromptDialog inherits Rectangle {
                 font-size: Theme.font-size-small;
             }
 
-            field := LineEdit {
+            name_field := LineEdit {
                 placeholder-text: root.placeholder;
                 text <=> root.value;
                 accepted(typed) => {

@@ -181,11 +181,17 @@ export component ProgressPanel inherits Rectangle {
                 }
 
                 // Chevron. Points down while the list is open, up while it is closed.
-                Rectangle {
+                panel_toggle := Rectangle {
                     horizontal-stretch: 0;
                     width: Theme.row-height;
                     border-radius: Theme.radius;
                     background: chevron.has-hover ? Theme.surface-hover : Colors.transparent;
+
+                    accessible-role: button;
+                    accessible-label: "Toggle the task panel";
+                    accessible-action-default => {
+                        root.expanded = !root.expanded;
+                    }
 
                     chevron := TouchArea {
                         clicked => {

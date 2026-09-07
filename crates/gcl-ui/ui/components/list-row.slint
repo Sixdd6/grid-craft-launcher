@@ -9,9 +9,14 @@ export component ListRow inherits Rectangle {
     border-radius: Theme.radius;
     background: root.selected
         ? Theme.accent.with-alpha(0.18)
-        : (touch.has-hover ? Theme.surface-hover : Colors.transparent);
+        : (row_touch.has-hover ? Theme.surface-hover : Colors.transparent);
 
-    touch := TouchArea {
+    accessible-role: button;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    row_touch := TouchArea {
         clicked => {
             root.clicked();
         }

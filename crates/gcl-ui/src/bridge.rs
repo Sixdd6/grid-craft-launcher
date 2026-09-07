@@ -33,6 +33,11 @@ impl Bridge {
         &self.weak
     }
 
+    /// The GUI log file this process writes to, named in every error dialog.
+    pub fn log_path(&self) -> std::path::PathBuf {
+        crate::logging::log_file(self.launcher.root())
+    }
+
     /// Runs `job` on its own thread. On success `done` runs on the UI thread; on failure the
     /// error dialog opens with `label` as its title.
     pub fn run<T: Send + 'static>(
@@ -41,15 +46,42 @@ impl Bridge {
         job: impl FnOnce(&Launcher) -> Result<T, gcl_core::Error> + Send + 'static,
         done: impl FnOnce(&AppWindow, T) + Send + 'static,
     ) {
+        self.run_logged(label, true, job, done);
+    }
+
+    /// [`Bridge::run`], with the outcome log line under a switch.
+    ///
+    /// [`Bridge::run_with_error`] hands the outer job a `Result` that is always `Ok`, so the
+    /// outer line would say every job succeeded. It passes `false` here and writes its own
+    /// line from the result it can actually see.
+    fn run_logged<T: Send + 'static>(
+        &self,
+        label: &'static str,
+        log_outcome: bool,
+        job: impl FnOnce(&Launcher) -> Result<T, gcl_core::Error> + Send + 'static,
+        done: impl FnOnce(&AppWindow, T) + Send + 'static,
+    ) {
         let launcher = Arc::clone(&self.launcher);
         let weak = self.weak.clone();
+        let log_path = self.log_path();
         std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            tracing::debug!(label, "job start");
             let result = spawn_job(move || job(&launcher))
                 .recv()
                 .unwrap_or_else(|_| Err(worker_gone()));
+            let elapsed_ms = elapsed_ms(started);
+            if log_outcome {
+                match &result {
+                    Ok(_) => tracing::info!(label, elapsed_ms, "job ok"),
+                    Err(err) => {
+                        tracing::error!(label, elapsed_ms, error = %error_chain(err), "job failed");
+                    }
+                }
+            }
             let _ = weak.upgrade_in_event_loop(move |window| match result {
                 Ok(value) => done(&window, value),
-                Err(err) => show_error(&window, label, &err),
+                Err(err) => show_error_with_log(&window, label, &err, Some(&log_path)),
             });
         });
     }
@@ -69,12 +101,22 @@ impl Bridge {
         job: impl FnOnce(&Launcher) -> Result<T, gcl_core::Error> + Send + 'static,
         done: impl FnOnce(&AppWindow, Result<T, gcl_core::Error>) + Send + 'static,
     ) {
-        self.run(
+        let log_path = self.log_path();
+        self.run_logged(
             label,
-            move |launcher| Ok(job(launcher)),
-            move |window, result| {
-                if let Err(err) = &result {
-                    show_error(window, label, err);
+            false,
+            move |launcher| {
+                let started = std::time::Instant::now();
+                let result = job(launcher);
+                Ok((result, elapsed_ms(started)))
+            },
+            move |window, (result, elapsed_ms)| {
+                match &result {
+                    Ok(_) => tracing::info!(label, elapsed_ms, "job ok"),
+                    Err(err) => {
+                        tracing::error!(label, elapsed_ms, error = %error_chain(err), "job failed");
+                        show_error_with_log(window, label, err, Some(&log_path));
+                    }
                 }
                 done(window, result);
             },
@@ -96,10 +138,31 @@ pub fn spawn_job<T: Send + 'static>(
 }
 
 /// Opens the error dialog with `label` as the title and the error's full chain as the body.
+///
+/// The body ends with the path of the GUI log, so a user reading the dialog knows where the
+/// rest of the story is. `logs_path` is the whole reason `show_error` needs the bridge.
 pub fn show_error(window: &AppWindow, label: &str, err: &gcl_core::Error) {
+    show_error_with_log(window, label, err, None);
+}
+
+/// [`show_error`], with the log path a caller already knows.
+///
+/// `Bridge` has the launcher and so the root; a bare `show_error` call from a screen does not,
+/// and passes `None`.
+pub fn show_error_with_log(
+    window: &AppWindow,
+    label: &str,
+    err: &gcl_core::Error,
+    log_path: Option<&std::path::Path>,
+) {
     let app = window.global::<App>();
+    let mut text = error_chain(err);
+    if let Some(path) = log_path {
+        text.push_str("\n\nDetails: ");
+        text.push_str(&path.display().to_string());
+    }
     app.set_error_title(label.into());
-    app.set_error_text(error_chain(err).into());
+    app.set_error_text(text.into());
     app.set_error_open(true);
 }
 
@@ -131,6 +194,11 @@ pub fn error_chain(err: &dyn std::error::Error) -> String {
         source = next.source();
     }
     text
+}
+
+/// Milliseconds since `started`, saturating rather than wrapping.
+fn elapsed_ms(started: std::time::Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 /// The error reported when a job thread died without sending a result.

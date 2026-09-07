@@ -17,7 +17,10 @@ crates/gcl-ui/
                                 DeviceCode/CreateInstance variants
   ui/screens/                  instances.slint, instance.slint, browser.slint, accounts.slint,
                                 settings.slint
-  src/main.rs                  args, opens Launcher::new, builds the window, runs the event loop
+  src/lib.rs                   `slint::include_modules!()` plus every module, so tests can
+                                build the real AppWindow
+  src/main.rs                  args (--smoke, --screenshot), logging::init, app::build, run
+  src/logging.rs               tracing to <root>/logs/gui.log daily, stderr when GCL_LOG is set
   src/app.rs                   builds AppWindow, wires App/Shell callbacks, starts the forwarder
   src/bridge.rs                Bridge: runs a Launcher call off the UI thread
   src/events.rs                forwarder thread: batches core Events onto the UI thread
@@ -137,6 +140,40 @@ the `ListView` inside it. A `Dialog` takes focus when it opens, unless `focus-fi
 caller focuses its own text field instead; Escape bubbles from that field to the dialog's scope
 either way.
 
+## Element ids
+
+Every interactive element carries a `snake_case := ` name, because the Slint testing backend
+addresses it as `<Component>::<name>`: `ElementHandle::find_by_element_id(&app,
+"InstancesScreen::create_button")`. The component is the one whose *file* declares the name, so a
+`Button` inside `Dialog` is `Dialog::confirm_button` no matter which screen opened the dialog.
+
+- Screen controls: `<thing>_<kind>` — `create_button`, `refresh_button`, `search_box`,
+  `java_path_field`, `loader_combo`.
+- Dialog actions: `confirm_button` and `cancel_button` on `Dialog`, `name_field` for a prompt.
+- Rows in a repeater: `row_open`, `row_launch`, `row_delete`, `row_select`, `row_refresh`,
+  `row_toggle`, `row_install`. Every instance of a repeated element gets the same id, so a test
+  takes the nth handle in list order.
+- Rail entries: `rail_instances`, `rail_instance`, `rail_browser`, `rail_accounts`,
+  `rail_settings`. Tab entries: `tab_entry` on `TabBar`, one per tab.
+
+`Button`, `ListRow`, the rail entry, the tab entry, and the task panel's chevron each set
+`accessible-role: button`, `accessible-label`, and `accessible-action-default`, so a test presses
+them with `invoke_accessible_default_action`. A new clickable `Rectangle` needs the same three
+lines; without them the element is found but cannot be pressed.
+
+`scripts/list-slint-ids.sh` prints the whole table; `docs/research/2026-09-07-ui-element-ids.md`
+holds its output. Re-run it after adding a control.
+
+## Logging
+
+`logging::init(root)` returns a `LogGuard` that `main` holds to the end: dropping it stops the
+non-blocking writer's worker thread and loses the tail of the log. The file is
+`<root>/logs/gui.log`, rotated daily, at `info`. Setting `GCL_LOG` adds a stderr layer with that
+value as its `EnvFilter` directive, e.g. `GCL_LOG=debug`. `Bridge` writes one line per job —
+`label`, `elapsed_ms`, and the error chain on failure — and the error dialog ends with
+`Details: <root>/logs/gui.log.<date>`. `tracing_appender` appends the UTC date to the name, so
+`logging::log_file(root)` rebuilds it; do not hard-code `gui.log`.
+
 ## Preview
 
 `just ui-preview screens/instances.slint` opens slint-viewer with live reload against
@@ -158,13 +195,16 @@ previewing, and describe what you saw in your report — the tool has no snapsho
   `RunState`, rather than a separate "now playing" panel.
 - Every list is arrow-navigable through `Shell.move_selection`; Enter activates a selected row;
   Escape closes the open dialog. See "Keyboard" above.
-- The one exception to the dark-first rule is `std-widgets` controls — see "Known limitations".
+- `std-widgets` controls follow the dark shell through `Palette.color-scheme` — see "Known
+  limitations".
 
 ## Known limitations
 
-- **Widget theme**: `std-widgets.slint` controls (`ComboBox`, `TextEdit`, `SpinBox`, ...) render
-  in the `fluent` style's light palette; they sit on the app's dark shell rather than matching it.
-  No token in `Theme` reaches into a std-widget's own colors. Left as-is for the MVP.
+- **Widget theme**: `std-widgets.slint` controls read their colors from the style's own
+  `Palette`, which no `Theme` token reaches. `AppWindow`'s `init` sets
+  `Palette.color-scheme = ColorScheme.dark`, which is the one switch that makes them match the
+  dark shell. It has to be an assignment in `init`; `Palette.color-scheme: ...` in a component
+  body is a parse error. `Theme` stays the source of truth for our own components.
 - **No clipboard**: Slint 1.17 has no clipboard call reachable from a button here. Anywhere a user
   might want to copy text (the error dialog's body, for one) uses a read-only, selectable
   `TextEdit` instead — Ctrl+C on a selection is the whole copy story.

@@ -20,7 +20,7 @@ export component SearchBox inherits Rectangle {
     HorizontalLayout {
         spacing: Theme.gap;
 
-        edit := LineEdit {
+        search_field := LineEdit {
             placeholder-text: root.placeholder;
             text <=> root.text;
             accepted(value) => {
@@ -38,7 +38,7 @@ export component SearchBox inherits Rectangle {
             }
         }
 
-        Button {
+        clear_button := Button {
             text: "clear";
             enabled: root.text != "";
             clicked => {
