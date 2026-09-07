@@ -276,6 +276,11 @@ impl Msa {
         if status == 200 {
             return Ok(Poll::Ready(parse_tokens(&body)?));
         }
+        // Only a 400 carries the OAuth error shape. Anything else is a failure of the
+        // endpoint itself, so report the status and do not read the body.
+        if status != 400 {
+            return Err(Error::Oauth(format!("HTTP {status}")));
+        }
         match oauth_error_code(status, &body).as_str() {
             "authorization_pending" => Ok(Poll::Pending),
             "slow_down" => Ok(Poll::SlowDown),
@@ -358,7 +363,8 @@ impl Msa {
             return Err(xsts_error(code));
         }
         if status != 200 {
-            return Err(Error::Xbl(format!("HTTP {status}")));
+            tracing::warn!(status, "XSTS returned an unexpected status");
+            return Err(Error::Xsts { code: 0 });
         }
         let parsed: XboxResponse = parse(&body, "XSTS")?;
         let claim = parsed.first_claim("XSTS")?;

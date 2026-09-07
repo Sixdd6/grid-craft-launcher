@@ -173,6 +173,22 @@ static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 ///
 /// A reader never sees a half-written file. Parent directories are created as needed.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    write_atomic_inner(path, bytes, None)
+}
+
+/// Writes `bytes` to `path` atomically, with the temp file created at `mode` on unix.
+///
+/// Use this for a file that must never be readable by anyone else, such as the refresh-token
+/// store: [`write_atomic`] leaves its temp file at the process umask, so a secret written
+/// through it is world-readable until the caller chmods the renamed file, and forever if the
+/// process dies in between. `mode` is ignored off unix, where the user's profile directory
+/// carries the restriction instead.
+pub fn write_atomic_with_mode(path: &Path, bytes: &[u8], mode: u32) -> Result<(), Error> {
+    write_atomic_inner(path, bytes, Some(mode))
+}
+
+/// Shared body: write a temp sibling, flush it to disk, then rename it over `path`.
+fn write_atomic_inner(path: &Path, bytes: &[u8], mode: Option<u32>) -> Result<(), Error> {
     let io = |path: &Path| {
         let path = path.to_path_buf();
         move |source| Error::Io { path, source }
@@ -186,8 +202,34 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Error> {
         .unwrap_or_else(|| "file".to_string());
     let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tmp = path.with_file_name(format!("{name}.{}.{seq}.tmp", std::process::id()));
-    std::fs::write(&tmp, bytes).map_err(io(&tmp))?;
-    std::fs::rename(&tmp, path).map_err(io(path))
+    match write_tmp(&tmp, bytes, mode) {
+        Ok(()) => std::fs::rename(&tmp, path).map_err(io(path)),
+        Err(source) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(Error::Io { path: tmp, source })
+        }
+    }
+}
+
+/// Creates the temp file, at `mode` when one is asked for, writes it, and syncs it.
+///
+/// `create_new` means the file is never opened over an existing one, so the mode is the mode
+/// the bytes are written under: there is no window at a wider mode.
+fn write_tmp(tmp: &Path, bytes: &[u8], mode: Option<u32>) -> Result<(), std::io::Error> {
+    use std::io::Write;
+
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    if let Some(mode) = mode {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(mode);
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    let mut file = options.open(tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 
 /// True when `s` is exactly 40 lowercase hex characters, the shape of a sha1 we store by.
@@ -384,6 +426,32 @@ mod tests {
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_with_mode_never_widens_the_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret.json");
+        write_atomic_with_mode(&path, b"one", 0o600).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "mode was {mode:o}");
+
+        // A second write renames over the first file and keeps the mode.
+        write_atomic_with_mode(&path, b"two", 0o600).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "two");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "mode was {mode:o}");
+
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n != "secret.json")
             .collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
     }

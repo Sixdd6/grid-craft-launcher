@@ -13,6 +13,24 @@ fn forbid_the_keyring() {
     unsafe { std::env::set_var(NO_KEYRING_ENV, "1") };
 }
 
+/// The file's permission bits.
+#[cfg(unix)]
+fn mode_of(path: &std::path::Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .expect("metadata")
+        .permissions()
+        .mode()
+        & 0o777
+}
+
+/// Sets the file's permission bits.
+#[cfg(unix)]
+fn set_mode(path: &std::path::Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("set_permissions");
+}
+
 #[test]
 fn memory_store_round_trips() {
     let store = MemoryStore::new();
@@ -77,26 +95,42 @@ fn file_store_reads_a_store_written_by_an_earlier_run() {
 
 #[cfg(unix)]
 #[test]
-fn file_store_restricts_the_file_to_the_owner() {
-    use std::os::unix::fs::PermissionsExt;
-
+fn file_store_creates_the_file_at_0600_and_leaves_no_temp_file() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = FileStore::new(&Root::from_path(dir.path()));
     store.put("id-1", "token-1").expect("put");
-    let mode = std::fs::metadata(store.path())
-        .expect("metadata")
-        .permissions()
-        .mode()
-        & 0o777;
-    assert_eq!(mode, 0o600, "mode was {mode:o}");
+    assert_eq!(mode_of(store.path()), 0o600, "after the first write");
 
     store.put("id-2", "token-2").expect("second write");
-    let mode = std::fs::metadata(store.path())
-        .expect("metadata")
-        .permissions()
-        .mode()
-        & 0o777;
-    assert_eq!(mode, 0o600, "mode after the second write was {mode:o}");
+    assert_eq!(mode_of(store.path()), 0o600, "after the second write");
+
+    // The temp file the atomic write goes through is created at 0600 too, and is renamed
+    // away, so nothing but secrets.json is left in the root.
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .expect("read_dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name != "secrets.json")
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn file_store_replaces_a_world_readable_file_from_an_older_launcher() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = FileStore::new(&Root::from_path(dir.path()));
+    std::fs::write(store.path(), "{}").expect("write");
+    set_mode(store.path(), 0o644);
+    assert_eq!(
+        mode_of(store.path()),
+        0o644,
+        "the fixture is world-readable"
+    );
+
+    store.put("id-1", "token-1").expect("put");
+    assert_eq!(mode_of(store.path()), 0o600, "put must narrow the mode");
+    assert_eq!(store.get("id-1").expect("get").as_deref(), Some("token-1"));
 }
 
 #[test]
@@ -127,7 +161,9 @@ fn open_default_falls_back_to_the_file_store_and_warns_once() {
     }
     assert_eq!(warnings.len(), 1, "got {warnings:?}");
     assert!(
-        warnings[0].starts_with("no OS keyring available;"),
+        warnings[0].starts_with(&format!(
+            "the OS keyring is turned off by {NO_KEYRING_ENV};"
+        )),
         "{warnings:?}"
     );
     assert!(

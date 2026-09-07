@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::events::{Event, EventSink};
-use crate::paths::{Root, write_atomic};
+use crate::paths::{Root, write_atomic_with_mode};
 
 use super::Error;
 
@@ -28,6 +28,9 @@ pub const NO_KEYRING_ENV: &str = "GCL_NO_KEYRING";
 
 /// Name of the fallback file inside the app root.
 const FILE_NAME: &str = "secrets.json";
+
+/// Unix mode the token file is created with: owner read and write, nobody else.
+const FILE_MODE: u32 = 0o600;
 
 /// Which backing store a [`SecretStore`] uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -67,8 +70,12 @@ impl KeyringStore {
         let unavailable = |err: keyring::Error| Error::KeyringUnavailable(err.to_string());
         let entry = keyring::Entry::new(SERVICE, PROBE_USER).map_err(unavailable)?;
         entry.set_password("probe").map_err(unavailable)?;
-        entry.get_password().map_err(unavailable)?;
-        entry.delete_credential().map_err(unavailable)?;
+        // From here on the probe entry exists. Remove it on the way out, whichever way that
+        // is, so a half-working keyring is not left holding it.
+        let read = entry.get_password();
+        let removed = entry.delete_credential();
+        read.map_err(unavailable)?;
+        removed.map_err(unavailable)?;
         Ok(KeyringStore)
     }
 
@@ -110,7 +117,8 @@ impl SecretStore for KeyringStore {
 
 /// The fallback store: a JSON map of account id to token at `<root>/secrets.json`.
 ///
-/// On unix the file is chmod 0600 after every write, so only the owner can read it.
+/// On unix the file is created at mode 0600 and renamed into place, so its bytes are never
+/// readable by anyone but the owner, not even for the moment between write and rename.
 #[derive(Debug, Clone)]
 pub struct FileStore {
     path: PathBuf,
@@ -160,32 +168,13 @@ impl FileStore {
             path: self.path.clone(),
             source,
         })?;
-        write_atomic(&self.path, text.as_bytes()).map_err(|err| match err {
+        write_atomic_with_mode(&self.path, text.as_bytes(), FILE_MODE).map_err(|err| match err {
             crate::paths::Error::Io { path, source } => Error::Io { path, source },
             other => Error::Io {
                 path: self.path.clone(),
                 source: std::io::Error::other(other.to_string()),
             },
-        })?;
-        self.restrict()
-    }
-
-    /// Sets mode 0600 on the file. A no-op off unix.
-    #[cfg(unix)]
-    fn restrict(&self) -> Result<(), Error> {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o600)).map_err(
-            |source| Error::Io {
-                path: self.path.clone(),
-                source,
-            },
-        )
-    }
-
-    /// Windows and everything else rely on the user's profile directory instead.
-    #[cfg(not(unix))]
-    fn restrict(&self) -> Result<(), Error> {
-        Ok(())
+        })
     }
 }
 
@@ -258,15 +247,21 @@ impl SecretStore for MemoryStore {
 /// Opens the OS keyring, or falls back to a restricted file and warns once.
 #[tracing::instrument(skip_all)]
 pub fn open_default(root: &Root, sink: &EventSink) -> Box<dyn SecretStore> {
-    if !force_file_store() {
+    let disabled = force_file_store();
+    if !disabled {
         match KeyringStore::probe() {
             Ok(store) => return Box::new(store),
             Err(err) => tracing::warn!(%err, "no OS keyring: falling back to a file"),
         }
     }
     let store = FileStore::new(root);
+    let why = if disabled {
+        format!("the OS keyring is turned off by {NO_KEYRING_ENV}")
+    } else {
+        "no OS keyring available".to_string()
+    };
     let _ = sink.send(Event::Warning(format!(
-        "no OS keyring available; refresh tokens are stored in {} with restricted permissions",
+        "{why}; refresh tokens are stored in {} with restricted permissions",
         store.path().display()
     )));
     Box::new(store)

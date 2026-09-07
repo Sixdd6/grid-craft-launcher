@@ -347,6 +347,7 @@ async fn mc_login_builds_the_identity_token() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/mclogin"))
+        .and(header("accept", "application/json"))
         .and(body_partial_json(serde_json::json!({
             "identityToken": "XBL3.0 x=user-hash;xsts-token",
         })))
@@ -424,6 +425,89 @@ async fn profile_maps_404_to_no_profile() {
         .await
         .expect_err("404 fails");
     assert!(matches!(err, Error::NoProfile), "got {err:?}");
+}
+
+#[tokio::test]
+async fn poll_does_not_read_the_body_of_a_status_that_is_not_400() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(
+            ResponseTemplate::new(401).set_body_string(r#"{"error":"authorization_pending"}"#),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let err = msa(&server)
+        .poll_device_code_once(&a_device_code())
+        .await
+        .expect_err("a 401 is a failure, not a pending sign-in");
+    match &err {
+        Error::Oauth(code) => assert_eq!(code, "HTTP 401"),
+        other => panic!("got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn xbl_reports_a_body_with_no_display_claims() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/xbl"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"Token":"xbl-token"}"#))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let err = msa(&server)
+        .xbl("msa-access")
+        .await
+        .expect_err("a body with no user hash fails");
+    match &err {
+        Error::Parse { what, detail } => {
+            assert_eq!(*what, "Xbox Live");
+            assert!(detail.contains("DisplayClaims"), "{detail}");
+        }
+        other => panic!("got {other:?}"),
+    }
+    assert!(!err.to_string().contains("xbl-token"));
+}
+
+#[tokio::test]
+async fn xbl_reports_an_empty_xui_list() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/xbl"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"Token":"xbl-token","DisplayClaims":{"xui":[]}}"#),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let err = msa(&server)
+        .xbl("msa-access")
+        .await
+        .expect_err("an empty xui list fails");
+    assert!(matches!(err, Error::Parse { .. }), "got {err:?}");
+}
+
+#[tokio::test]
+async fn xsts_reports_an_unexpected_status_as_an_xsts_failure() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/xsts"))
+        .respond_with(ResponseTemplate::new(400))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let err = msa(&server)
+        .xsts(&an_xbl_token())
+        .await
+        .expect_err("a 400 fails");
+    assert!(matches!(err, Error::Xsts { code: 0 }), "got {err:?}");
 }
 
 #[test]
