@@ -10,8 +10,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard};
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use futures_util::future::BoxFuture;
+use futures_util::stream::FuturesUnordered;
 use time::OffsetDateTime;
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use serde::{Deserialize, Serialize};
@@ -52,7 +55,7 @@ use crate::sources::curseforge::CurseForge;
 use crate::sources::modrinth::Modrinth;
 use crate::sources::richtext::{self, Block};
 use crate::sources::{
-    BoxSource, Project, SearchPage, SearchQuery, SourceId, Version, VersionFilter,
+    BoxSource, Project, SearchHit, SearchPage, SearchQuery, SourceId, Version, VersionFilter,
 };
 
 /// Test-only override for the Mojang metadata base URL, read by [`Launcher::mojang`].
@@ -105,6 +108,9 @@ pub const PENDING_MANUAL_FILE: &str = "pending-manual.json";
 
 /// Why [`Launcher::source`] refuses CurseForge when no API key is configured.
 const NO_CURSEFORGE_KEY: &str = "no CURSEFORGE_API_KEY";
+
+/// How many version lookups [`Launcher::latest_versions`] keeps in flight.
+const LATEST_PARALLEL: usize = 4;
 
 /// Name of the settings file inside a game directory, as [`crate::settings`] writes it.
 const OPTIONS_FILE: &str = "options.txt";
@@ -289,6 +295,50 @@ pub struct ProjectDetails {
     pub blocks: Vec<Block>,
 }
 
+/// The install target a browser row's "latest version" is measured against.
+///
+/// A row shows the newest version an instance could run, so both of an instance's
+/// constraints are here. `minecraft` is `None` and `loader` is [`Loader::None`] when no
+/// instance is chosen, which drops the matching filter rather than failing.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct VersionTarget {
+    /// Minecraft version to filter by, when there is one.
+    pub minecraft: Option<String>,
+    /// Loader to filter mods by. [`Loader::None`] skips the loader filter.
+    pub loader: Loader,
+}
+
+/// The newest version of one project for a [`VersionTarget`], from
+/// [`Launcher::latest_versions`].
+#[derive(Debug, Clone)]
+pub struct LatestVersion {
+    /// Project id at the source, as the hit reported it.
+    pub project_id: String,
+    /// The newest version for the target. `None` when there is none, or when the lookup
+    /// failed: one bad row never fails the page.
+    pub version: Option<Version>,
+}
+
+/// Whether an instance has a project installed, and whether that copy is behind the latest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstallState {
+    /// The instance records nothing for this project.
+    NotInstalled,
+    /// The installed file is the latest one.
+    Installed {
+        /// Version id `instance.toml` records.
+        version_id: String,
+        /// Version number to show beside it.
+        number: String,
+    },
+    /// The installed file is older than the latest one.
+    Older {
+        /// Number of the installed version, or its version id when the source's list no
+        /// longer holds it.
+        installed_number: String,
+    },
+}
+
 /// What garbage collector presets one instance's Java offers, from [`Launcher::gc_support`].
 #[derive(Debug, Clone)]
 pub struct GcSupportView {
@@ -398,7 +448,18 @@ pub struct Launcher {
     /// and [`Launcher::stop_instance`] reads it. It is an [`Arc`] because that task outlives
     /// the call that started it and cannot borrow the launcher.
     running: Arc<Mutex<HashMap<String, RunningEntry>>>,
+    /// Version lists already fetched, for [`Launcher::latest_versions`] and
+    /// [`Launcher::install_state`].
+    ///
+    /// It lives as long as the launcher does and nothing evicts from it: a browser page
+    /// asks for the same projects again on every keystroke-free redraw, and a target
+    /// change re-runs the whole job.
+    version_cache: Mutex<HashMap<VersionCacheKey, Arc<Vec<Version>>>>,
 }
+
+/// Key into [`Launcher::version_cache`]: the source, the project, and the filter that was
+/// listed, so two targets never read each other's answers.
+type VersionCacheKey = (SourceId, String, Option<String>, String);
 
 /// One running game, as [`Launcher::stop_instance`] needs it.
 #[derive(Clone, Debug)]
@@ -476,6 +537,7 @@ impl Launcher {
             gc_cache: crate::java::gc::ProbeCache::new(),
             secrets: OnceLock::new(),
             running: Arc::new(Mutex::new(HashMap::new())),
+            version_cache: Mutex::new(HashMap::new()),
         };
         Ok((launcher, receiver))
     }
@@ -1456,6 +1518,208 @@ impl Launcher {
         Ok(self.block_on(async move { source.versions(project_id, filter).await })?)
     }
 
+    /// The newest version of each hit for `target`, in the order the hits were given. Blocks.
+    ///
+    /// This takes whole [`SearchHit`]s rather than project ids because a CurseForge hit
+    /// carries `latestFilesIndexes` ([`SearchHit::latest_files`]): when its index names a
+    /// file for this Minecraft version and loader, one `POST /v1/mods/files` answers and
+    /// the version list is never requested. Everything else lists versions with the filter
+    /// [`crate::content::add`] would build and runs [`crate::content::pick_latest`] over it.
+    ///
+    /// At most [`LATEST_PARALLEL`] lookups run at once, and every list is kept in memory for
+    /// the launcher's lifetime, so asking again for the same page and target costs nothing.
+    /// A hit whose lookup fails answers [`LatestVersion::version`] `None` with a warning:
+    /// one unreachable project never fails the page.
+    #[tracing::instrument(skip(self, hits), fields(hits = hits.len()))]
+    pub fn latest_versions(
+        &self,
+        source_id: SourceId,
+        hits: &[SearchHit],
+        target: &VersionTarget,
+    ) -> Result<Vec<LatestVersion>, crate::Error> {
+        let source = self.source(source_id)?;
+        Ok(self.block_on(async {
+            let permits = Arc::new(Semaphore::new(LATEST_PARALLEL));
+            let mut running = FuturesUnordered::new();
+            for (index, hit) in hits.iter().enumerate() {
+                let permits = Arc::clone(&permits);
+                let source = &source;
+                running.push(async move {
+                    let _permit = permits.acquire().await;
+                    let version = match self.latest_for_hit(source, hit, target).await {
+                        Ok(version) => version,
+                        Err(err) => {
+                            tracing::warn!(
+                                project = %hit.project_id,
+                                %err,
+                                "could not resolve the latest version for this hit"
+                            );
+                            None
+                        }
+                    };
+                    let latest = LatestVersion {
+                        project_id: hit.project_id.clone(),
+                        version,
+                    };
+                    (index, latest)
+                });
+            }
+            let mut answers: Vec<(usize, LatestVersion)> = Vec::with_capacity(hits.len());
+            while let Some(answer) = running.next().await {
+                answers.push(answer);
+            }
+            answers.sort_by_key(|(index, _)| *index);
+            answers.into_iter().map(|(_, latest)| latest).collect()
+        }))
+    }
+
+    /// The newest version of one hit for `target`, or `None` when nothing matches.
+    async fn latest_for_hit(
+        &self,
+        source: &BoxSource,
+        hit: &SearchHit,
+        target: &VersionTarget,
+    ) -> Result<Option<Version>, crate::sources::Error> {
+        let filter = version_filter(target, hit.kind);
+        let versions = self.hit_versions(source, hit, target, &filter).await?;
+        Ok(crate::content::pick_latest(
+            &versions,
+            hit.kind,
+            target.minecraft.as_deref(),
+            target.loader,
+        ))
+    }
+
+    /// The versions one hit is picked from: the cache, its CurseForge index, or a listing.
+    ///
+    /// The index path stores its one file under the same cache key a listing would, so
+    /// [`Launcher::install_state`] reads it back: an installed id absent from that
+    /// one-element list falls to the "absent means older" rule.
+    async fn hit_versions(
+        &self,
+        source: &BoxSource,
+        hit: &SearchHit,
+        target: &VersionTarget,
+        filter: &VersionFilter,
+    ) -> Result<Arc<Vec<Version>>, crate::sources::Error> {
+        let key = cache_key(source.id(), &hit.project_id, filter);
+        if let Some(cached) = self.cached_list(&key) {
+            return Ok(cached);
+        }
+        if let Some(curseforge) = source.as_curseforge()
+            && let Some(file_id) = index_file_id(hit, target)
+        {
+            let files = curseforge.files_batch(&[file_id]).await?;
+            if !files.is_empty() {
+                return Ok(self.store_list(key, files));
+            }
+            tracing::debug!(
+                project = %hit.project_id,
+                file_id,
+                "the hit's index named a file the batch call did not answer for"
+            );
+        }
+        self.cached_versions(source, &hit.project_id, filter).await
+    }
+
+    /// One project's versions for `filter`, from the in-memory cache or from the source.
+    async fn cached_versions(
+        &self,
+        source: &BoxSource,
+        project_id: &str,
+        filter: &VersionFilter,
+    ) -> Result<Arc<Vec<Version>>, crate::sources::Error> {
+        let key = cache_key(source.id(), project_id, filter);
+        if let Some(cached) = self.cached_list(&key) {
+            return Ok(cached);
+        }
+        let versions = source.versions(project_id, filter).await?;
+        Ok(self.store_list(key, versions))
+    }
+
+    /// The cached version list for `key`, when one was stored.
+    fn cached_list(&self, key: &VersionCacheKey) -> Option<Arc<Vec<Version>>> {
+        self.version_cache
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .get(key)
+            .cloned()
+    }
+
+    /// Stores `versions` under `key` and hands the shared list back.
+    fn store_list(&self, key: VersionCacheKey, versions: Vec<Version>) -> Arc<Vec<Version>> {
+        let list = Arc::new(versions);
+        self.version_cache
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(key, Arc::clone(&list));
+        list
+    }
+
+    /// Whether an instance has `project_id` installed, and whether that copy is behind
+    /// `latest`. Blocks.
+    ///
+    /// `target` is here so the installed version's publish time is looked up in the same
+    /// list [`Launcher::latest_versions`] cached, which costs no request. The rules:
+    /// nothing recorded is [`InstallState::NotInstalled`]; the same version id is
+    /// [`InstallState::Installed`]; otherwise the installed id is looked up in that list and
+    /// [`InstallState::Older`] is the answer when `latest` was published after it, or when
+    /// the list no longer holds that id at all.
+    ///
+    /// A modpack import can record a file under the source `file`, which no project id
+    /// finds. [`crate::content::entry_holding_file`] catches that case for the latest
+    /// file itself — same bytes, or the same name — and reports it as installed, exactly
+    /// as [`crate::content::add`] would skip it.
+    #[tracing::instrument(skip(self, latest), fields(version = %latest.id))]
+    pub fn install_state(
+        &self,
+        slug: &str,
+        source: SourceId,
+        project_id: &str,
+        target: &VersionTarget,
+        latest: &Version,
+    ) -> Result<InstallState, crate::Error> {
+        let instance = self.instances().get(slug)?;
+        let Some(entry) = crate::instances::content::installed(&instance, source, project_id)
+        else {
+            let holds_latest = crate::content::primary_file(latest)
+                .and_then(|file| crate::content::entry_holding_file(&instance, file))
+                .is_some();
+            return Ok(if holds_latest {
+                InstallState::Installed {
+                    version_id: latest.id.clone(),
+                    number: latest.number.clone(),
+                }
+            } else {
+                InstallState::NotInstalled
+            });
+        };
+        if entry.version_id == latest.id {
+            return Ok(InstallState::Installed {
+                version_id: latest.id.clone(),
+                number: latest.number.clone(),
+            });
+        }
+
+        let source = self.source(source)?;
+        let filter = version_filter(target, entry.kind);
+        let versions = self.block_on(self.cached_versions(&source, project_id, &filter))?;
+        Ok(match versions.iter().find(|v| v.id == entry.version_id) {
+            Some(have) if published_after(&latest.published, &have.published) => {
+                InstallState::Older {
+                    installed_number: have.number.clone(),
+                }
+            }
+            Some(have) => InstallState::Installed {
+                version_id: have.id.clone(),
+                number: have.number.clone(),
+            },
+            None => InstallState::Older {
+                installed_number: entry.version_id.clone(),
+            },
+        })
+    }
+
     /// One version's release notes, as the same blocks a description renders as. Blocks.
     ///
     /// The notes are markdown at Modrinth and HTML at CurseForge, so this dispatches on
@@ -2033,6 +2297,81 @@ fn install_fallback(
 }
 
 /// Builds the source list: Modrinth always, CurseForge only with an API key.
+/// The version filter [`crate::content::add`] would build for this target and kind.
+///
+/// A Minecraft version filters only when the target names one. Loaders filter mods only,
+/// and only when the target runs a loader, so a loader-less instance still gets an answer.
+fn version_filter(target: &VersionTarget, kind: ContentKind) -> VersionFilter {
+    let loaders = if kind == ContentKind::Mod && target.loader != Loader::None {
+        crate::content::compatible_loaders(
+            target.loader,
+            target.minecraft.as_deref().unwrap_or_default(),
+        )
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+    } else {
+        Vec::new()
+    };
+    VersionFilter {
+        minecraft: target.minecraft.clone(),
+        loaders,
+    }
+}
+
+/// The cache key one listing answers under.
+fn cache_key(source: SourceId, project_id: &str, filter: &VersionFilter) -> VersionCacheKey {
+    (
+        source,
+        project_id.to_string(),
+        filter.minecraft.clone(),
+        filter.loaders.join(","),
+    )
+}
+
+/// The file id a CurseForge hit's own index names for this target, when it names one.
+///
+/// A target with no Minecraft version cannot match an index entry, since every entry is
+/// per Minecraft version. A mod on a real loader must match that loader's CurseForge id;
+/// anything else takes the first entry for the version.
+fn index_file_id(hit: &SearchHit, target: &VersionTarget) -> Option<u32> {
+    let minecraft = target.minecraft.as_deref()?;
+    let want_loader = if hit.kind == ContentKind::Mod && target.loader != Loader::None {
+        Some(crate::sources::curseforge::loader_type_of(target.loader)?)
+    } else {
+        None
+    };
+    hit.latest_files
+        .iter()
+        .find(|entry| {
+            entry.game_version == minecraft
+                && want_loader.is_none_or(|loader| entry.loader == Some(loader))
+        })
+        .and_then(|entry| entry.file_id.parse::<u32>().ok())
+}
+
+/// Whether `later` was published after `earlier`, both RFC 3339.
+///
+/// A timestamp neither source should ever send — one that does not parse — falls back to
+/// comparing the strings, so a row still reports something instead of failing.
+fn published_after(later: &str, earlier: &str) -> bool {
+    use time::format_description::well_known::Rfc3339;
+    match (
+        OffsetDateTime::parse(later, &Rfc3339),
+        OffsetDateTime::parse(earlier, &Rfc3339),
+    ) {
+        (Ok(later), Ok(earlier)) => later > earlier,
+        _ => {
+            tracing::warn!(
+                later,
+                earlier,
+                "a publish time is not RFC 3339; comparing it as text"
+            );
+            later > earlier
+        }
+    }
+}
+
 fn build_sources(http: &HttpClient, config: &Config, endpoints: &Endpoints) -> Vec<BoxSource> {
     let mut sources: Vec<BoxSource> = vec![Arc::new(Modrinth::with_base_url(
         http.clone(),
@@ -3268,5 +3607,596 @@ mod tests {
             .configured_or_detected_java(None, "1.20.1")
             .expect_err("the metadata host is unreachable");
         assert!(matches!(err, crate::Error::Mojang(_)), "{err:?}");
+    }
+
+    /// A mock host plus the runtime that serves it.
+    ///
+    /// `Launcher::block_on` cannot run inside another runtime, so the mocks are driven by
+    /// this one instead, and it is kept alive for as long as the server is used.
+    struct Mocks {
+        rt: tokio::runtime::Runtime,
+        server: wiremock::MockServer,
+    }
+
+    impl Mocks {
+        fn new() -> Mocks {
+            let rt = tokio::runtime::Runtime::new().expect("runtime");
+            let server = rt.block_on(wiremock::MockServer::start());
+            Mocks { rt, server }
+        }
+
+        fn uri(&self) -> String {
+            self.server.uri()
+        }
+
+        /// Answers `GET path` with `body`.
+        fn get(&self, path: &str, body: serde_json::Value) {
+            self.mount(wiremock::matchers::method("GET"), path, body);
+        }
+
+        /// Answers `POST path` with `body`.
+        fn post(&self, path: &str, body: serde_json::Value) {
+            self.mount(wiremock::matchers::method("POST"), path, body);
+        }
+
+        fn mount(
+            &self,
+            verb: wiremock::matchers::MethodExactMatcher,
+            path: &str,
+            body: serde_json::Value,
+        ) {
+            self.rt.block_on(async {
+                wiremock::Mock::given(verb)
+                    .and(wiremock::matchers::path(path.to_string()))
+                    .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(body))
+                    .mount(&self.server)
+                    .await;
+            });
+        }
+
+        /// Answers `GET path` with `status` and an empty body.
+        fn fail(&self, path: &str, status: u16) {
+            self.rt.block_on(async {
+                wiremock::Mock::given(wiremock::matchers::method("GET"))
+                    .and(wiremock::matchers::path(path.to_string()))
+                    .respond_with(wiremock::ResponseTemplate::new(status))
+                    .mount(&self.server)
+                    .await;
+            });
+        }
+
+        /// Every URL the server has been asked for, in order.
+        fn urls(&self) -> Vec<String> {
+            self.rt.block_on(async {
+                self.server
+                    .received_requests()
+                    .await
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|r| r.url.to_string())
+                    .collect()
+            })
+        }
+    }
+
+    /// A launcher whose Modrinth and CurseForge hosts are `base`, with a CurseForge key set.
+    fn seamed_at(dir: &tempfile::TempDir, base: &str) -> Launcher {
+        let endpoints = Endpoints {
+            modrinth: base.to_string(),
+            curseforge: base.to_string(),
+            mojang: "http://mojang.invalid".to_string(),
+            loaders: LoaderEndpoints {
+                fabric: "http://fabric.invalid".to_string(),
+                quilt: "http://quilt.invalid".to_string(),
+                forge_meta: "http://forge-meta.invalid".to_string(),
+                forge_maven: "http://forge-maven.invalid".to_string(),
+                neoforge: "http://neoforge.invalid".to_string(),
+            },
+            msa: MsaEndpoints {
+                device_code: "http://msa.invalid/devicecode".to_string(),
+                token: "http://msa.invalid/token".to_string(),
+                xbl: "http://msa.invalid/xbl".to_string(),
+                xsts: "http://msa.invalid/xsts".to_string(),
+                mc_login: "http://msa.invalid/mclogin".to_string(),
+                profile: "http://msa.invalid/profile".to_string(),
+            },
+        };
+        let (launcher, _rx) =
+            Launcher::open_with_endpoints(dir.path().to_path_buf(), endpoints).expect("launcher");
+        launcher
+            .update_config(|config| {
+                config.keys.curseforge_api_key = Some("test-key".to_string());
+            })
+            .expect("save the key");
+        launcher
+    }
+
+    /// One search hit, with only the fields the resolver reads filled in.
+    fn search_hit(
+        source: SourceId,
+        project_id: &str,
+        kind: ContentKind,
+        latest_files: Vec<crate::sources::LatestFileIndex>,
+    ) -> SearchHit {
+        SearchHit {
+            source,
+            project_id: project_id.to_string(),
+            slug: project_id.to_string(),
+            title: project_id.to_string(),
+            description: String::new(),
+            author: String::new(),
+            kind,
+            is_pack: false,
+            downloads: 0,
+            icon_url: None,
+            page_url: String::new(),
+            latest_files,
+        }
+    }
+
+    /// One Modrinth version as its version-list endpoint sends it.
+    fn mr_version(
+        project: &str,
+        id: &str,
+        number: &str,
+        published: &str,
+        loaders: &[&str],
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "project_id": project,
+            "name": number,
+            "version_number": number,
+            "version_type": "release",
+            "date_published": published,
+            "game_versions": ["1.20.1"],
+            "loaders": loaders,
+            "files": [{
+                "url": "https://cdn.example/file.jar",
+                "filename": format!("{project}-{number}.jar"),
+                "size": 1,
+                "primary": true,
+                "hashes": { "sha1": format!("sha1-{id}") },
+            }],
+            "dependencies": [],
+        })
+    }
+
+    /// One CurseForge file as `POST /v1/mods/files` and `GET /v1/mods/{id}/files` send it.
+    fn cf_file(mod_id: u64, id: u64, number: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "modId": mod_id,
+            "displayName": number,
+            "fileName": format!("{number}.jar"),
+            "releaseType": 1,
+            "fileDate": "2026-01-01T00:00:00Z",
+            "downloadUrl": "https://edge.forgecdn.net/file.jar",
+            "gameVersions": ["1.20.1", "Fabric"],
+            "hashes": [],
+            "dependencies": [],
+        })
+    }
+
+    /// An entry as `instance.toml` records one installed file.
+    fn content_entry(project_id: &str, version_id: &str, file_name: &str) -> ContentEntry {
+        ContentEntry {
+            source: SourceId::Modrinth.to_string(),
+            project_id: project_id.to_string(),
+            version_id: version_id.to_string(),
+            file_name: file_name.to_string(),
+            kind: ContentKind::Mod,
+            sha1: Some(format!("sha1-{version_id}")),
+            ..ContentEntry::default()
+        }
+    }
+
+    #[test]
+    fn latest_versions_filters_per_kind_and_caches_the_list() {
+        let mocks = Mocks::new();
+        mocks.get(
+            "/project/mod-a/version",
+            serde_json::json!([
+                mr_version("mod-a", "a2", "2.0.0", "2026-02-01T00:00:00Z", &["fabric"]),
+                mr_version("mod-a", "a1", "1.0.0", "2026-01-01T00:00:00Z", &["fabric"]),
+            ]),
+        );
+        mocks.get(
+            "/project/pack-b/version",
+            serde_json::json!([mr_version(
+                "pack-b",
+                "b1",
+                "1.0.0",
+                "2026-01-01T00:00:00Z",
+                &["minecraft"],
+            )]),
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed_at(&dir, &mocks.uri());
+        let target = VersionTarget {
+            minecraft: Some("1.20.1".to_string()),
+            loader: Loader::Fabric,
+        };
+        let hits = vec![
+            search_hit(SourceId::Modrinth, "mod-a", ContentKind::Mod, Vec::new()),
+            search_hit(
+                SourceId::Modrinth,
+                "pack-b",
+                ContentKind::ResourcePack,
+                Vec::new(),
+            ),
+        ];
+
+        let latest = launcher
+            .latest_versions(SourceId::Modrinth, &hits, &target)
+            .expect("resolve");
+        let ids: Vec<Option<String>> = latest
+            .iter()
+            .map(|l| l.version.as_ref().map(|v| v.id.clone()))
+            .collect();
+        assert_eq!(
+            ids,
+            vec![Some("a2".to_string()), Some("b1".to_string())],
+            "the newest per hit, in the order the hits were given"
+        );
+
+        let urls = mocks.urls();
+        assert_eq!(urls.len(), 2, "one request per project: {urls:?}");
+        let mod_url = urls.iter().find(|u| u.contains("mod-a")).expect("mod url");
+        assert!(mod_url.contains("game_versions"), "{mod_url}");
+        assert!(mod_url.contains("loaders"), "a mod is filtered by loader");
+        let pack_url = urls
+            .iter()
+            .find(|u| u.contains("pack-b"))
+            .expect("pack url");
+        assert!(pack_url.contains("game_versions"), "{pack_url}");
+        assert!(
+            !pack_url.contains("loaders"),
+            "a resource pack has no loader filter: {pack_url}"
+        );
+
+        // The second call is answered from the in-memory cache.
+        launcher
+            .latest_versions(SourceId::Modrinth, &hits, &target)
+            .expect("resolve again");
+        assert_eq!(mocks.urls().len(), 2, "no second round of requests");
+    }
+
+    #[test]
+    fn latest_versions_without_a_target_lists_everything_and_reports_a_failure_as_none() {
+        let mocks = Mocks::new();
+        mocks.get(
+            "/project/mod-a/version",
+            serde_json::json!([mr_version(
+                "mod-a",
+                "a1",
+                "1.0.0",
+                "2026-01-01T00:00:00Z",
+                &["forge"],
+            )]),
+        );
+        mocks.fail("/project/gone/version", 404);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed_at(&dir, &mocks.uri());
+        let hits = vec![
+            search_hit(SourceId::Modrinth, "mod-a", ContentKind::Mod, Vec::new()),
+            search_hit(SourceId::Modrinth, "gone", ContentKind::Mod, Vec::new()),
+        ];
+
+        let latest = launcher
+            .latest_versions(SourceId::Modrinth, &hits, &VersionTarget::default())
+            .expect("resolve");
+        assert_eq!(
+            latest[0].version.as_ref().map(|v| v.id.as_str()),
+            Some("a1"),
+            "no target, so a Forge file still counts"
+        );
+        assert_eq!(latest[1].project_id, "gone");
+        assert!(
+            latest[1].version.is_none(),
+            "a failed hit answers None, not an error"
+        );
+        let urls = mocks.urls();
+        let mod_url = urls.iter().find(|u| u.contains("mod-a")).expect("mod url");
+        assert!(
+            !mod_url.contains("game_versions") && !mod_url.contains("loaders"),
+            "no target means no filter: {mod_url}"
+        );
+    }
+
+    #[test]
+    fn a_curseforge_index_entry_answers_without_the_files_call() {
+        let mocks = Mocks::new();
+        mocks.post(
+            "/v1/mods/files",
+            serde_json::json!({ "data": [cf_file(101, 9001, "3.0.0")] }),
+        );
+        mocks.get(
+            "/v1/mods/202/files",
+            serde_json::json!({
+                "data": [cf_file(202, 8002, "2.0.0")],
+                "pagination": { "index": 0, "pageSize": 50, "resultCount": 1, "totalCount": 1 },
+            }),
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed_at(&dir, &mocks.uri());
+        let target = VersionTarget {
+            minecraft: Some("1.20.1".to_string()),
+            loader: Loader::Fabric,
+        };
+        let indexed = search_hit(
+            SourceId::CurseForge,
+            "101",
+            ContentKind::Mod,
+            vec![
+                crate::sources::LatestFileIndex {
+                    game_version: "1.20.1".to_string(),
+                    loader: Some(1),
+                    file_id: "7000".to_string(),
+                },
+                crate::sources::LatestFileIndex {
+                    game_version: "1.20.1".to_string(),
+                    loader: Some(4),
+                    file_id: "9001".to_string(),
+                },
+            ],
+        );
+        // Its index names another Minecraft version, so this hit has to ask for the files.
+        let unindexed = search_hit(
+            SourceId::CurseForge,
+            "202",
+            ContentKind::Mod,
+            vec![crate::sources::LatestFileIndex {
+                game_version: "1.21.1".to_string(),
+                loader: Some(4),
+                file_id: "7777".to_string(),
+            }],
+        );
+
+        let latest = launcher
+            .latest_versions(SourceId::CurseForge, &[indexed, unindexed], &target)
+            .expect("resolve");
+        assert_eq!(
+            latest[0].version.as_ref().map(|v| v.id.as_str()),
+            Some("9001"),
+            "the Fabric entry of the index won"
+        );
+        assert_eq!(
+            latest[1].version.as_ref().map(|v| v.id.as_str()),
+            Some("8002"),
+            "no index entry for the target, so the files call answered"
+        );
+
+        let urls = mocks.urls();
+        assert_eq!(
+            urls.iter().filter(|u| u.contains("/v1/mods/files")).count(),
+            1,
+            "one batch call: {urls:?}"
+        );
+        assert!(
+            !urls.iter().any(|u| u.contains("/v1/mods/101/files")),
+            "the indexed hit never listed its files: {urls:?}"
+        );
+    }
+
+    #[test]
+    fn install_state_reports_not_installed_installed_and_older() {
+        let mocks = Mocks::new();
+        let older = mr_version("mod-a", "a1", "1.0.0", "2026-01-01T00:00:00Z", &["fabric"]);
+        let newer = mr_version("mod-a", "a2", "2.0.0", "2026-02-01T00:00:00Z", &["fabric"]);
+        mocks.get(
+            "/project/mod-a/version",
+            serde_json::json!([newer.clone(), older]),
+        );
+        mocks.get(
+            "/project/mod-c/version",
+            serde_json::json!([mr_version(
+                "mod-c",
+                "c2",
+                "2.0.0",
+                "2026-02-01T00:00:00Z",
+                &["fabric"],
+            )]),
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed_at(&dir, &mocks.uri());
+        let mut instance = launcher
+            .instances()
+            .create(
+                "Pack",
+                "1.20.1",
+                Loader::Fabric,
+                None,
+                &std::collections::BTreeMap::new(),
+            )
+            .expect("create");
+        instance
+            .config
+            .content
+            .push(content_entry("mod-a", "a1", "mod-a-1.0.0.jar"));
+        instance
+            .config
+            .content
+            .push(content_entry("mod-b", "b7", "mod-b-7.jar"));
+        instance
+            .config
+            .content
+            .push(content_entry("mod-c", "c-unknown", "mod-c-1.0.0.jar"));
+        instance.save().expect("save");
+
+        let target = VersionTarget {
+            minecraft: Some("1.20.1".to_string()),
+            loader: Loader::Fabric,
+        };
+        let hits = vec![
+            search_hit(SourceId::Modrinth, "mod-a", ContentKind::Mod, Vec::new()),
+            search_hit(SourceId::Modrinth, "mod-c", ContentKind::Mod, Vec::new()),
+        ];
+        let latest = launcher
+            .latest_versions(SourceId::Modrinth, &hits, &target)
+            .expect("resolve");
+        let latest_a = latest[0].version.clone().expect("mod-a has a version");
+        let latest_c = latest[1].version.clone().expect("mod-c has a version");
+
+        let state = launcher
+            .install_state(
+                &instance.slug,
+                SourceId::Modrinth,
+                "mod-d",
+                &target,
+                &latest_a,
+            )
+            .expect("state");
+        assert_eq!(state, InstallState::NotInstalled, "nothing records mod-d");
+
+        let state = launcher
+            .install_state(
+                &instance.slug,
+                SourceId::Modrinth,
+                "mod-a",
+                &target,
+                &latest_a,
+            )
+            .expect("state");
+        assert_eq!(
+            state,
+            InstallState::Older {
+                installed_number: "1.0.0".to_string()
+            },
+            "the installed file is older than the latest"
+        );
+
+        let state = launcher
+            .install_state(
+                &instance.slug,
+                SourceId::Modrinth,
+                "mod-b",
+                &target,
+                &Version {
+                    id: "b7".to_string(),
+                    ..latest_a.clone()
+                },
+            )
+            .expect("state");
+        assert_eq!(
+            state,
+            InstallState::Installed {
+                version_id: "b7".to_string(),
+                number: latest_a.number.clone(),
+            },
+            "the same version id needs no lookup"
+        );
+
+        let state = launcher
+            .install_state(
+                &instance.slug,
+                SourceId::Modrinth,
+                "mod-c",
+                &target,
+                &latest_c,
+            )
+            .expect("state");
+        assert_eq!(
+            state,
+            InstallState::Older {
+                installed_number: "c-unknown".to_string()
+            },
+            "an installed id the list does not hold counts as older"
+        );
+    }
+
+    #[test]
+    fn install_state_matches_a_pack_file_entry_and_falls_back_to_a_text_compare() {
+        let mocks = Mocks::new();
+        mocks.get(
+            "/project/mod-a/version",
+            serde_json::json!([mr_version(
+                "mod-a",
+                "a2",
+                "2.0.0",
+                "2026-02-01T00:00:00Z",
+                &["fabric"],
+            )]),
+        );
+        mocks.get(
+            "/project/mod-d/version",
+            serde_json::json!([
+                mr_version("mod-d", "d2", "2.0.0", "not-a-date-2", &["fabric"]),
+                mr_version("mod-d", "d1", "1.0.0", "not-a-date-1", &["fabric"]),
+            ]),
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed_at(&dir, &mocks.uri());
+        let mut instance = launcher
+            .instances()
+            .create(
+                "Pack",
+                "1.20.1",
+                Loader::Fabric,
+                None,
+                &std::collections::BTreeMap::new(),
+            )
+            .expect("create");
+        // A pack import records a file it could not resolve under `file`, with its sha1 for
+        // a project id, so a lookup by project id cannot find it.
+        let mut packed = content_entry("sha1-a2", "sha1-a2", "mod-a-2.0.0.jar");
+        packed.source = crate::instances::model::FILE_SOURCE.to_string();
+        packed.sha1 = None;
+        instance.config.content.push(packed);
+        instance
+            .config
+            .content
+            .push(content_entry("mod-d", "d1", "mod-d-1.0.0.jar"));
+        instance.save().expect("save");
+
+        let target = VersionTarget {
+            minecraft: Some("1.20.1".to_string()),
+            loader: Loader::Fabric,
+        };
+        let hits = vec![
+            search_hit(SourceId::Modrinth, "mod-a", ContentKind::Mod, Vec::new()),
+            search_hit(SourceId::Modrinth, "mod-d", ContentKind::Mod, Vec::new()),
+        ];
+        let latest = launcher
+            .latest_versions(SourceId::Modrinth, &hits, &target)
+            .expect("resolve");
+        let latest_a = latest[0].version.clone().expect("mod-a has a version");
+        let latest_d = latest[1].version.clone().expect("mod-d has a version");
+        assert_eq!(latest_d.id, "d2", "the text compare still sorts the list");
+
+        let state = launcher
+            .install_state(
+                &instance.slug,
+                SourceId::Modrinth,
+                "mod-a",
+                &target,
+                &latest_a,
+            )
+            .expect("state");
+        assert_eq!(
+            state,
+            InstallState::Installed {
+                version_id: "a2".to_string(),
+                number: "2.0.0".to_string(),
+            },
+            "the pack entry already holds the latest file, under its file name"
+        );
+
+        let state = launcher
+            .install_state(
+                &instance.slug,
+                SourceId::Modrinth,
+                "mod-d",
+                &target,
+                &latest_d,
+            )
+            .expect("state");
+        assert_eq!(
+            state,
+            InstallState::Older {
+                installed_number: "1.0.0".to_string()
+            },
+            "neither publish time parses, so the text compare decides"
+        );
     }
 }

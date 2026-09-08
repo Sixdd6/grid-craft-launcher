@@ -643,7 +643,7 @@ fn encode(value: &str) -> String {
 }
 
 /// CurseForge's `modLoaderType` for a loader, or `None` for vanilla.
-fn loader_type_of(loader: Loader) -> Option<u32> {
+pub(crate) fn loader_type_of(loader: Loader) -> Option<u32> {
     match loader {
         Loader::Forge => Some(1),
         Loader::Fabric => Some(4),
