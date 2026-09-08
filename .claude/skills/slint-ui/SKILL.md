@@ -14,9 +14,12 @@ crates/gcl-ui/
   ui/state.slint               Shell global plus the per-screen *State globals
   ui/components/               Button, Card, ListRow, ProgressBar, ProgressPanel, SearchBox,
                                 SettingRow, SettingsEditor, TabBar, Rail, ToastHost, Dialog and
-                                its Confirm/Prompt/Choice/DeviceCode/CreateInstance variants
+                                its Confirm/Prompt/Choice/DeviceCode/CreateInstance variants,
+                                BlockList (renders a `Block` list, shared by the Description tab
+                                and NotesDialog), NotesDialog (a version's changelog in a modal
+                                built on `Dialog`)
   ui/screens/                  instances.slint, instance.slint, browser.slint, accounts.slint,
-                                settings.slint
+                                settings.slint, project.slint
   src/lib.rs                   `slint::include_modules!()` plus every module, so tests can
                                 build the real AppWindow
   src/main.rs                  args (--smoke, --screenshot), logging::init, app::build, run
@@ -139,6 +142,37 @@ reverse import would cycle. The screen declares an `open_project(...)` callback 
 `app.slint` wires it to `ProjectState.open` plus `App.navigate` — the same seam
 `InstanceScreen.open_project` uses.
 
+## BlockList and per-open image generation counters
+
+`BlockList` (`ui/components/block-list.slint`) renders a `[Block]` — heading, paragraph, bullet
+(indented by `depth`), code, table (`columns`/`cells`), rule, quote, and image — as pure layout,
+with no fetch state of its own. `ProjectScreen`'s Description tab and `NotesDialog` both mount
+one. A `Block.image_state` of `"loading"`/`"ready"`/`"failed"` and the decoded `Block.image` are
+filled in by `src/screens/project.rs`, not by `BlockList`: the component only draws what it is
+given.
+
+An image inside a description or a changelog is fetched and decoded off the UI thread, one at a
+time, capped at 20 per open. Two things can make a stale result show up: the user opens a
+different project while a fetch is still running, or opens a different version's Notes modal
+while its changelog is still loading. `project.rs` guards both with a generation counter, the
+same pattern `browser.rs` already uses for search-row icons (`icon_generation`, bumped in
+`load_hits`, checked in `fetch_icons`):
+
+```rust
+// project.rs: one AtomicU64 per thing that can go stale, held in Shared
+image_generation: Arc<AtomicU64>,   // description images
+notes_generation: Arc<AtomicU64>,   // the Notes modal's own open/close/changelog fetch
+```
+
+Opening a project (or a version's notes) bumps its counter and captures the new value as
+`generation`; the fetch loop checks `counter.load(Ordering::SeqCst) != generation` both before
+it starts the next image and again inside the `upgrade_in_event_loop` closure that paints one
+image onto `ProjectState.blocks`/`notes_blocks`, so a closure that lands after the user has
+navigated away is a no-op instead of a write to the wrong screen. Closing the modal also bumps
+`notes_generation`, so a changelog fetch already in flight paints nothing once dismissed. Copy
+this shape — bump on open/close, capture once, check on every posted closure — rather than
+inventing a new "is this still wanted" flag when a third caller needs the same guarantee.
+
 ## Launching
 
 `launch_flow::launch(bridge, run, slug, offline_user)` is the only way either screen starts a
@@ -196,6 +230,13 @@ no element in the tree at all. A dialog that stayed mounted kept a full-window o
 click after an Escape landed on it instead of the screen. `visible: root.open` is not enough:
 `Dialog` also gates both of its touch areas on `enabled: root.open`, for a caller that keeps the
 component mounted, which is what the previews do.
+
+The error dialog is mounted last in `app.slint`, after every other dialog. A dialog mounted
+later draws over one mounted earlier, and each dialog's full-window overlay `TouchArea` catches
+every click while it is up — so a dialog placed after the error dialog can swallow a click meant
+for it, and the error dialog becomes undismissable while that other dialog is open. `NotesDialog`
+learned this the hard way: appended after the error dialog, its own overlay ate the click on
+Dismiss. Add a new dialog above the error dialog, never below it.
 
 Being mounted only while open changes how a dialog takes the keyboard: it is created already
 open, so `changed open` never fires. `Dialog`, `PromptDialog`, and `CreateInstanceDialog` each

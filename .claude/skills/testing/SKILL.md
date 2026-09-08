@@ -335,6 +335,12 @@ Rules:
   open a hit's details from its title, install a version from the Versions tab, reopen the
   details from the installed row's source button, install a newer version over it, and go back).
   Adding a second `#[test]` to one of them is the failure mode to watch for.
+  `flow_project` also drives a description carrying a table, a rule, a quote, a nested bullet,
+  and an image (asserted only once its off-thread fetch and decode land), then opens a version's
+  Notes modal on a mocked changelog, closes it with Escape, and drives the failure path on a
+  changelog that answers 500; `flow_content` asserts a 90-character search-row title wraps in
+  full and a description's embedded line breaks are folded away. See `support::mod_body` and
+  `Mocks::project` for the fixture bodies these flows read.
 - **System time, not mock time.** The mock-time backend deadlocked the timer yield
   `wait_until` runs on. `support::pump()` therefore calls `mock_elapsed_time(Duration::ZERO)`,
   which drives one loop turn and hands the loop no time at all. A control that only saves after

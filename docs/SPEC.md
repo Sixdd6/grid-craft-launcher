@@ -52,7 +52,7 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 
 ## R7 Content sources
 
-- R7.1 Search Modrinth and CurseForge by text, content type, Minecraft version, and loader. A hit opens a details screen with the project's description and its version list. The description comes from the source's own markup — Modrinth's `body` markdown, CurseForge's `GET /v1/mods/{id}/description` HTML — and is converted to headings, paragraphs, bullets, and code blocks for display; images and tables are dropped.
+- R7.1 Search Modrinth and CurseForge by text, content type, Minecraft version, and loader. A hit opens a details screen with the project's description and its version list. The description comes from the source's own markup — Modrinth's `body` markdown, CurseForge's `GET /v1/mods/{id}/description` HTML — and is converted to headings, paragraphs, bullets, code blocks, tables, rules, quotes, and images for display. Each version row also has a Notes button that opens that version's release notes (Modrinth's `changelog` field, CurseForge's `GET /v1/mods/{id}/files/{fileId}/changelog`) in a modal, rendered the same way.
 - R7.2 Content types: mods, modpacks, resource packs, shaders, data packs, worlds. Each source exposes the types it supports. Verified: Modrinth supports mod, resourcepack, shader, and datapack; it has no `world` project type, so worlds are Modrinth-unsupported. CurseForge supports mods, modpacks, resource packs, and worlds; it also supports shaders and data packs when its `/v1/categories` response has those classes, which is unverified on this codebase's development machine, which has no CurseForge API key.
 - R7.3 Install a chosen version into the right instance folder: mods, resourcepacks, shaderpacks, saves/<world>/datapacks, saves.
 - R7.4 Required dependencies are installed with the item.
@@ -147,7 +147,7 @@ tests are there, but no live run has exercised it here).
 | R6.3 | Done | Many accounts, one active; `account select` and the accounts screen switch. |
 | R6.4 | Done | An `Auth` failure prints `use --offline-user <name> to play offline`. |
 | R6.5 | Done | Without a client id, Microsoft login is hidden and offline mode works. |
-| R7.1 | Partial | Text, type, version, and loader filters work at both sources, and a hit opens a details screen with the description and the version list. Modrinth verified live, description included; CurseForge not verified live (no key), and its description envelope is unverified. |
+| R7.1 | Partial | Text, type, version, and loader filters work at both sources, and a hit opens a details screen with the description and the version list. The description renders tables, rules, quotes, nested bullets, and images, from any https host. A version's Notes button opens its release notes in a modal, rendered the same way. Modrinth verified live, description and single-version changelog included; CurseForge not verified live (no key), and both its description and changelog envelopes are unverified. |
 | R7.2 | Partial | Mods, modpacks, resource packs, shaders, data packs, and worlds are modeled. Modrinth has no world project type. The CurseForge class list is unverified. |
 | R7.3 | Done | Files land in `mods/`, `resourcepacks/`, `shaderpacks/`, `saves/<world>/datapacks/`, and `saves/`. |
 | R7.4 | Done | `content add` walks required dependencies breadth-first, depth 10. |
@@ -187,9 +187,18 @@ tests are there, but no live run has exercised it here).
   endpoint this client parses looks like. No live response has confirmed it, so
   `tests/fixtures/curseforge/get_mod_description.json` is synthetic. Modrinth's side is verified:
   its description is the `body` of `GET /project/{id}`.
-- **`cache/icons` is never pruned.** A project icon is cached by its URL and kept. Nothing
-  evicts it — `cleanup_partials` sweeps only `*.part` files — so the directory grows with the
-  number of distinct icon URLs the browser has shown.
+- **The CurseForge changelog envelope is unverified.** `GET /v1/mods/{id}/files/{fileId}/changelog`
+  is read as the same `{"data": "<html string>"}` shape as `description`, on the same assumption
+  and with the same caveat: `tests/fixtures/curseforge/get_file_changelog.json` is synthetic.
+  Modrinth's side is verified: a version's release notes are the `changelog` field of
+  `GET /version/{id}`.
+- **A description image is fetched from any `https://` host, with no allowlist.** This is a
+  deliberate choice: a description names whatever image host its author picked, so the icon
+  cache's CDN allowlist does not apply here. The guards that remain are `https` only, a 5 MiB
+  streaming cap, and a refusal of IP literals and `localhost`/`*.internal`/`*.local` hosts.
+- **`cache/icons` and `cache/images` are never pruned.** A project icon or description image is
+  cached by its URL and kept. Nothing evicts either — `cleanup_partials` sweeps only `*.part`
+  files — so both directories grow with the number of distinct URLs the browser has shown.
 - **Microsoft login is unverified live.** The repo ships no `GCL_MSA_CLIENT_ID`, so the six-step
   device-code chain has run against wiremock only. `debug verify-source msa` prints SKIP.
 - **No clipboard.** Slint 1.17 exposes no clipboard call here. Text a user may want to copy sits
@@ -264,6 +273,37 @@ The mod details plan closed on 2026-09-07 on the same machine. What it added:
 | `just e2e` (Fabric, MC 1.20.1) | PASS | `PASS dry-run launch`, `PASS check classpath files exist, none twice (61 entries)` |
 | `just verify-api modrinth` | PASS | `PASS project sodium (AANobbMI)`, `PASS versions sodium 1.20.1 fabric (13)` |
 | `just verify-api curseforge` | SKIP | no `CURSEFORGE_API_KEY`; the description envelope stays unverified |
+
+### Plan 10 status (2026-09-08)
+
+The description-rendering plan closed on 2026-09-08 on the same machine. What it added (R7.1):
+
+- Description blocks: `Block` gained `Table`, `Rule`, `Image`, and `Quote`, and `Bullet` gained
+  a nesting `depth`. `BlockList` renders all of them — a table as a header row over its body
+  rows, a rule as a divider line, a quote with a left bar, a bullet indented per level, and an
+  image sized to the column. `sources::richtext` is now five files (`mod`, `markdown`, `inline`,
+  `html`, `tokenize`) instead of one, with the same public `from_markdown`/`from_html` paths.
+- Description images: `download::images` fetches from any `https://` host (no CDN allowlist,
+  unlike icons), capped at 5 MiB while streaming and decoded under a 4096×4096 limit, then
+  downscaled to 1600px on the long side before it reaches the screen. At most 20 images are
+  fetched per description or changelog. `cache/images` has no eviction, the same gap
+  `cache/icons` carries. Every redirect hop is re-checked against the scheme/host/private-host
+  rules, not only the URL a caller passed, and a private host (an IP literal, `localhost`,
+  `*.internal`, `*.local`) is refused.
+- Version notes: `Source::changelog(project_id, version_id)` — Modrinth's `changelog` field from
+  `GET /version/{id}`, CurseForge's `GET /v1/mods/{id}/files/{fileId}/changelog` (VERIFY: the
+  response envelope is assumed, not confirmed live, the same gap `description` already carries).
+  `Launcher::version_notes` converts either to `Block`s. A version row in the Versions tab has a
+  Notes button that opens them in a modal (`NotesDialog`), closed by its Close button or Escape.
+- Browser rows: a search or modpack result row now wraps its full title instead of eliding it,
+  drops the page-url line, and collapses `\n`/`\r` in its description to spaces.
+
+| Command | Result | Key line |
+|---|---|---|
+| `just check` | PASS (at Task 6, 2cb65aa) | `Summary [7.300s] 980 tests run: 980 passed, 0 skipped` |
+| `just ui-xtest` | PASS (at Task 6, 2cb65aa) | `ok: job "Search"`, `ok: job "Project details"` |
+| `just verify-api modrinth` | PASS | `PASS search sodium (5 hits)`, `PASS project sodium (AANobbMI)`, `PASS versions sodium 1.20.1 fabric (13)`. `debug verify-source modrinth` exercises no `changelog` call, so the single-version release-notes field stays verified only against `tests/fixtures/modrinth/`, not a live response. |
+| `just verify-api curseforge` | SKIP | no `CURSEFORGE_API_KEY`; both the description and the changelog envelopes stay unverified |
 
 ### Verification record
 

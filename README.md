@@ -77,10 +77,12 @@ own default — and a row this screen's layer holds offers Reset. A key the laun
 keeps a raw row and is never dropped.
 
 A search result's title opens a details page for that mod, pack, or shader: the project's
-description as text, and a Versions tab listing the versions your instance can run. The tab marks
-the version you have installed and installs any other one over it. An installed item's source
-button opens the same page, and Back returns to where you came from. Installed items show the
-project's title with the file name under it, sorted by title.
+description, rendered with headings, paragraphs, bullets, code, tables, rules, quotes, and
+images, and a Versions tab listing the versions your instance can run. The tab marks the version
+you have installed and installs any other one over it. Each version also has a Notes button that
+opens its release notes in the same rendered style. An installed item's source button opens the
+same page, and Back returns to where you came from. Installed items show the project's title
+with the file name under it, sorted by title.
 
 The instance detail screen has a Stop button. It asks the game to exit, waits ten seconds, then
 kills it; a stop you asked for is reported as "Stopped", not as a crash.

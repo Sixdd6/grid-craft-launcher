@@ -165,7 +165,11 @@ crates/gcl-ui/
   ui/state.slint                Shell global plus the per-screen *State globals (below)
   ui/components/                Button, Card, ListRow, ProgressBar, ProgressPanel, SearchBox,
                                  SettingRow, SettingsEditor, TabBar, Rail, ToastHost, Dialog and
-                                 its Confirm/Prompt/Choice/DeviceCode/CreateInstance variants
+                                 its Confirm/Prompt/Choice/DeviceCode/CreateInstance variants,
+                                 BlockList (renders a `Block` list: heading, paragraph, bullet,
+                                 code, table, rule, quote, image — shared by the Description tab
+                                 and the Notes modal), NotesDialog (a version's changelog in a
+                                 modal built on `Dialog`, mounted only while open)
   ui/screens/                   instances.slint, instance.slint, browser.slint, accounts.slint,
                                  settings.slint, project.slint — pure layout, no logic
   src/lib.rs                    `slint::include_modules!()` plus every module below, so an

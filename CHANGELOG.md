@@ -6,11 +6,19 @@ All notable changes to GRID Craft Launcher are documented here. Format follows
 ## Unreleased
 
 - Browser and instance detail: a mod, resource pack, shader, or data pack now has a details
-  screen. It shows the project's description as text — the source's markdown or HTML is turned
-  into headings, paragraphs, bullets, and code blocks, with images and tables dropped — and a
-  Versions tab that lists the versions the target instance can run, marks the one installed,
-  and installs any other one over it. A search row's title opens it; so does the source button
-  on an installed content row, which returns to the instance it came from.
+  screen. It shows the project's description — the source's markdown or HTML turned into
+  headings, paragraphs, bullets, code blocks, tables, rules, quotes, and images — and a Versions
+  tab that lists the versions the target instance can run, marks the one installed, and installs
+  any other one over it. A search row's title opens it; so does the source button on an
+  installed content row, which returns to the instance it came from.
+- Project details: a description or a version's release notes now render tables, horizontal
+  rules, quotes, nested bullet lists, and images from any `https://` host, not only headings,
+  paragraphs, bullets, and code. An image is capped at 5 MiB while it downloads and 4096×4096
+  while it decodes, then shown at up to 1600px on its long side; at most 20 images load per
+  description or changelog. A version row in the Versions tab has a Notes button that opens its
+  release notes in a modal, closed by Close or Escape.
+- Browser: a search or modpack result row now wraps its full title instead of eliding it, drops
+  the page-url line, and folds an embedded line break in its description to a space.
 - Instance detail: an installed content row shows the project's title on top and the file name
   under it, sorted by title. `instance.toml` gained an optional `title` per entry. An entry
   written before the key existed has none; `content update` fills in up to 25 of them
