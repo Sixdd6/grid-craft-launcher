@@ -3,8 +3,8 @@
 //! Every call into `gcl-core` runs off the UI thread through [`Bridge`]. The screen is pure
 //! layout; this module owns the `ProjectState` global that feeds it.
 
-use gcl_core::content::AddRequest;
-use gcl_core::instances::model::Loader;
+use gcl_core::content::{AddRequest, compatible_loaders};
+use gcl_core::instances::model::{ContentKind, Loader};
 use gcl_core::launcher::ProjectDetails;
 use gcl_core::sources::richtext::Block as CoreBlock;
 use gcl_core::sources::{ReleaseKind, SourceId, Version, VersionFilter};
@@ -27,7 +27,7 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
     {
         let bridge = bridge.clone();
         state.on_open(
-            move |source, project_id, target_slug, return_to, downloads| {
+            move |source, project_id, target_slug, return_to, downloads, author| {
                 open(
                     &bridge,
                     source.to_string(),
@@ -35,18 +35,10 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
                     target_slug.to_string(),
                     return_to,
                     downloads.to_string(),
+                    author.to_string(),
                 );
             },
         );
-    }
-
-    {
-        let bridge = bridge.clone();
-        state.on_set_tab(move |tab| {
-            if let Some(window) = bridge.weak().upgrade() {
-                window.global::<ProjectState>().set_tab(tab);
-            }
-        });
     }
 
     {
@@ -70,15 +62,29 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
     }
 }
 
+/// The target instance's Minecraft version and loader, carried alongside a version list so a
+/// row can be marked with whatever it would take to run it. `None` when there is no target.
+type InstanceContext = (String, Loader);
+
 /// Everything one `open` reads off disk, as the UI-thread half shows it.
 struct Opened {
     details: ProjectDetails,
     versions: Vec<Version>,
     installed_version_id: Option<String>,
+    instance: Option<InstanceContext>,
+}
+
+/// A versions-only reload's result: no project details, since the project itself has not
+/// changed between a filter toggle or a just-finished install.
+struct VersionsLoaded {
+    versions: Vec<Version>,
+    installed_version_id: Option<String>,
+    instance: Option<InstanceContext>,
 }
 
 /// Loads a project's description and its versions, filtered by the target instance unless
 /// the screen already asked to see them all.
+#[allow(clippy::too_many_arguments)]
 fn open(
     bridge: &Bridge,
     source: String,
@@ -86,6 +92,7 @@ fn open(
     target_slug: String,
     return_to: Screen,
     downloads: String,
+    author: String,
 ) {
     let Some(window) = bridge.weak().upgrade() else {
         return;
@@ -93,17 +100,17 @@ fn open(
     let state = window.global::<ProjectState>();
 
     // Every property this screen owns is set here, the empty case included, so the screen
-    // never shows the previous project while this one loads. `downloads` is the one
-    // exception carried in from the caller rather than reset to empty: `Project` has no
-    // count of its own, so a search row's already-formatted count is what the header shows,
-    // and `apply` below never overwrites it.
+    // never shows the previous project while this one loads. `downloads` and `author` are
+    // the exceptions carried in from the caller rather than reset to empty: `Project` has
+    // no count and no author field of its own, so a search row's already-formatted values
+    // are what the header shows, and `apply` below never overwrites them.
     state.set_source(source.as_str().into());
     state.set_project_id(project_id.as_str().into());
     state.set_target_slug(target_slug.as_str().into());
     state.set_return_to(return_to);
     state.set_tab(0);
     state.set_title("".into());
-    state.set_author("".into());
+    state.set_author(author.as_str().into());
     state.set_kind("".into());
     state.set_downloads(downloads.as_str().into());
     state.set_page_url("".into());
@@ -128,6 +135,8 @@ fn open(
 
 /// Reloads only the versions tab, keeping the description on screen: neither a filter toggle
 /// nor a just-finished install changes what the project is, only what its version list shows.
+/// It never fetches project details again; `kind` comes from the description already on
+/// screen, set the last time the project itself was loaded.
 ///
 /// `preserve_status` keeps whatever status line is already up — the install path wrote
 /// "Installed 0.6.13" or a conflict line, and a generic "N version(s)" would overwrite it.
@@ -141,6 +150,7 @@ fn reload_versions(bridge: &Bridge, preserve_status: bool) {
     let project_id = state.get_project_id().to_string();
     let target_slug = state.get_target_slug().to_string();
     let show_all = state.get_show_all_versions();
+    let kind = ContentKind::parse(state.get_kind().as_str()).unwrap_or_default();
     let Some(source_id) = SourceId::parse(&source) else {
         return;
     };
@@ -148,19 +158,19 @@ fn reload_versions(bridge: &Bridge, preserve_status: bool) {
     if !preserve_status {
         state.set_loading(true);
     }
-    run_reporting(
+    run_versions_reporting(
         bridge,
         "Project versions",
         preserve_status,
         move |launcher| {
-            let (versions, installed_version_id) =
-                versions_and_installed(launcher, source_id, &project_id, &target_slug, show_all)?;
-            let details = launcher.project_details(source_id, &project_id)?;
-            Ok(Opened {
-                details,
-                versions,
-                installed_version_id,
-            })
+            versions_and_installed(
+                launcher,
+                source_id,
+                &project_id,
+                &target_slug,
+                kind,
+                show_all,
+            )
         },
     );
 }
@@ -174,38 +184,55 @@ fn load(
     show_all: bool,
 ) -> Result<Opened, gcl_core::Error> {
     let details = launcher.project_details(source_id, project_id)?;
-    let (versions, installed_version_id) =
-        versions_and_installed(launcher, source_id, project_id, target_slug, show_all)?;
+    let kind = details.project.kind;
+    let loaded =
+        versions_and_installed(launcher, source_id, project_id, target_slug, kind, show_all)?;
     Ok(Opened {
         details,
-        versions,
-        installed_version_id,
+        versions: loaded.versions,
+        installed_version_id: loaded.installed_version_id,
+        instance: loaded.instance,
     })
 }
 
-/// Lists a project's versions, filtered by the target instance's Minecraft version and loader
-/// unless `show_all` is set or there is no target, and pairs them with that instance's
-/// installed version for this project, if any.
+/// Lists a project's versions, filtered by the target instance's Minecraft version and, for
+/// a mod, loader unless `show_all` is set or there is no target, and pairs them with that
+/// instance's installed version for this project, if any.
 fn versions_and_installed(
     launcher: &gcl_core::Launcher,
     source_id: SourceId,
     project_id: &str,
     target_slug: &str,
+    kind: ContentKind,
     show_all: bool,
-) -> Result<(Vec<Version>, Option<String>), gcl_core::Error> {
+) -> Result<VersionsLoaded, gcl_core::Error> {
     if target_slug.is_empty() {
         let versions =
             launcher.project_versions(source_id, project_id, &VersionFilter::default())?;
-        return Ok((versions, None));
+        return Ok(VersionsLoaded {
+            versions,
+            installed_version_id: None,
+            instance: None,
+        });
     }
 
     let instance = launcher.instances().get(target_slug)?;
+    let minecraft = instance.config.minecraft.clone();
+    let loader = instance.config.loader;
     let filter = if show_all {
         VersionFilter::default()
     } else {
+        let loaders = if kind == ContentKind::Mod {
+            compatible_loaders(loader, &minecraft)
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+        } else {
+            Vec::new()
+        };
         VersionFilter {
-            minecraft: Some(instance.config.minecraft.clone()),
-            loaders: loader_filter(instance.config.loader),
+            minecraft: Some(minecraft.clone()),
+            loaders,
         }
     };
     let versions = launcher.project_versions(source_id, project_id, &filter)?;
@@ -216,15 +243,11 @@ fn versions_and_installed(
         .into_iter()
         .find(|entry| entry.source == source_label && entry.project_id == project_id)
         .map(|entry| entry.version_id);
-    Ok((versions, installed_version_id))
-}
-
-/// The loader slugs a version filter asks for. `Loader::None` means no loader filter.
-fn loader_filter(loader: Loader) -> Vec<String> {
-    match loader {
-        Loader::None => Vec::new(),
-        other => vec![other.to_string()],
-    }
+    Ok(VersionsLoaded {
+        versions,
+        installed_version_id,
+        instance: Some((minecraft, loader)),
+    })
 }
 
 /// Installs one version into the target instance, then reloads the versions and, when that
@@ -326,10 +349,29 @@ fn run_reporting(
     });
 }
 
-/// Fills every property `open`/`reload_versions` promised, from a successful load.
+/// Runs a versions-only reload and shows the outcome, the same way `run_reporting` does for
+/// a full load, but through `apply_versions`, which touches only `versions` and `status`.
+fn run_versions_reporting(
+    bridge: &Bridge,
+    label: &'static str,
+    preserve_status: bool,
+    job: impl FnOnce(&gcl_core::Launcher) -> Result<VersionsLoaded, gcl_core::Error> + Send + 'static,
+) {
+    bridge.run_with_error(label, job, move |window, result| {
+        let state = window.global::<ProjectState>();
+        state.set_loading(false);
+        match result {
+            Ok(loaded) => apply_versions(window, loaded, preserve_status),
+            Err(_) => state.set_status(format!("{label} failed").into()),
+        }
+    });
+}
+
+/// Fills every property `open` promised, from a successful full load.
 fn apply(window: &AppWindow, opened: Opened, preserve_status: bool) {
     let state = window.global::<ProjectState>();
     let project = opened.details.project;
+    let kind = project.kind;
     state.set_title(project.title.as_str().into());
     state.set_kind(project.kind.to_string().into());
     state.set_page_url(project.page_url.as_str().into());
@@ -337,13 +379,13 @@ fn apply(window: &AppWindow, opened: Opened, preserve_status: bool) {
     let blocks: Vec<Block> = opened.details.blocks.iter().map(block_row).collect();
     state.set_blocks(ModelRc::new(VecModel::from(blocks)));
 
-    let installed = opened.installed_version_id.as_deref();
-    let versions: Vec<ContentVersionRow> = opened
-        .versions
-        .iter()
-        .map(|v| version_row(v, installed))
-        .collect();
-    state.set_versions(ModelRc::new(VecModel::from(versions)));
+    let rows = build_version_rows(
+        &opened.versions,
+        opened.installed_version_id.as_deref(),
+        opened.instance.as_ref(),
+        kind,
+    );
+    state.set_versions(ModelRc::new(VecModel::from(rows)));
 
     if preserve_status {
         return;
@@ -353,6 +395,49 @@ fn apply(window: &AppWindow, opened: Opened, preserve_status: bool) {
     } else {
         state.set_status(format!("{} version(s)", opened.versions.len()).into());
     }
+}
+
+/// Touches only `versions` and `status`, from a successful versions-only reload. `kind` comes
+/// from `ProjectState.kind`, still on screen from the last full load.
+fn apply_versions(window: &AppWindow, loaded: VersionsLoaded, preserve_status: bool) {
+    let state = window.global::<ProjectState>();
+    let kind = ContentKind::parse(state.get_kind().as_str()).unwrap_or_default();
+    let rows = build_version_rows(
+        &loaded.versions,
+        loaded.installed_version_id.as_deref(),
+        loaded.instance.as_ref(),
+        kind,
+    );
+    state.set_versions(ModelRc::new(VecModel::from(rows)));
+
+    if preserve_status {
+        return;
+    }
+    if state.get_target_slug().is_empty() {
+        state.set_status("Pick a target instance in the browser first".into());
+    } else {
+        state.set_status(format!("{} version(s)", loaded.versions.len()).into());
+    }
+}
+
+/// Builds every version row, in order, for the versions tab.
+fn build_version_rows(
+    versions: &[Version],
+    installed: Option<&str>,
+    instance: Option<&InstanceContext>,
+    kind: ContentKind,
+) -> Vec<ContentVersionRow> {
+    versions
+        .iter()
+        .map(|v| {
+            version_row(
+                v,
+                installed,
+                instance.map(|(mc, l)| (mc.as_str(), *l)),
+                kind,
+            )
+        })
+        .collect()
 }
 
 /// Builds the description-tab row for one block.
@@ -370,8 +455,29 @@ pub fn block_row(block: &CoreBlock) -> Block {
 }
 
 /// Builds the versions-tab row for one version. `installed` is the target instance's
-/// installed version id for this project, if any.
-pub fn version_row(v: &Version, installed: Option<&str>) -> ContentVersionRow {
+/// installed version id for this project, if any. `instance` is the target's Minecraft
+/// version and loader, `None` when there is no target; a row whose version cannot run on it
+/// — no matching game version, or for a mod no compatible loader — comes back `compatible:
+/// false`, which the screen shows as a disabled Install once "Show all versions" reveals it.
+pub fn version_row(
+    v: &Version,
+    installed: Option<&str>,
+    instance: Option<(&str, Loader)>,
+    kind: ContentKind,
+) -> ContentVersionRow {
+    let is_installed = installed.is_some_and(|id| id == v.id);
+    let compatible = match instance {
+        Some((minecraft, loader)) => version_fits(v, minecraft, loader, kind),
+        None => true,
+    };
+    let access_label = match instance {
+        Some((minecraft, loader)) if !compatible => format!("Not for {minecraft} {loader}"),
+        _ => format!(
+            "{} {}",
+            if is_installed { "Installed" } else { "Install" },
+            v.number
+        ),
+    };
     ContentVersionRow {
         id: v.id.as_str().into(),
         number: v.number.as_str().into(),
@@ -379,8 +485,27 @@ pub fn version_row(v: &Version, installed: Option<&str>) -> ContentVersionRow {
         release_time: short_time(&v.published).into(),
         game_versions: v.game_versions.join(", ").into(),
         loaders: v.loaders.join(", ").into(),
-        installed: installed.is_some_and(|id| id == v.id),
+        installed: is_installed,
+        compatible,
+        access_label: access_label.into(),
     }
+}
+
+/// Whether `version` can run on `minecraft` under `loader`: it must list `minecraft` among
+/// its game versions, and a mod must also list a loader `compatible_loaders` names for it.
+/// Every other content kind ignores loaders.
+fn version_fits(version: &Version, minecraft: &str, loader: Loader, kind: ContentKind) -> bool {
+    if !version.game_versions.iter().any(|g| g == minecraft) {
+        return false;
+    }
+    if kind != ContentKind::Mod {
+        return true;
+    }
+    let compatible = compatible_loaders(loader, minecraft);
+    version
+        .loaders
+        .iter()
+        .any(|l| compatible.iter().any(|c| c == l))
 }
 
 /// The lowercase label a release kind shows in the badge.

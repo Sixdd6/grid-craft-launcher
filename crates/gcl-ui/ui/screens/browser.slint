@@ -141,11 +141,11 @@ export component BrowserScreen inherits Rectangle {
     in-out property <int> selected: -1;
 
     // A row's title was clicked: open its project details. Carries the row's own download
-    // count, already formatted, since `Launcher::project_details` answers with none of its
-    // own. `app.slint` wires this to `ProjectState.open` and `App.navigate`, because
-    // `BrowserScreen` cannot reach either global itself (`app.slint` imports this file, so
-    // the reverse import would cycle).
-    callback open_project(string /* source */, string /* project_id */, string /* downloads */);
+    // count and author, already formatted, since `Launcher::project_details` answers with
+    // neither of its own. `app.slint` wires this to `ProjectState.open` and `App.navigate`,
+    // because `BrowserScreen` cannot reach either global itself (`app.slint` imports this
+    // file, so the reverse import would cycle).
+    callback open_project(string /* source */, string /* project_id */, string /* downloads */, string /* author */);
 
     // Runs whichever search the chosen kind means: modpacks are a search of their own,
     // because they are not content and never come back from the content search.
@@ -600,14 +600,15 @@ export component BrowserScreen inherits Rectangle {
 
                             row_title := Rectangle {
                                 horizontal-stretch: 0;
-                                width: title_text.preferred-width;
+                                width: min(title_text.preferred-width, Theme.label-width);
+                                clip: true;
 
                                 accessible-role: button;
                                 accessible-label: row.title;
                                 accessible-action-default => {
                                     keys.focus();
                                     root.selected = i;
-                                    root.open_project(row.source, row.project_id, row.downloads);
+                                    root.open_project(row.source, row.project_id, row.downloads, row.author);
                                 }
 
                                 title_text := Text {
@@ -615,13 +616,14 @@ export component BrowserScreen inherits Rectangle {
                                     color: Theme.text;
                                     font-size: Theme.font-size;
                                     vertical-alignment: center;
+                                    overflow: elide;
                                 }
 
                                 title_touch := TouchArea {
                                     clicked => {
                                         keys.focus();
                                         root.selected = i;
-                                        root.open_project(row.source, row.project_id, row.downloads);
+                                        root.open_project(row.source, row.project_id, row.downloads, row.author);
                                     }
                                 }
                             }

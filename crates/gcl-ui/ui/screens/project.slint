@@ -1,6 +1,5 @@
 import { CheckBox, ListView, ScrollView, TextEdit } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
-import { Shell } from "../state.slint";
 import { Block, ContentVersionRow, Screen } from "../types.slint";
 import { Button } from "../components/button.slint";
 import { EmptyState } from "../components/empty-state.slint";
@@ -62,12 +61,10 @@ export global ProjectState {
 
     // Opens a project's details. Carries the source, the project id, the instance a version
     // installs into (empty when none was picked), the screen `back()` returns to, and the
-    // download count to show right away, already formatted: a search row already carries
-    // one, and `Launcher::project_details` answers with none of its own, so an open from the
-    // installed list passes an empty string.
-    callback open(string /* source */, string /* project_id */, string /* target_slug */, Screen /* return_to */, string /* downloads */);
-    // A tab was picked. Carries its index.
-    callback set_tab(int);
+    // download count and author to show right away, already formatted: a search row already
+    // carries both, and `Launcher::project_details` answers with neither, so an open from
+    // the installed list passes empty strings for them.
+    callback open(string /* source */, string /* project_id */, string /* target_slug */, Screen /* return_to */, string /* downloads */, string /* author */);
     // Returns to `return_to`.
     callback back();
     // The "Show all versions" checkbox changed.
@@ -164,9 +161,6 @@ export component ProjectScreen inherits Rectangle {
         tabs := TabBar {
             tabs: ["Description", "Versions"];
             current <=> ProjectState.tab;
-            changed(index) => {
-                ProjectState.set_tab(index);
-            }
         }
 
         // Description tab: a scrolling column of blocks, styled by kind.
@@ -255,9 +249,14 @@ export component ProjectScreen inherits Rectangle {
                 vertical-stretch: 1;
                 width: 100%;
 
-                for row[i] in ProjectState.versions: version_row := ListRow {
-                    title: row.number;
+                for row[i] in ProjectState.versions: version_row := Rectangle {
                     height: 3 * Theme.font-size + 3 * Theme.gap + Theme.pad;
+                    border-radius: Theme.radius;
+
+                    HorizontalLayout {
+                        padding-left: Theme.pad;
+                        padding-right: Theme.pad;
+                        spacing: Theme.gap;
 
                     VerticalLayout {
                         padding-top: Theme.gap;
@@ -324,13 +323,15 @@ export component ProjectScreen inherits Rectangle {
 
                         version_install_button := Button {
                             text: row.installed ? "Installed" : "Install";
-                            access_label: row.number;
+                            access_label: row.access_label;
                             kind: "primary";
-                            enabled: !row.installed && root.has_target && !ProjectState.loading;
+                            enabled: !row.installed && root.has_target && !ProjectState.loading
+                                && row.compatible;
                             clicked => {
                                 ProjectState.install(row.id);
                             }
                         }
+                    }
                     }
                 }
             }
@@ -384,6 +385,8 @@ export component PreviewProjectScreen inherits ProjectScreen {
                 game_versions: "1.21.1, 1.21",
                 loaders: "fabric, quilt",
                 installed: true,
+                compatible: true,
+                access_label: "Installed 0.6.13",
             },
             {
                 id: "def456",
@@ -393,6 +396,19 @@ export component PreviewProjectScreen inherits ProjectScreen {
                 game_versions: "1.21.1, 1.21",
                 loaders: "fabric, quilt",
                 installed: false,
+                compatible: true,
+                access_label: "Install 0.6.12",
+            },
+            {
+                id: "ghi789",
+                number: "0.5.11",
+                kind: "release",
+                release_time: "2026-01-01 10:00",
+                game_versions: "1.20.1",
+                loaders: "fabric",
+                installed: false,
+                compatible: false,
+                access_label: "Not for 1.21.1 fabric",
             },
         ];
     }

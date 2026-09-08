@@ -159,6 +159,12 @@ export struct ContentVersionRow {
     game_versions: string,
     loaders: string,
     installed: bool,
+    // Whether the target instance can run this version: it lists the instance's Minecraft
+    // version and, for a mod, a compatible loader. Always true when there is no target.
+    compatible: bool,
+    // What the Install button's accessible label says: "Install <number>" or
+    // "Installed <number>" when it can run, "Not for <mc> <loader>" when it cannot.
+    access_label: string,
 }
 
 // Which screen the shell shows.

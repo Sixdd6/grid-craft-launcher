@@ -1,8 +1,8 @@
-use gcl_core::instances::model::Loader;
+use gcl_core::instances::model::{ContentKind, Loader};
 use gcl_core::sources::richtext::Block as CoreBlock;
 use gcl_core::sources::{ReleaseKind, SourceId, Version};
 
-use super::{block_row, loader_filter, version_row};
+use super::{block_row, version_row};
 
 fn version(id: &str) -> Version {
     Version {
@@ -42,7 +42,7 @@ fn block_row_maps_every_other_kind() {
 
 #[test]
 fn version_row_joins_game_versions_and_loaders() {
-    let row = version_row(&version("abc"), None);
+    let row = version_row(&version("abc"), None, None, ContentKind::Mod);
     assert_eq!(row.game_versions, "1.21.1, 1.21");
     assert_eq!(row.loaders, "fabric, quilt");
     assert_eq!(row.kind, "release");
@@ -51,22 +51,70 @@ fn version_row_joins_game_versions_and_loaders() {
 
 #[test]
 fn version_row_marks_the_installed_version() {
-    let row = version_row(&version("abc"), Some("abc"));
+    let row = version_row(&version("abc"), Some("abc"), None, ContentKind::Mod);
     assert!(row.installed);
 }
 
 #[test]
 fn version_row_does_not_mark_a_different_installed_version() {
-    let row = version_row(&version("abc"), Some("def"));
+    let row = version_row(&version("abc"), Some("def"), None, ContentKind::Mod);
     assert!(!row.installed);
 }
 
 #[test]
-fn loader_filter_is_empty_for_no_loader() {
-    assert!(loader_filter(Loader::None).is_empty());
+fn version_row_with_no_target_is_always_compatible() {
+    let row = version_row(&version("abc"), None, None, ContentKind::Mod);
+    assert!(row.compatible);
+    assert_eq!(row.access_label, "Install 0.6.13");
 }
 
 #[test]
-fn loader_filter_names_one_loader() {
-    assert_eq!(loader_filter(Loader::Fabric), vec!["fabric".to_string()]);
+fn version_row_marks_installed_access_label() {
+    let row = version_row(
+        &version("abc"),
+        Some("abc"),
+        Some(("1.21.1", Loader::Fabric)),
+        ContentKind::Mod,
+    );
+    assert!(row.compatible);
+    assert_eq!(row.access_label, "Installed 0.6.13");
+}
+
+#[test]
+fn version_row_is_incompatible_with_a_different_minecraft_version() {
+    let row = version_row(
+        &version("abc"),
+        None,
+        Some(("1.20.1", Loader::Fabric)),
+        ContentKind::Mod,
+    );
+    assert!(!row.compatible);
+    assert_eq!(row.access_label, "Not for 1.20.1 fabric");
+}
+
+#[test]
+fn version_row_is_incompatible_with_a_loader_the_mod_does_not_list() {
+    // The version only lists fabric and quilt loaders; Forge cannot run it even though
+    // the Minecraft version matches.
+    let row = version_row(
+        &version("abc"),
+        None,
+        Some(("1.21.1", Loader::Forge)),
+        ContentKind::Mod,
+    );
+    assert!(!row.compatible);
+    assert_eq!(row.access_label, "Not for 1.21.1 forge");
+}
+
+#[test]
+fn version_row_ignores_loader_for_a_non_mod_kind() {
+    // Loader::Forge is not among the version's own "loaders" list, but a resource pack
+    // does not care: only the Minecraft version has to match.
+    let row = version_row(
+        &version("abc"),
+        None,
+        Some(("1.21.1", Loader::Forge)),
+        ContentKind::ResourcePack,
+    );
+    assert!(row.compatible);
 }

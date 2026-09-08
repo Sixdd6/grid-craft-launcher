@@ -23,8 +23,11 @@ screen opened that dialog.
   `row_refresh`, `row_toggle`, `row_install`, `row_title`, `row_icon`, `row_source_button`,
   `pack_row`, `pack_install_button`, `version_row`, `version_install_button`. A repeater gives
   every instance the same id, so a test takes the nth handle `find_by_element_id` yields, in
-  list order. `version_install_button`'s `accessible-label` is the version number, not the
-  button's changing text ("Install"/"Installed"), through `Button`'s `access_label` override.
+  list order. `version_install_button`'s `accessible-label` is "Install `<number>`" or
+  "Installed `<number>`", or "Not for `<mc>` `<loader>`" for a version the target instance
+  cannot run, through `Button`'s `access_label` override, not the button's plain "Install"/
+  "Installed" text. `ProjectScreen::version_row` is a plain `Rectangle`, not a `ListRow`: its
+  click is unwired, so it carries no `accessible-role`.
   `InstanceScreen::row_source_button` is the same idea for a content row's source: its
   `access_label` is "Open on `<source>`", not the plain source name `text` shows, and its
   `clicked` opens that project's details through `InstanceScreen.open_project`, wired in
@@ -194,7 +197,7 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::block_item` | `VerticalLayout` |
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::code_pane` | `Rectangle` |
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::show_all_versions_check` | `CheckBox` |
-| `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::version_row` | `ListRow` |
+| `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::version_row` | `Rectangle` |
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::version_kind_badge` | `Text` |
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::version_install_button` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::root_path_field` | `LineEdit` |

@@ -276,8 +276,10 @@ export component InstanceScreen inherits Rectangle {
                             horizontal-stretch: 0;
                             width: 80px;
                             row_source_button := Button {
-                                text: row.source;
-                                access_label: "Open on " + row.source;
+                                text: row.source == "file" ? "No source page" : row.source;
+                                access_label: row.source == "file"
+                                    ? "No source page" : "Open on " + row.source;
+                                enabled: row.source != "file";
                                 clicked => {
                                     root.open_project(row.source, row.project_id);
                                 }
