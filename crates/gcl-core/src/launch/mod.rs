@@ -12,7 +12,7 @@ pub mod crash;
 pub mod log4j;
 pub mod spawn;
 
-pub use command::{JvmSettings, LaunchCommand, LaunchInputs, build};
+pub use command::{JvmSettings, LaunchCommand, LaunchInputs, build, gc_conflict};
 pub use crash::crash_hint;
 pub use log4j::{EventParser, LogRecord, init_local_offset};
 pub use spawn::{ChildHandle, RunningGame, force_stop, request_stop, spawn, wait};
@@ -20,6 +20,17 @@ pub use spawn::{ChildHandle, RunningGame, force_stop, request_stop, spawn, wait}
 /// Errors building or running a launch command.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// The instance's GC preset and one of its extra JVM arguments both pick a collector.
+    #[error(
+        "the {} garbage collector preset conflicts with the extra JVM argument {extra_flag}; remove one of them",
+        preset.label()
+    )]
+    GcConflict {
+        /// The preset saved on the instance.
+        preset: crate::instances::model::GcPreset,
+        /// The extra JVM argument that picks a collector itself.
+        extra_flag: String,
+    },
     /// The resolved version JSON names no `mainClass`, so there is nothing to start.
     #[error("version json has no mainClass")]
     MissingMainClass,

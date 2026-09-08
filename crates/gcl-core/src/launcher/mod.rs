@@ -1036,6 +1036,10 @@ impl Launcher {
                 min_mib: instance.config.jvm.min_mib.unwrap_or(config.jvm.min_mib),
                 max_mib: instance.config.jvm.max_mib.unwrap_or(config.jvm.max_mib),
                 extra_args: instance.config.jvm.extra_args.clone(),
+                // The GC probe that reads the java binary's major version lands with
+                // `gc_support`; until then the launch passes no collector flag.
+                gc: crate::instances::model::GcPreset::Default,
+                gc_major: 0,
             }
         };
         let cmd = crate::launch::build(

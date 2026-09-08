@@ -9,6 +9,7 @@ use super::Error;
 use crate::auth::LaunchIdentity;
 use crate::events::EventSink;
 use crate::instances::Instance;
+use crate::instances::model::GcPreset;
 use crate::mojang::args::{ArgContext, default_legacy_jvm_args, expand_arguments, expand_legacy};
 use crate::mojang::assets::{AssetIndex, materialize_legacy};
 use crate::mojang::install::InstallPlan;
@@ -24,8 +25,41 @@ pub struct JvmSettings {
     pub min_mib: u32,
     /// Maximum heap in MiB, passed as `-Xmx`.
     pub max_mib: u32,
-    /// Extra JVM flags, inserted after the heap flags and before the version's own JVM args.
+    /// Extra JVM flags, inserted after the GC preset flags and before the version's own JVM args.
     pub extra_args: Vec<String>,
+    /// Garbage collector preset saved on the instance.
+    pub gc: GcPreset,
+    /// Major version of the java binary this command runs, as the GC probe read it.
+    ///
+    /// Some presets expand to different flags per major, so this is the probed major rather
+    /// than the version's `javaVersion`: a manually configured `java_path` carries no major of
+    /// its own.
+    pub gc_major: u32,
+}
+
+/// Flags a user could write by hand that choose a collector themselves.
+const CONFLICTING_FLAGS: &[&str] = &[
+    "-XX:+UseSerialGC",
+    "-XX:+UseParallelGC",
+    "-XX:+UseG1GC",
+    "-XX:+UseZGC",
+    "-XX:+UseShenandoahGC",
+    "-XX:+ZGenerational",
+    "-XX:-ZGenerational",
+];
+
+/// The first extra JVM argument that picks a collector itself, when a preset is also set.
+///
+/// `None` for [`GcPreset::Default`]: with no preset chosen, a hand-written collector flag is
+/// exactly what extra arguments are for.
+pub fn gc_conflict(gc: GcPreset, extra_args: &[String]) -> Option<&str> {
+    if gc == GcPreset::Default {
+        return None;
+    }
+    extra_args
+        .iter()
+        .find(|a| CONFLICTING_FLAGS.contains(&a.as_str()))
+        .map(String::as_str)
 }
 
 /// Everything [`build`] needs to produce a command line.
@@ -204,6 +238,13 @@ pub fn build(inputs: &LaunchInputs<'_>, sink: Option<&EventSink>) -> Result<Laun
         format!("-Xms{}M", inputs.jvm.min_mib),
         format!("-Xmx{}M", inputs.jvm.max_mib),
     ];
+    if let Some(flag) = gc_conflict(inputs.jvm.gc, &inputs.jvm.extra_args) {
+        return Err(Error::GcConflict {
+            preset: inputs.jvm.gc,
+            extra_flag: flag.to_string(),
+        });
+    }
+    args.extend(inputs.jvm.gc.flags(inputs.jvm.gc_major));
     args.extend(inputs.jvm.extra_args.iter().cloned());
     match &plan.resolved.arguments {
         Some(a) => args.extend(expand_arguments(&a.jvm, &rules, &ctx, sink)),
@@ -444,6 +485,8 @@ mod tests {
                 min_mib: 512,
                 max_mib: 4096,
                 extra_args: vec!["-XX:+UseG1GC".to_string()],
+                gc: GcPreset::Default,
+                gc_major: 0,
             },
             rules: &f.rules,
             launcher_name: "grid-craft-launcher",
@@ -831,5 +874,128 @@ mod tests {
         let java = PathBuf::from("/usr/bin/java");
         let err = build(&inputs(&f, &java, None), None).expect_err("no main class");
         assert!(matches!(err, Error::MissingMainClass));
+    }
+
+    /// Inputs whose JVM settings carry a GC preset and a chosen extra-args list.
+    fn gc_inputs<'a>(
+        f: &'a Fixture,
+        java: &'a Path,
+        gc: GcPreset,
+        gc_major: u32,
+        extra_args: Vec<String>,
+    ) -> LaunchInputs<'a> {
+        let mut inputs = inputs(f, java, None);
+        inputs.jvm = JvmSettings {
+            min_mib: 512,
+            max_mib: 4096,
+            extra_args,
+            gc,
+            gc_major,
+        };
+        inputs
+    }
+
+    #[test]
+    fn gc_preset_flags_sit_between_the_heap_flags_and_the_extra_args() {
+        let f = fixture(V1_20_1);
+        let java = PathBuf::from("/usr/bin/java");
+        let cmd = build(
+            &gc_inputs(
+                &f,
+                &java,
+                GcPreset::G1,
+                21,
+                vec!["-Dtest.flag=1".to_string()],
+            ),
+            None,
+        )
+        .expect("build");
+
+        let xmx = index_of(&cmd.args, "-Xmx4096M");
+        let g1 = index_of(&cmd.args, "-XX:+UseG1GC");
+        let extra = index_of(&cmd.args, "-Dtest.flag=1");
+        assert_eq!(g1, xmx + 1, "{:?}", cmd.args);
+        assert_eq!(extra, g1 + 1, "{:?}", cmd.args);
+    }
+
+    #[test]
+    fn a_default_preset_adds_no_flag() {
+        let f = fixture(V1_20_1);
+        let java = PathBuf::from("/usr/bin/java");
+        let cmd = build(
+            &gc_inputs(&f, &java, GcPreset::Default, 21, Vec::new()),
+            None,
+        )
+        .expect("build");
+        let xmx = index_of(&cmd.args, "-Xmx4096M");
+        assert!(!cmd.args[xmx + 1].starts_with("-XX:+Use"), "{:?}", cmd.args);
+    }
+
+    #[test]
+    fn zgc_carries_the_generational_switch_only_below_23() {
+        let f = fixture(V1_20_1);
+        let java = PathBuf::from("/usr/bin/java");
+
+        let at_22 = build(&gc_inputs(&f, &java, GcPreset::Zgc, 22, Vec::new()), None).expect("22");
+        assert!(at_22.args.contains(&"-XX:+UseZGC".to_string()));
+        assert!(at_22.args.contains(&"-XX:-ZGenerational".to_string()));
+
+        let at_23 = build(&gc_inputs(&f, &java, GcPreset::Zgc, 23, Vec::new()), None).expect("23");
+        assert!(at_23.args.contains(&"-XX:+UseZGC".to_string()));
+        assert!(
+            !at_23.args.iter().any(|a| a.contains("ZGenerational")),
+            "{:?}",
+            at_23.args
+        );
+    }
+
+    #[test]
+    fn a_preset_and_a_hand_written_collector_flag_is_a_launch_error() {
+        let f = fixture(V1_20_1);
+        let java = PathBuf::from("/usr/bin/java");
+        for flag in CONFLICTING_FLAGS {
+            let err = build(
+                &gc_inputs(&f, &java, GcPreset::G1, 21, vec![(*flag).to_string()]),
+                None,
+            )
+            .expect_err(flag);
+            match err {
+                Error::GcConflict { preset, extra_flag } => {
+                    assert_eq!(preset, GcPreset::G1);
+                    assert_eq!(extra_flag, *flag);
+                }
+                other => panic!("expected GcConflict for {flag}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_hand_written_collector_flag_with_no_preset_still_launches() {
+        let f = fixture(V1_20_1);
+        let java = PathBuf::from("/usr/bin/java");
+        for flag in CONFLICTING_FLAGS {
+            let cmd = build(
+                &gc_inputs(&f, &java, GcPreset::Default, 21, vec![(*flag).to_string()]),
+                None,
+            )
+            .expect(flag);
+            assert!(cmd.args.contains(&(*flag).to_string()), "{:?}", cmd.args);
+        }
+    }
+
+    #[test]
+    fn gc_conflict_reads_the_first_offending_argument_only() {
+        let args = [
+            "-Dfoo=1".to_string(),
+            "-XX:+UseZGC".to_string(),
+            "-XX:+UseG1GC".to_string(),
+        ];
+        assert_eq!(gc_conflict(GcPreset::Zgc, &args), Some("-XX:+UseZGC"));
+        assert_eq!(gc_conflict(GcPreset::Default, &args), None);
+        assert_eq!(gc_conflict(GcPreset::Zgc, &[]), None);
+        assert_eq!(
+            gc_conflict(GcPreset::Zgc, &["-XX:+UseG1GCFoo".to_string()]),
+            None
+        );
     }
 }
