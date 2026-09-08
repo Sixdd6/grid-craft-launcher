@@ -5,6 +5,10 @@ export component Button inherits Rectangle {
     in property <string> text: "Button";
     in property <string> kind: "secondary";
     in property <bool> enabled: true;
+    // What a screen reader says the button is, when it must differ from the printed label —
+    // a per-row Install button whose text becomes "Installed", for one, where the label a
+    // test or a screen reader wants is the row's own value. Empty falls back to `text`.
+    in property <string> access_label: "";
     callback clicked();
 
     property <color> base: root.kind == "primary"
@@ -25,7 +29,7 @@ export component Button inherits Rectangle {
     // screen reader reads `accessible-label`. Both need these four lines; `Rectangle` has no
     // button behaviour of its own.
     accessible-role: button;
-    accessible-label: root.text;
+    accessible-label: root.access_label == "" ? root.text : root.access_label;
     accessible-enabled: root.enabled;
     accessible-action-default => {
         if (root.enabled) {

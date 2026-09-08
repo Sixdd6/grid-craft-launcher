@@ -129,6 +129,31 @@ export struct PendingRow {
     kind: string,
 }
 
+// One piece of a project's rendered description, from `richtext::Block` in gcl-core.
+//
+// `kind` is one of `heading1`..`heading6`, `paragraph`, `bullet`, or `code`. A link inside
+// `text` already reads `text (url)`, per `richtext`'s own conversion, so the screen renders
+// `text` as plain wrapped prose with no further markup to interpret.
+export struct Block {
+    kind: string,
+    text: string,
+}
+
+// One version row on the project details screen's Versions tab.
+//
+// `game_versions` and `loaders` are pre-joined for display, the same way other rows in this
+// file avoid passing an array where a joined string prints fine. `installed` marks the row
+// whose `id` matches the target instance's installed `version_id` for this project.
+export struct ContentVersionRow {
+    id: string,
+    number: string,
+    kind: string,
+    release_time: string,
+    game_versions: string,
+    loaders: string,
+    installed: bool,
+}
+
 // Which screen the shell shows.
 export enum Screen {
     instances,
@@ -136,4 +161,5 @@ export enum Screen {
     browser,
     accounts,
     settings,
+    project,
 }

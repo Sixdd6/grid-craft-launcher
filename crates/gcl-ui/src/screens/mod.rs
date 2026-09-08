@@ -4,5 +4,6 @@ pub mod accounts;
 pub mod browser;
 pub mod instance;
 pub mod instances;
+pub mod project;
 pub mod settings;
 pub mod settings_editor;

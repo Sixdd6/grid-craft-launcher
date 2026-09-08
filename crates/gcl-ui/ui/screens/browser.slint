@@ -140,6 +140,11 @@ export component BrowserScreen inherits Rectangle {
     // Enter runs the same action as the row's primary button.
     in-out property <int> selected: -1;
 
+    // A row's title was clicked: open its project details. `app.slint` wires this to
+    // `ProjectState.open` and `App.navigate`, because `BrowserScreen` cannot reach either
+    // global itself (`app.slint` imports this file, so the reverse import would cycle).
+    callback open_project(string /* source */, string /* project_id */);
+
     // Runs whichever search the chosen kind means: modpacks are a search of their own,
     // because they are not content and never come back from the content search.
     function run_search() {
@@ -564,16 +569,37 @@ export component BrowserScreen inherits Rectangle {
                         spacing: Theme.gap / 2;
                         horizontal-stretch: 1;
 
-                        // Title line: name, kind badge, author, and the download count.
+                        // Title line: name (clickable, opens details), kind badge, author,
+                        // and the download count.
                         HorizontalLayout {
                             spacing: Theme.gap;
 
-                            Text {
-                                text: row.title;
-                                color: Theme.text;
-                                font-size: Theme.font-size;
+                            row_title := Rectangle {
                                 horizontal-stretch: 0;
-                                overflow: elide;
+                                width: title_text.preferred-width;
+
+                                accessible-role: button;
+                                accessible-label: row.title;
+                                accessible-action-default => {
+                                    keys.focus();
+                                    root.selected = i;
+                                    root.open_project(row.source, row.project_id);
+                                }
+
+                                title_text := Text {
+                                    text: row.title;
+                                    color: Theme.text;
+                                    font-size: Theme.font-size;
+                                    vertical-alignment: center;
+                                }
+
+                                title_touch := TouchArea {
+                                    clicked => {
+                                        keys.focus();
+                                        root.selected = i;
+                                        root.open_project(row.source, row.project_id);
+                                    }
+                                }
                             }
 
                             Rectangle {

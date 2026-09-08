@@ -1,7 +1,7 @@
 import { Theme } from "theme.slint";
 import {
-    AccountRow, ContentRow, InstanceRow, LoaderVersionRow, LogLine, PendingRow,
-    Screen, SearchRow, SettingRow, SettingRowModel, TaskRow, ToastRow, VersionRow
+    AccountRow, Block, ContentRow, ContentVersionRow, InstanceRow, LoaderVersionRow, LogLine,
+    PendingRow, Screen, SearchRow, SettingRow, SettingRowModel, TaskRow, ToastRow, VersionRow
 } from "types.slint";
 import {
     AccountsState, InstanceState, SettingsEditorState, SettingsState, Shell
@@ -21,12 +21,14 @@ import { InstanceScreen } from "screens/instance.slint";
 import { BrowserScreen, BrowserState } from "screens/browser.slint";
 import { AccountsScreen } from "screens/accounts.slint";
 import { SettingsScreen } from "screens/settings.slint";
+import { ProjectScreen, ProjectState } from "screens/project.slint";
 
 // Re-exported so the generated Rust module has every struct the screens will need.
 export {
-    AccountRow, AccountsState, BrowserState, ContentRow, InstanceRow, InstanceState,
-    LoaderVersionRow, LogLine, PendingRow, Screen, SearchRow, SettingRow, SettingRowModel,
-    SettingsEditorState, SettingsState, Shell, TaskRow, Theme, ToastRow, VersionRow
+    AccountRow, AccountsState, Block, BrowserState, ContentRow, ContentVersionRow, InstanceRow,
+    InstanceState, LoaderVersionRow, LogLine, PendingRow, ProjectState, Screen, SearchRow,
+    SettingRow, SettingRowModel, SettingsEditorState, SettingsState, Shell, TaskRow, Theme,
+    ToastRow, VersionRow
 }
 
 // Shell state and the callbacks Rust wires up. Screens read from here, never from each other.
@@ -297,9 +299,17 @@ export component AppWindow inherits Window {
                         }
                     }
                     if App.screen == Screen.instance: InstanceScreen { }
-                    if App.screen == Screen.browser: BrowserScreen { }
+                    if App.screen == Screen.browser: BrowserScreen {
+                        open_project(source, project_id) => {
+                            ProjectState.open(
+                                source, project_id, BrowserState.target_slug, Screen.browser
+                            );
+                            App.navigate(Screen.project);
+                        }
+                    }
                     if App.screen == Screen.accounts: AccountsScreen { }
                     if App.screen == Screen.settings: SettingsScreen { }
+                    if App.screen == Screen.project: ProjectScreen { }
                 }
 
                 // Bottom task panel: the collapsed strip, or the task list once it is opened.

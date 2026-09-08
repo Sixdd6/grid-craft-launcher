@@ -1,0 +1,396 @@
+import { CheckBox, ListView, ScrollView, TextEdit } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Shell } from "../state.slint";
+import { Block, ContentVersionRow, Screen } from "../types.slint";
+import { Button } from "../components/button.slint";
+import { EmptyState } from "../components/empty-state.slint";
+import { ListRow } from "../components/list-row.slint";
+import { TabBar } from "../components/tab-bar.slint";
+
+// Everything the project details screen reads and reports.
+//
+// The screen lives inside an `if` in `app.slint`, so Rust cannot reach its properties. This
+// global is the seam, the same way `InstanceState` is for the detail view:
+// `src/screens/project.rs` binds it, and the screen reads it directly. It lives in its own
+// file because the screen imports it and `app.slint` imports the screen, which a global
+// declared in `app.slint` could not survive.
+//
+// `return_to` is the smallest thing a real back stack would need: whoever opens this screen
+// (a browser row's title, an instance's content-row source button) says which screen `back()`
+// returns to, and `App.current_slug` is left alone so the instance detail screen still shows
+// the right instance when that is where the user came from.
+//
+// Every property here starts empty: nobody has opened a project until `open` is called, and
+// `src/screens/project.rs` fills every one of them, the empty case included. The sample
+// values the preview needs live in `PreviewProjectScreen`, at the end of this file.
+export global ProjectState {
+    // Source this project came from: "modrinth" or "curseforge".
+    in-out property <string> source: "";
+    // Project id at that source.
+    in-out property <string> project_id: "";
+    // Display title.
+    in-out property <string> title: "";
+    // Author or team name. Empty: `gcl-core`'s `Project` carries no author field today.
+    in-out property <string> author: "";
+    // Content kind: mod, resourcepack, shader, datapack, world.
+    in-out property <string> kind: "";
+    // Total download count, already formatted. Empty: `Launcher::project_details` answers
+    // with no count; a future caller that already has one (a search row, for one) can fill
+    // this in without changing the shape here.
+    in-out property <string> downloads: "";
+    // Browser link to the project's page at the source.
+    in-out property <string> page_url: "";
+    // Slug of the instance a version installs into, empty when none was picked.
+    in-out property <string> target_slug: "";
+
+    // Which tab is shown: 0 description, 1 versions.
+    in-out property <int> tab: 0;
+    // The description, one block per heading, paragraph, bullet, or code run.
+    in-out property <[Block]> blocks: [];
+    // The project's versions, filtered by the target instance unless `show_all_versions` is
+    // set. One row is marked `installed` when its id matches what the target instance has.
+    in-out property <[ContentVersionRow]> versions: [];
+    // Whether the version list ignores the target instance's Minecraft version and loader.
+    in-out property <bool> show_all_versions: false;
+
+    // True while the description, the versions, or an install is loading.
+    in-out property <bool> loading: false;
+    // One line about the last thing that happened here.
+    in-out property <string> status: "";
+    // Where `back()` returns to: the screen that opened this one.
+    in-out property <Screen> return_to: Screen.browser;
+
+    // Opens a project's details. Carries the source, the project id, the instance a version
+    // installs into (empty when none was picked), and the screen `back()` returns to.
+    callback open(string /* source */, string /* project_id */, string /* target_slug */, Screen /* return_to */);
+    // A tab was picked. Carries its index.
+    callback set_tab(int);
+    // Returns to `return_to`.
+    callback back();
+    // The "Show all versions" checkbox changed.
+    callback toggle_show_all();
+    // A version row's Install button was pressed. Carries the version id.
+    callback install(string /* version_id */);
+}
+
+// The project details screen: a header, a Description/Versions `TabBar`, and the tab body.
+//
+// Pure layout. Every value comes from `ProjectState` and every action is reported through it,
+// so `src/screens/project.rs` is the only place that knows what any of this means.
+export component ProjectScreen inherits Rectangle {
+    background: Theme.bg;
+
+    // Whether a version has somewhere to install into.
+    property <bool> has_target: ProjectState.target_slug != "";
+
+    VerticalLayout {
+        padding: Theme.pad;
+        spacing: Theme.gap;
+
+        // Header: back button, title, and the details a browser row does not carry.
+        HorizontalLayout {
+            spacing: Theme.gap;
+            height: Theme.row-height;
+
+            back_button := Button {
+                text: "Back";
+                clicked => {
+                    ProjectState.back();
+                }
+            }
+
+            Text {
+                text: ProjectState.title;
+                color: Theme.text;
+                font-size: Theme.font-size-h1;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Theme.gap;
+            height: Theme.row-height;
+
+            if ProjectState.author != "": Text {
+                text: "by " + ProjectState.author;
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+
+            Rectangle {
+                horizontal-stretch: 0;
+                width: kind_badge.preferred-width + Theme.gap;
+                background: Theme.surface-raised;
+                border-radius: Theme.radius;
+                border-width: 1px;
+                border-color: Theme.border;
+
+                kind_badge := Text {
+                    text: ProjectState.kind;
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            if ProjectState.downloads != "": Text {
+                text: ProjectState.downloads + " downloads";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+        }
+
+        // The project's page at the source, read-only and selectable: there is no clipboard
+        // call this crate can reach from a button, so selection is the whole copy story.
+        page_url_text := TextEdit {
+            height: Theme.row-height;
+            text: ProjectState.page_url;
+            read-only: true;
+            wrap: no-wrap;
+        }
+
+        tabs := TabBar {
+            tabs: ["Description", "Versions"];
+            current <=> ProjectState.tab;
+            changed(index) => {
+                ProjectState.set_tab(index);
+            }
+        }
+
+        // Description tab: a scrolling column of blocks, styled by kind.
+        if ProjectState.tab == 0: ScrollView {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                padding: Theme.pad;
+                spacing: Theme.gap;
+                alignment: start;
+
+                if ProjectState.blocks.length == 0 && !ProjectState.loading: EmptyState {
+                    title: "No description";
+                }
+
+                for block in ProjectState.blocks: block_item := VerticalLayout {
+                    if block.kind == "code": code_pane := Rectangle {
+                        background: Theme.surface-raised;
+                        border-radius: Theme.radius;
+
+                        VerticalLayout {
+                            padding: Theme.pad;
+
+                            Text {
+                                text: block.text;
+                                color: Theme.text;
+                                font-size: Theme.font-size;
+                                font-family: Theme.font-family-mono;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+
+                    if block.kind != "code": Text {
+                        text: block.kind == "bullet" ? "• " + block.text : block.text;
+                        color: Theme.text;
+                        wrap: word-wrap;
+                        font-size: block.kind == "heading1" ? Theme.font-size-h1
+                            : (block.kind == "heading2" || block.kind == "heading3"
+                                ? Theme.font-size-title
+                                : Theme.font-size);
+                        font-weight: (block.kind == "heading1" || block.kind == "heading2"
+                            || block.kind == "heading3" || block.kind == "heading4"
+                            || block.kind == "heading5" || block.kind == "heading6")
+                            ? Theme.font-weight-bold
+                            : Theme.font-weight-regular;
+                    }
+                }
+            }
+        }
+
+        // Versions tab: one row per version, an Install button per row, and the filter
+        // checkbox. A row whose version is already installed shows "Installed" instead.
+        if ProjectState.tab == 1: VerticalLayout {
+            vertical-stretch: 1;
+            spacing: Theme.gap;
+
+            HorizontalLayout {
+                height: Theme.row-height;
+                spacing: Theme.gap;
+
+                show_all_versions_check := CheckBox {
+                    text: "Show all versions";
+                    checked <=> ProjectState.show_all_versions;
+                    toggled => {
+                        ProjectState.toggle_show_all();
+                    }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                if !root.has_target: Text {
+                    text: "Pick a target instance in the browser first";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    vertical-alignment: center;
+                }
+            }
+
+            if ProjectState.versions.length == 0 && !ProjectState.loading: EmptyState {
+                vertical-stretch: 1;
+                title: "No versions to show";
+            }
+
+            if ProjectState.versions.length > 0: ListView {
+                vertical-stretch: 1;
+                width: 100%;
+
+                for row[i] in ProjectState.versions: version_row := ListRow {
+                    title: row.number;
+                    height: 3 * Theme.font-size + 3 * Theme.gap + Theme.pad;
+
+                    VerticalLayout {
+                        padding-top: Theme.gap;
+                        padding-bottom: Theme.gap;
+                        spacing: Theme.gap / 2;
+                        horizontal-stretch: 1;
+
+                        HorizontalLayout {
+                            spacing: Theme.gap;
+
+                            Text {
+                                text: row.number;
+                                color: Theme.text;
+                                font-size: Theme.font-size;
+                                horizontal-stretch: 0;
+                                overflow: elide;
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 0;
+                                width: version_kind_badge.preferred-width + Theme.gap;
+                                background: Theme.surface-raised;
+                                border-radius: Theme.radius;
+                                border-width: 1px;
+                                border-color: Theme.border;
+
+                                version_kind_badge := Text {
+                                    text: row.kind;
+                                    color: Theme.text-muted;
+                                    font-size: Theme.font-size-small;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            Text {
+                                text: row.release_time;
+                                color: Theme.text-muted;
+                                font-size: Theme.font-size-small;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
+                        }
+
+                        Text {
+                            text: row.game_versions;
+                            color: Theme.text-muted;
+                            font-size: Theme.font-size-small;
+                            overflow: elide;
+                        }
+
+                        Text {
+                            text: row.loaders;
+                            color: Theme.text-muted;
+                            font-size: Theme.font-size-small;
+                            overflow: elide;
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
+
+                        version_install_button := Button {
+                            text: row.installed ? "Installed" : "Install";
+                            access_label: row.number;
+                            kind: "primary";
+                            enabled: !row.installed && root.has_target && !ProjectState.loading;
+                            clicked => {
+                                ProjectState.install(row.id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Text {
+            text: ProjectState.status;
+            color: Theme.text-muted;
+            font-size: Theme.font-size-small;
+            height: Theme.row-height;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+// Preview only: `just ui-preview screens/project.slint` renders this one, because a viewer
+// with no `--component` shows the last exported component of the file.
+//
+// `ProjectState` starts empty, so the screen on its own would preview as a blank page. This
+// component fills the global with the sample project the screen used to carry as its
+// defaults. Nothing in the app instantiates it.
+export component PreviewProjectScreen inherits ProjectScreen {
+    init => {
+        ProjectState.source = "modrinth";
+        ProjectState.project_id = "AANobbMI";
+        ProjectState.title = "Sodium";
+        ProjectState.author = "jellysquid3";
+        ProjectState.kind = "mod";
+        ProjectState.downloads = "45.2M";
+        ProjectState.page_url = "https://modrinth.com/mod/sodium";
+        ProjectState.target_slug = "fabric-perf";
+        ProjectState.status = "Ready";
+        ProjectState.blocks = [
+            { kind: "heading1", text: "Sodium" },
+            {
+                kind: "paragraph",
+                text: "A modern rendering engine for Minecraft which greatly improves performance (https://modrinth.com/mod/sodium).",
+            },
+            { kind: "heading2", text: "Features" },
+            { kind: "bullet", text: "Significantly improved frame rates" },
+            { kind: "bullet", text: "Much better frame pacing" },
+            { kind: "code", text: "sodium.enable_advanced_culling=true" },
+        ];
+        ProjectState.versions = [
+            {
+                id: "abc123",
+                number: "0.6.13",
+                kind: "release",
+                release_time: "2026-08-01 10:00",
+                game_versions: "1.21.1, 1.21",
+                loaders: "fabric, quilt",
+                installed: true,
+            },
+            {
+                id: "def456",
+                number: "0.6.12",
+                kind: "release",
+                release_time: "2026-06-01 10:00",
+                game_versions: "1.21.1, 1.21",
+                loaders: "fabric, quilt",
+                installed: false,
+            },
+        ];
+    }
+}

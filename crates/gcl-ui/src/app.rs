@@ -97,6 +97,7 @@ pub fn build(
     crate::screens::instances::wire(&window, &bridge, &run);
     crate::screens::instance::wire(&window, &bridge, &run, &editor);
     crate::screens::browser::wire(&window, &bridge);
+    crate::screens::project::wire(&window, &bridge);
     crate::screens::accounts::wire(&window, &bridge);
     crate::screens::settings::wire(&window, &bridge, &editor);
 
