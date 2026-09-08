@@ -8,6 +8,9 @@ export component ListRow inherits Rectangle {
     in property <bool> alt: false;
     // What a screen reader says the row is. Set it to the row's primary text.
     in property <string> title;
+    // Gap between the row's own columns. A list whose rows line up under a column header
+    // sets the same value on both, so the two never drift apart.
+    in property <length> column-spacing: Theme.gap;
     callback clicked();
 
     height: Theme.row-height;
@@ -20,6 +23,9 @@ export component ListRow inherits Rectangle {
 
     accessible-role: button;
     accessible-label: root.title;
+    // The stripe, spelled out for a flow test: only `alt` decides it, and there is no other
+    // way to read a background color back out of the element tree.
+    accessible-description: root.alt ? "alt" : "";
     accessible-action-default => {
         root.clicked();
     }
@@ -33,7 +39,7 @@ export component ListRow inherits Rectangle {
     HorizontalLayout {
         padding-left: Theme.pad;
         padding-right: Theme.pad;
-        spacing: Theme.gap;
+        spacing: root.column-spacing;
         @children
     }
 

@@ -413,3 +413,39 @@ and comparator), `371e542` (browser UI), `a79eaae` (vanilla-target and increment
 `just lint-claude` PASS. `just check` was not re-run for this docs task; Task 5's flow test and
 the fixes in `a79eaae` already exercised the feature end to end. CurseForge's `latestFilesIndexes`
 shape stays VERIFY without a key.
+
+### Plan 13 status (2026-09-08)
+
+Design doc: `docs/superpowers/specs/2026-09-08-browser-columns-design.md`. Browser results are
+now a table, and a dense list stripes its rows.
+
+- `SearchHit.updated` carries the hit's last-changed date, from Modrinth's `date_modified` and
+  CurseForge's `dateModified` (RFC 3339, empty when the source names none). `models::search_row`
+  shortens it to `YYYY-MM-DD` for the row.
+- Columns come from theme tokens: `col-author` 140 px, `col-downloads` 100 px right-aligned,
+  `col-date` 110 px, `col-action` 170 px, and `col-gap` 16 px between them. `results_header` and
+  `pack_results_header` name them; both are hidden while the list is empty. The header over the
+  button column is the one place the target is named — "Version for 1.20.1 fabric" — so no row
+  repeats it.
+- The state line under a row's button is a short phrase that fits the column: `Latest <n>`,
+  `Installed <n>`, `Installed <n> ↑` when the copy is behind, `No version`, `Checking…` while
+  the job has not answered, and `Could not check` when it answered with nothing usable.
+- `row_title` is not a click target: no `TouchArea`, no underline, no pointer cursor. It keeps
+  an `accessible-label` and a default action for a screen reader; `ListRow`'s own area opens
+  the details for a pointer.
+- `ListRow` gained `alt` (odd-row tint from `Theme.surface-alt`, behind hover and selection)
+  and `column-spacing`. Its `accessible-description` reads back `alt`, which is how a flow test
+  reads a stripe.
+- Install, Update and Add patch the affected row with `set_row_data`. Nothing calls `set_rows`
+  with a fresh model after a search has painted, and a target change resets each row in place,
+  so a decoded icon is never thrown away and the list never blinks.
+- `flow_content` pins all of it: the header is absent before a search and present after,
+  `BrowserScreen::title_touch` does not exist, the state lines read as above, the row model and
+  every decoded icon survive an Add with no row falling back to "Checking…", and both the
+  browser results and an instance's content list alternate `alt`.
+
+`just ui-xtest`'s browse leg clicked `305,114` for the first hit's title. The header row moved
+every result down, so that click landed on the header and opened nothing; it is `305,138` now.
+
+Commits: `6efca93` (the date field), `fb93e70` (columns, stripes, in-place updates), and this
+task's fix and tests. `just check` PASS (1089 tests). `just ui-xtest` PASS.

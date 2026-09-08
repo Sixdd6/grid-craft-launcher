@@ -5,6 +5,14 @@ All notable changes to GRID Craft Launcher are documented here. Format follows
 
 ## Unreleased
 
+- Browser: search and modpack results line up in columns — Name, Author, Downloads, Last
+  updated, and the button — under a header row that names them and, over the button column,
+  the Minecraft version and loader every row was checked against. The state line under a
+  button is one short phrase: "Latest 0.6.13", "Installed 0.6.0 ↑", "Installed 0.6.13",
+  "No version", "Checking…", or "Could not check". A row's title is no longer a click target
+  of its own: the whole row opens the details. Dense lists tint every second row, in the
+  browser and in an instance's content list. An install, an update, or an Add patches the one
+  row it changed, so the results never blink and no icon is fetched twice.
 - Browser: a search row now shows the newest version for the target instance's Minecraft
   version and loader, whether it is already installed, and whether the installed copy is
   older, marked with an `↑`. The row's button reads Add, Update, or a disabled Installed.

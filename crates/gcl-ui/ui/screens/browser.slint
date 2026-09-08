@@ -50,8 +50,8 @@ export global BrowserState {
     // The Minecraft version the latest-version job actually resolved each row against, as
     // `fetch_latest` (`src/screens/browser.rs`) last saw it — never the live `minecraft`
     // filter field above, which a user can keep editing after that job has already run.
-    // `target_label()` reads this pair, not the filter, so the state line under a row never
-    // claims a target the rows on screen were not actually checked against.
+    // `target_label()` reads this pair, not the filter, so the column header over the
+    // buttons never claims a target the rows on screen were not actually checked against.
     in-out property <string> latest_minecraft: "";
     // The loader the latest-version job actually resolved each row against, `any` for none.
     in-out property <string> latest_loader: "";
@@ -223,10 +223,13 @@ export component BrowserScreen inherits Rectangle {
     // "1.20.1 fabric", or empty when the target the latest-version job resolved against
     // named no Minecraft version or no loader. Reads `latest_minecraft`/`latest_loader`,
     // which is what that job actually ran with, not the filter fields: a user can keep
-    // editing `minecraft`/`loader` after the search has already answered, and the state
-    // lines must keep naming the target they were really checked against until the next
-    // search or target change re-resolves them. What every state line below reads as
-    // "<mc> <loader>".
+    // editing `minecraft`/`loader` after the search has already answered, and the header
+    // must keep naming the target the rows were really checked against until the next
+    // search or target change re-resolves them.
+    //
+    // It is said once, in the column header over the buttons, and never in a row: a row's
+    // state line is one short phrase in a 170 px column, and the target repeated on every
+    // row of the page pushed the version number itself out of view.
     function target_label() -> string {
         return (BrowserState.latest_minecraft != "" && BrowserState.latest_loader != ""
             && BrowserState.latest_loader != "any")
@@ -234,19 +237,14 @@ export component BrowserScreen inherits Rectangle {
             : "";
     }
 
-    // "Latest for 1.20.1 fabric: 1.2.3", or "Latest: 1.2.3" with no known target.
-    function latest_text(number: string) -> string {
-        return root.target_label() != ""
-            ? "Latest for " + root.target_label() + ": " + number
-            : "Latest: " + number;
-    }
-
-    // The line `row_state_text` shows under a row's description: "Checking…" while the
-    // latest-version job has not answered for this row yet, "No version for …" when nothing
-    // at the source fits the target, "Installed: <n>" when the installed copy is the latest
-    // one, and "Installed: <n> · ↑ <latest line>" when the installed copy is older — the
-    // installed number stays on screen next to what it would become, rather than dropping
-    // out the moment a row goes from "installed" to "older".
+    // The line `row_state_text` shows under a row's button, short enough to fit the button
+    // column without eliding: "Checking…" while the latest-version job has not answered for
+    // this row yet, "Could not check" when it answered with nothing usable, "No version"
+    // when nothing at the source fits the target, "Latest <n>" when the target does not have
+    // it, "Installed <n>" when it has the newest one, and "Installed <n> ↑" when the copy it
+    // has is behind — the arrow is what says an Update is waiting, and the number stays the
+    // installed one, so the line never changes width when a row goes from installed to
+    // older. Which target all of this is about is said once, in the column header.
     //
     // A row starts at state "unknown" with no latest number, and that is the one that reads
     // "Checking…". `InstallState::Unknown` — the install-state lookup itself failed — comes
@@ -258,17 +256,15 @@ export component BrowserScreen inherits Rectangle {
             return latest_number == "" ? "Checking…" : "Could not check";
         }
         if (state == "none") {
-            return root.target_label() != ""
-                ? "No version for " + root.target_label()
-                : "No version";
+            return "No version";
         }
         if (state == "installed") {
-            return "Installed: " + installed_number;
+            return "Installed " + installed_number;
         }
         if (state == "older") {
-            return "Installed: " + installed_number + " · ↑ " + root.latest_text(latest_number);
+            return "Installed " + installed_number + " ↑";
         }
-        return root.latest_text(latest_number);
+        return "Latest " + latest_number;
     }
 
     // The kind the filters name, empty when the source offers none.
@@ -514,7 +510,9 @@ export component BrowserScreen inherits Rectangle {
             HorizontalLayout {
                 padding-left: Theme.pad;
                 padding-right: Theme.pad;
-                spacing: Theme.gap;
+                // The same gap the rows below set on their `ListRow`, so a label sits over
+                // its own column.
+                spacing: Theme.col-gap;
 
                 Rectangle { width: Theme.icon-size; horizontal-stretch: 0; }
 
@@ -560,6 +558,7 @@ export component BrowserScreen inherits Rectangle {
 
             for row[i] in BrowserState.pack_rows: pack_row := ListRow {
                 title: row.title;
+                column-spacing: Theme.col-gap;
                 // Content-driven, same as `row_open` above: `pack_layout`'s preferred height
                 // already reflects however many lines the wrapped title takes.
                 height: max(pack_layout.preferred-height, pack_action.preferred-height);
@@ -680,7 +679,9 @@ export component BrowserScreen inherits Rectangle {
             HorizontalLayout {
                 padding-left: Theme.pad;
                 padding-right: Theme.pad;
-                spacing: Theme.gap;
+                // The same gap the rows below set on their `ListRow`, so a label sits over
+                // its own column.
+                spacing: Theme.col-gap;
 
                 Rectangle { width: Theme.icon-size; horizontal-stretch: 0; }
 
@@ -716,7 +717,20 @@ export component BrowserScreen inherits Rectangle {
                     horizontal-stretch: 0;
                 }
 
-                Rectangle { width: Theme.col-action; horizontal-stretch: 0; }
+                // The button column's own label, and the one place the target is named:
+                // every state line under a button below is about this Minecraft version and
+                // loader, so none of them repeats it.
+                Text {
+                    text: root.target_label() != ""
+                        ? "Version for " + root.target_label()
+                        : "Version";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    width: Theme.col-action;
+                    horizontal-alignment: center;
+                    horizontal-stretch: 0;
+                    overflow: elide;
+                }
             }
         }
 
@@ -758,6 +772,7 @@ export component BrowserScreen inherits Rectangle {
 
                 for row[i] in BrowserState.rows: row_open := ListRow {
                     title: row.title;
+                    column-spacing: Theme.col-gap;
                     // Content-driven: a wrapped multi-line title (see `row_title` below) is
                     // not clipped to a fixed three-line height. `row_layout` is the inner
                     // `VerticalLayout` that carries the title and the description; its

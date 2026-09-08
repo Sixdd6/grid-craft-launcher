@@ -365,6 +365,12 @@ saw in your report.
 - One accent color for primary actions and selection. A separate danger color marks only
   destructive actions (remove, delete).
 - Text over icons. No gradients; shadows kept to one level; corner radius from `Theme.radius`.
+- A dense list stripes: `ListRow`'s `alt` paints `Theme.surface-alt` on odd rows (hover and
+  selection still win), and it reads back through the row's `accessible-description` so a flow
+  test can assert the stripe. A list with columns sizes them from `Theme.col-author`,
+  `col-downloads` (right-aligned), `col-date`, and `col-action`, spaced by `col-gap` — set that
+  same gap on the header layout and on each row's `column-spacing`, or the labels drift off
+  their columns.
 - Show state in place: a task's progress bar lives in `ProgressPanel`, in the row for that task,
   not in a modal. The instance list and detail screen mark a running game in place, through
   `RunState`, rather than a separate "now playing" panel.

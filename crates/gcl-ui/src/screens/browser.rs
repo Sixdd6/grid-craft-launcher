@@ -1306,7 +1306,7 @@ fn set_row_fields(
 /// `latest_generation` rather than reusing the one the last search stamped.
 ///
 /// Every row goes back to "Checking…" first. What is on screen was answered about the
-/// instance the user has just left — a row reading "Installed: 0.6.0" for an instance that
+/// instance the user has just left — a row reading "Installed 0.6.0" for an instance that
 /// has none of it is worse than a row saying it does not know yet — and the new target may
 /// run another Minecraft version or another loader, so the latest version itself can change
 /// too, not only the install state.

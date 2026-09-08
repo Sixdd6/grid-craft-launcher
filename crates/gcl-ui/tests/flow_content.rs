@@ -88,6 +88,7 @@ fn the_browser_adds_content_and_installs_a_modpack() {
         installing_a_modpack_from_the_pack_search(app).await;
         installing_a_modpack_from_a_file(app).await;
         rows_show_the_latest_version_and_what_is_installed(app).await;
+        the_content_list_stripes_its_rows(app).await;
     });
 }
 
@@ -226,6 +227,10 @@ async fn searching_and_adding_a_mod_installs_its_file(app: &TestApp) {
         "and on no hits. A sample row would be Sodium under the same project id as the \
          fixture, so it would pass the search assertions below without a search having run"
     );
+    assert!(
+        !app.has("BrowserScreen::results_header"),
+        "and on no column header: there are no rows for it to sit over yet"
+    );
     assert_eq!(
         app.window
             .global::<BrowserState>()
@@ -258,6 +263,15 @@ async fn searching_and_adding_a_mod_installs_its_file(app: &TestApp) {
             .accessible_label(),
         Some(format!("Add to {INSTANCE}").into()),
         "the row's button names the instance it adds to"
+    );
+    assert!(
+        app.has("BrowserScreen::results_header"),
+        "the column header comes up with the rows it labels"
+    );
+    assert!(
+        !app.has("BrowserScreen::title_touch"),
+        "and the title is not a click target of its own: it has no `TouchArea`, no hover \
+         cue and no underline. `ListRow`'s own area under it is what opens the details"
     );
     a_long_title_wraps_and_a_description_loses_its_line_breaks(app);
 
@@ -592,19 +606,25 @@ async fn rows_show_the_latest_version_and_what_is_installed(app: &TestApp) {
     )
     .await;
 
-    let latest = |number: &str| format!("Latest for {} fabric: {number}", support::MC);
     assert_eq!(
         state_texts(app),
         vec![
-            latest(support::MOD_VERSION),
-            format!(
-                "Installed: {} · ↑ {}",
-                support::OLDER_INSTALLED_NUMBER,
-                latest(support::OLDER_LATEST_NUMBER)
-            ),
-            format!("Installed: {}", support::CURRENT_VERSION_NUMBER),
+            format!("Latest {}", support::MOD_VERSION),
+            format!("Installed {} ↑", support::OLDER_INSTALLED_NUMBER),
+            format!("Installed {}", support::CURRENT_VERSION_NUMBER),
         ],
-        "one row per install state: nothing installed, an older copy, and the newest copy"
+        "one row per install state: nothing installed, an older copy, and the newest copy. \
+         Each line is the short form that fits the button column: no target named, and the \
+         `↑` is what says an update is waiting"
+    );
+    assert!(
+        app.has_label(&format!("Version for {} fabric", support::MC)),
+        "the target is named once, in the column header over the buttons"
+    );
+    assert_eq!(
+        stripes(app, "BrowserScreen::row_open"),
+        vec!["", "alt", ""],
+        "and the results stripe: every odd row is tinted, every even one is not"
     );
     assert_eq!(
         install_labels(app),
@@ -630,6 +650,25 @@ async fn rows_show_the_latest_version_and_what_is_installed(app: &TestApp) {
 /// (f4) A plain Add answers the same way an Update does: the row it was pressed on says the
 /// instance now has that mod, without another search.
 async fn adding_leaves_the_row_reading_installed(app: &TestApp) {
+    // The list must not be rebuilt by an install: a fresh `set_rows` would blink every row
+    // away and take the icons with it, since those are decoded once per search. So capture
+    // what identity there is to lose — the model behind `BrowserState.rows` and the size of
+    // every decoded icon in it — with the icons already landed, and check both afterwards.
+    app.wait_until(
+        "every row's icon to have been fetched and decoded",
+        |window| {
+            window
+                .global::<BrowserState>()
+                .get_rows()
+                .iter()
+                .all(|row| row.icon.size().width > 0)
+        },
+        QUICK,
+    )
+    .await;
+    let model_before = app.window.global::<BrowserState>().get_rows();
+    let icons_before = icon_sizes(&app.window);
+
     app.click_nth("BrowserScreen::row_install", 1);
     app.wait_until(
         "the add to finish and the row to catch up with it",
@@ -646,7 +685,7 @@ async fn adding_leaves_the_row_reading_installed(app: &TestApp) {
     .await;
     assert_eq!(
         state_texts(app)[1],
-        format!("Installed: {}", support::OLDER_LATEST_NUMBER),
+        format!("Installed {}", support::OLDER_LATEST_NUMBER),
         "the row the Add was pressed on reads as installed"
     );
     assert_eq!(
@@ -663,6 +702,78 @@ async fn adding_leaves_the_row_reading_installed(app: &TestApp) {
             .join(support::OLDER_LATEST_FILE)
             .is_file(),
         "the file really did land in the other instance"
+    );
+
+    let model_after = app.window.global::<BrowserState>().get_rows();
+    assert!(
+        model_before == model_after,
+        "the install patched the one row it changed: `BrowserState.rows` is still the same \
+         model, not a new one built over the same hits"
+    );
+    assert_eq!(
+        icon_sizes(&app.window),
+        icons_before,
+        "so every row kept the icon it had already decoded"
+    );
+    assert!(
+        !state_texts(app).iter().any(|text| text == CHECKING),
+        "and no row went back to `{CHECKING}`: only the row that changed was rewritten"
+    );
+}
+
+/// The size of every search row's decoded icon, in row order. `(0, 0)` is a row whose icon
+/// has not landed, which is also what a row rebuilt from scratch would read as.
+fn icon_sizes(window: &AppWindow) -> Vec<(u32, u32)> {
+    window
+        .global::<BrowserState>()
+        .get_rows()
+        .iter()
+        .map(|row| {
+            let size = row.icon.size();
+            (size.width, size.height)
+        })
+        .collect()
+}
+
+/// (g) The instance's content list stripes its rows the same way the browser results do.
+///
+/// [`LATEST_INSTANCE`] is the one instance with more than one mod in it, so it is the one
+/// that can show a tint and no tint next to each other.
+async fn the_content_list_stripes_its_rows(app: &TestApp) {
+    app.click("Rail::rail_instances");
+    app.click("InstancesScreen::refresh_button");
+    app.wait_until(
+        "the instance list to show the instance with two mods in it",
+        |window| instance_names(window).iter().any(|n| n == LATEST_INSTANCE),
+        QUICK,
+    )
+    .await;
+    // The rows reach the model one turn before the repeater has built an element for each
+    // of them, and this flow addresses them by element, not by index into the model.
+    app.wait_until(
+        "the list to have drawn a row per instance",
+        |_| app.all("InstancesScreen::row_open").len() == instance_names(&app.window).len(),
+        QUICK,
+    )
+    .await;
+    let index = instance_names(&app.window)
+        .iter()
+        .position(|name| name == LATEST_INSTANCE)
+        .expect("the instance with two mods is in the list");
+    app.click_nth("InstancesScreen::row_open", index);
+    app.wait_until(
+        "its content tab to list both mods",
+        |window| {
+            window.global::<App>().get_screen() == Screen::Instance
+                && content_names(window).len() == 2
+        },
+        QUICK,
+    )
+    .await;
+    assert_eq!(
+        stripes(app, "InstanceScreen::row_open"),
+        vec!["", "alt"],
+        "the second row is tinted and the first is not"
     );
 }
 
@@ -688,6 +799,20 @@ fn install_labels(app: &TestApp) -> Vec<String> {
         .map(|row| {
             row.accessible_label()
                 .map(|label| label.to_string())
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// What each row of a striped list reads as: `"alt"` for a tinted row, `""` for a plain
+/// one. `ListRow` puts its own `alt` into `accessible-description`, because a background
+/// color is not otherwise readable from the element tree.
+fn stripes(app: &TestApp, id: &str) -> Vec<String> {
+    app.all(id)
+        .iter()
+        .map(|row| {
+            row.accessible_description()
+                .map(|text| text.to_string())
                 .unwrap_or_default()
         })
         .collect()
@@ -769,7 +894,7 @@ async fn updating_replaces_the_older_file(app: &TestApp) {
     );
     assert_eq!(
         state_texts(app)[1],
-        format!("Installed: {}", support::OLDER_LATEST_NUMBER),
+        format!("Installed {}", support::OLDER_LATEST_NUMBER),
         "and the row says so without another search"
     );
     assert_eq!(
@@ -797,11 +922,7 @@ async fn changing_the_target_re_answers_every_row(app: &TestApp) {
     .await;
     assert_eq!(
         state_texts(app)[1],
-        format!(
-            "Latest for {} fabric: {}",
-            support::MC,
-            support::OLDER_LATEST_NUMBER
-        ),
+        format!("Latest {}", support::OLDER_LATEST_NUMBER),
         "the instance that has none of it hears only what the newest version is"
     );
     assert_eq!(

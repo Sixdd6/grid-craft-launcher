@@ -49,6 +49,10 @@ export global Theme {
     out property <length> accent-stripe: 3px;
     // Side of a project icon tile in a search row. The details header shows no icon.
     out property <length> icon-size: 48px;
+    // Gap between the columns of a search row and the header above it. Wider than
+    // `gap`, because the Downloads column is right-aligned and would otherwise end one
+    // `gap` short of the Last updated label next to it.
+    out property <length> col-gap: 16px;
     // Width of a search row's Author column.
     out property <length> col-author: 140px;
     // Width of a search row's Downloads column, right-aligned.

@@ -136,14 +136,16 @@ ui-xtest:
     want_search='"Search"'
     want_details='"Project details"'
     # Open the browser from the rail, search Modrinth, and open the first hit's details.
-    # A search row's title is its own click target, so real hit-testing is the only check
-    # that it can be hit at all. Needs the network: the search and the description are
-    # live Modrinth calls.
+    # The title carries no touch area of its own any more: the row underneath it is what
+    # opens the details, so real hit-testing is the only check that a click on the title
+    # reaches that row. Needs the network: the search and the description are live Modrinth
+    # calls. `y=138` is the first row's title; the column header above it sits at `y=104`,
+    # and a click there opens nothing.
     timeout 180 env GCL_XTEST_DISPLAY="$disp" python3 scripts/ui-xtest.py focus \
         click:68,145 sleep:2 click:600,29 type:sodium key:Return
     wait_for "the search to answer" 120 'grep -q "$want_search" "$root/gui.log"'
     timeout 180 env GCL_XTEST_DISPLAY="$disp" python3 scripts/ui-xtest.py focus \
-        shot:"$root/results.png" click:305,114
+        shot:"$root/results.png" click:305,138
     wait_for "the project details to load" 120 \
         'grep -q "$want_details" "$root/gui.log"'
     timeout 180 env GCL_XTEST_DISPLAY="$disp" python3 scripts/ui-xtest.py focus \
