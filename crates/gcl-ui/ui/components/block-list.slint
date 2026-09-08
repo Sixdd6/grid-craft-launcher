@@ -1,0 +1,165 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Block } from "../types.slint";
+
+// Renders one project description or version changelog as a column of blocks, styled by kind.
+// Both `ProjectScreen`'s Description tab and `NotesDialog` instantiate this, so a table, an
+// image, or a quote renders the same way in either place.
+//
+// Pure layout, per the `slint-ui` skill: it holds no fetch state of its own. An `image` block's
+// `image`/`image_state` fields already carry whatever `screens/project.rs`'s per-open
+// `url -> ImageState` side map knows, merged into the `Block` list before it reaches here (see
+// `types.slint`'s doc comment on `Block` for that split).
+export component BlockList inherits VerticalLayout {
+    in property <[Block]> blocks: [];
+    spacing: Theme.gap;
+    alignment: start;
+
+    for block in root.blocks: block_item := VerticalLayout {
+        if block.kind == "code": code_pane := Rectangle {
+            background: Theme.surface-raised;
+            border-radius: Theme.radius;
+
+            VerticalLayout {
+                padding: Theme.pad;
+
+                Text {
+                    text: block.text;
+                    color: Theme.text;
+                    font-size: Theme.font-size;
+                    font-family: Theme.font-family-mono;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        if block.kind == "rule": Rectangle {
+            height: 1px;
+            background: Theme.border;
+        }
+
+        if block.kind == "quote": HorizontalLayout {
+            spacing: Theme.gap;
+
+            Rectangle {
+                width: Theme.accent-stripe;
+                background: Theme.accent;
+            }
+
+            Text {
+                text: block.text;
+                color: Theme.text-muted;
+                font-size: Theme.font-size;
+                wrap: word-wrap;
+                horizontal-stretch: 1;
+            }
+        }
+
+        if block.kind == "table": table_pane := Rectangle {
+            background: Theme.surface-raised;
+            border-radius: Theme.radius;
+
+            property <int> table_columns: max(block.columns, 1);
+            property <int> table_rows: block.columns > 0 ? block.cells.length / block.columns : 0;
+            // A plain `Rectangle` has no preferred size of its own: unlike a layout, it does
+            // not grow to fit a child that sets its own height, so the tile's height is set
+            // here explicitly and the `ScrollView` below fills it. Leaving this unset once
+            // left the tile (and everything the `for` loop placed after it) at zero height,
+            // stacking every later block on top of the table instead of below it.
+            height: (table_pane.table_rows * (Theme.font-size + Theme.gap)) + 2 * Theme.pad;
+
+            // Wrapped in its own `ScrollView` rather than the Description tab's outer one, so
+            // a table wider than the screen scrolls on its own tile instead of widening the
+            // whole page.
+            ScrollView {
+                height: 100%;
+
+                HorizontalLayout {
+                    padding: Theme.pad;
+                    spacing: Theme.pad;
+
+                    for col in table_pane.table_columns: column := VerticalLayout {
+                        spacing: Theme.gap / 2;
+                        width: Theme.label-width;
+
+                        for row in table_pane.table_rows: cell := Text {
+                            text: block.cells[row * table_pane.table_columns + col];
+                            color: Theme.text;
+                            font-size: Theme.font-size-small;
+                            font-weight: row == 0 ? Theme.font-weight-bold : Theme.font-weight-regular;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+
+        if block.kind == "image": image_pane := VerticalLayout {
+            spacing: Theme.gap / 2;
+
+            if block.image_state == "loading" || block.image_state == "": placeholder := Rectangle {
+                height: Theme.icon-size * 2;
+                background: Theme.surface-raised;
+                border-radius: Theme.radius;
+
+                Text {
+                    text: "Loading image…";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            if block.image_state == "failed": Text {
+                text: "[Image: " + block.text + "]";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+                wrap: word-wrap;
+            }
+
+            if block.image_state == "ready": Image {
+                source: block.image;
+                height: Theme.icon-size * 4;
+                image-fit: contain;
+                horizontal-alignment: left;
+            }
+
+            if block.image_state == "ready" && block.text != "": Text {
+                text: block.text;
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+                wrap: word-wrap;
+            }
+        }
+
+        if block.kind == "bullet": HorizontalLayout {
+            padding-left: block.depth * 2 * Theme.gap;
+
+            Text {
+                text: "• " + block.text;
+                color: Theme.text;
+                wrap: word-wrap;
+                font-size: Theme.font-size;
+                font-weight: Theme.font-weight-regular;
+            }
+        }
+
+        if block.kind != "code" && block.kind != "rule" && block.kind != "quote"
+            && block.kind != "table" && block.kind != "image" && block.kind != "bullet": Text {
+            text: block.text;
+            color: Theme.text;
+            wrap: word-wrap;
+            horizontal-stretch: 1;
+            font-size: block.kind == "heading1" ? Theme.font-size-h1
+                : (block.kind == "heading2" || block.kind == "heading3"
+                    ? Theme.font-size-title
+                    : Theme.font-size);
+            font-weight: (block.kind == "heading1" || block.kind == "heading2"
+                || block.kind == "heading3" || block.kind == "heading4"
+                || block.kind == "heading5" || block.kind == "heading6")
+                ? Theme.font-weight-bold
+                : Theme.font-weight-regular;
+        }
+    }
+}

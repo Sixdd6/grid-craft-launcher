@@ -11,8 +11,9 @@ use gcl_core::mojang::manifest::{ManifestEntry, VersionType};
 use gcl_core::sources::{SearchHit, SourceId};
 
 use super::{
-    account_row, content_row, decode_icon, format_bytes, format_downloads, instance_row,
-    loader_version_row, search_row, setting_rows, short_time, version_row,
+    account_row, content_row, decode_description_image, decode_icon, format_bytes,
+    format_downloads, instance_row, loader_version_row, search_row, setting_rows, short_time,
+    version_row,
 };
 
 #[test]
@@ -168,6 +169,74 @@ fn decode_icon_reads_png_webp_gif_and_jpeg_bytes() {
 #[test]
 fn decode_icon_rejects_garbage() {
     assert!(decode_icon(b"not an image").is_err());
+}
+
+#[test]
+fn decode_description_image_accepts_a_normal_png() {
+    let image = image::RgbaImage::from_pixel(8, 6, image::Rgba([1, 2, 3, 255]));
+    let mut bytes = Vec::new();
+    image::DynamicImage::ImageRgba8(image)
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap_or_else(|err| panic!("encode: {err}"));
+    let (width, height, pixels) =
+        decode_description_image(&bytes).unwrap_or_else(|err| panic!("decode: {err}"));
+    assert_eq!((width, height), (8, 6));
+    assert_eq!(pixels.len(), (8 * 6 * 4) as usize);
+}
+
+#[test]
+fn decode_description_image_refuses_one_wider_than_the_4096px_cap() {
+    // A real 4097px-wide PNG would be a heavy fixture; `image::Limits` rejects an oversized
+    // image by reading its header before decoding pixels, so a correctly-sized but
+    // claims-to-be-huge PNG (built by hand, header only) exercises the same refusal path
+    // without a multi-megabyte fixture. `image`'s decoder answers a `LimitError` before it
+    // tries to allocate the claimed dimensions.
+    let mut png = Vec::new();
+    {
+        // 5000x5000 8-bit RGBA PNG: signature, IHDR with the oversized dimensions, and an
+        // otherwise-empty IDAT/IEND so the decoder gets far enough to see the size and stop.
+        png.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&5000u32.to_be_bytes());
+        ihdr.extend_from_slice(&5000u32.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+        write_png_chunk(&mut png, b"IHDR", &ihdr);
+        write_png_chunk(&mut png, b"IEND", &[]);
+    }
+    let err = decode_description_image(&png).expect_err("an oversized image must be refused");
+    assert!(
+        err.to_lowercase().contains("limit") || err.to_lowercase().contains("dimension"),
+        "expected a limit-related error, got: {err}"
+    );
+}
+
+/// Appends one PNG chunk (length, type, data, a placeholder CRC): the decoder only needs to
+/// parse `IHDR` far enough to check `image::Limits` before the CRC would matter here.
+fn write_png_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    out.extend_from_slice(kind);
+    out.extend_from_slice(data);
+    out.extend_from_slice(&crc32(kind, data).to_be_bytes());
+}
+
+/// A minimal CRC-32 (the same polynomial PNG uses), so the hand-built chunk above passes the
+/// decoder's checksum check on its way to `image::Limits` rejecting the declared size.
+fn crc32(kind: &[u8], data: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFF_FFFF;
+    for byte in kind.iter().chain(data.iter()) {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
 }
 
 #[test]

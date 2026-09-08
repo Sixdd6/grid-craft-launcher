@@ -1,6 +1,7 @@
 import { CheckBox, ListView, ScrollView, TextEdit } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
 import { Block, ContentVersionRow, Screen } from "../types.slint";
+import { BlockList } from "../components/block-list.slint";
 import { Button } from "../components/button.slint";
 import { EmptyState } from "../components/empty-state.slint";
 import { ListRow } from "../components/list-row.slint";
@@ -199,38 +200,8 @@ export component ProjectScreen inherits Rectangle {
                     title: "No description";
                 }
 
-                for block in ProjectState.blocks: block_item := VerticalLayout {
-                    if block.kind == "code": code_pane := Rectangle {
-                        background: Theme.surface-raised;
-                        border-radius: Theme.radius;
-
-                        VerticalLayout {
-                            padding: Theme.pad;
-
-                            Text {
-                                text: block.text;
-                                color: Theme.text;
-                                font-size: Theme.font-size;
-                                font-family: Theme.font-family-mono;
-                                wrap: word-wrap;
-                            }
-                        }
-                    }
-
-                    if block.kind != "code": Text {
-                        text: block.kind == "bullet" ? "• " + block.text : block.text;
-                        color: Theme.text;
-                        wrap: word-wrap;
-                        font-size: block.kind == "heading1" ? Theme.font-size-h1
-                            : (block.kind == "heading2" || block.kind == "heading3"
-                                ? Theme.font-size-title
-                                : Theme.font-size);
-                        font-weight: (block.kind == "heading1" || block.kind == "heading2"
-                            || block.kind == "heading3" || block.kind == "heading4"
-                            || block.kind == "heading5" || block.kind == "heading6")
-                            ? Theme.font-weight-bold
-                            : Theme.font-weight-regular;
-                    }
+                BlockList {
+                    blocks: ProjectState.blocks;
                 }
             }
         }
@@ -392,8 +363,30 @@ export component PreviewProjectScreen inherits ProjectScreen {
                 text: "A modern rendering engine for Minecraft which greatly improves performance (https://modrinth.com/mod/sodium).",
             },
             { kind: "heading2", text: "Features" },
-            { kind: "bullet", text: "Significantly improved frame rates" },
-            { kind: "bullet", text: "Much better frame pacing" },
+            { kind: "bullet", text: "Significantly improved frame rates", depth: 0 },
+            { kind: "bullet", text: "Much better frame pacing", depth: 0 },
+            { kind: "bullet", text: "Configurable advanced culling", depth: 1 },
+            { kind: "bullet", text: "Per-chunk culling passes", depth: 2 },
+            { kind: "rule" },
+            {
+                kind: "quote",
+                text: "Sodium requires a graphics driver with OpenGL 4.6 support.",
+            },
+            {
+                kind: "table",
+                columns: 3,
+                cells: [
+                    "Minecraft", "Loader", "Status",
+                    "1.21.1", "Fabric", "Supported",
+                    "1.21.1", "Quilt", "Supported",
+                    "1.20.1", "Fabric", "Legacy",
+                ],
+            },
+            {
+                kind: "image",
+                text: "Sodium's F3 debug overlay",
+                image_state: "loading",
+            },
             { kind: "code", text: "sodium.enable_advanced_culling=true" },
         ];
         ProjectState.versions = [

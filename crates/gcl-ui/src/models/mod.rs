@@ -94,6 +94,29 @@ pub fn decode_icon(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     Ok((width, height, rgba.into_raw()))
 }
 
+/// Decodes a fetched description image's bytes into raw RGBA8 pixels and its dimensions, under
+/// a 4096x4096 pixel decode cap.
+///
+/// Unlike [`decode_icon`], a description image comes from any `https://` host (no CDN
+/// allowlist, per `download::images::ImageCache`), so the cap here guards against a
+/// pathologically large image using this decode step to exhaust memory, the same reason the
+/// core-side [`gcl_core`] design doc gives for capping the fetch itself at 5 MiB. `image`'s
+/// [`image::Limits`] rejects an oversized image before it is fully decoded rather than after.
+pub fn decode_description_image(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(4096);
+    limits.max_image_height = Some(4096);
+
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|err| err.to_string())?;
+    reader.limits(limits);
+    let img = reader.decode().map_err(|err| err.to_string())?;
+    let rgba = img.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    Ok((width, height, rgba.into_raw()))
+}
+
 /// Builds the accounts row for one saved account. `active` marks the launch default.
 pub fn account_row(a: &Account, active: bool) -> AccountRow {
     AccountRow {

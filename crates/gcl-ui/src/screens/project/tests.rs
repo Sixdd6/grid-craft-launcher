@@ -1,6 +1,7 @@
 use gcl_core::instances::model::{ContentKind, Loader};
 use gcl_core::sources::richtext::Block as CoreBlock;
 use gcl_core::sources::{ReleaseKind, SourceId, Version};
+use slint::Model;
 
 use super::{block_row, version_row};
 
@@ -43,6 +44,62 @@ fn block_row_maps_every_other_kind() {
         "bullet"
     );
     assert_eq!(block_row(&CoreBlock::Code("c".to_string())).kind, "code");
+}
+
+#[test]
+fn block_row_carries_a_bullets_depth() {
+    let row = block_row(&CoreBlock::Bullet {
+        depth: 2,
+        text: "nested".to_string(),
+    });
+    assert_eq!(row.kind, "bullet");
+    assert_eq!(row.text, "nested");
+    assert_eq!(row.depth, 2);
+}
+
+#[test]
+fn block_row_maps_a_rule_with_no_text() {
+    let row = block_row(&CoreBlock::Rule);
+    assert_eq!(row.kind, "rule");
+    assert_eq!(row.text, "");
+}
+
+#[test]
+fn block_row_maps_a_quote() {
+    let row = block_row(&CoreBlock::Quote("be careful".to_string()));
+    assert_eq!(row.kind, "quote");
+    assert_eq!(row.text, "be careful");
+}
+
+#[test]
+fn block_row_maps_an_image_to_its_url_and_alt_text_with_no_fetch_state_yet() {
+    let row = block_row(&CoreBlock::Image {
+        url: "https://example.invalid/screenshot.png".to_string(),
+        alt: "A screenshot".to_string(),
+    });
+    assert_eq!(row.kind, "image");
+    assert_eq!(row.text, "A screenshot");
+    assert_eq!(row.url, "https://example.invalid/screenshot.png");
+    assert_eq!(row.image_state, "");
+    assert_eq!(row.image.size().width, 0);
+}
+
+#[test]
+fn block_row_flattens_a_table_row_major_with_the_header_as_row_zero() {
+    let row = block_row(&CoreBlock::Table {
+        header: vec!["Minecraft".to_string(), "Loader".to_string()],
+        rows: vec![
+            vec!["1.21.1".to_string(), "Fabric".to_string()],
+            vec!["1.20.1".to_string(), "Quilt".to_string()],
+        ],
+    });
+    assert_eq!(row.kind, "table");
+    assert_eq!(row.columns, 2);
+    let cells: Vec<String> = row.cells.iter().map(|c| c.to_string()).collect();
+    assert_eq!(
+        cells,
+        vec!["Minecraft", "Loader", "1.21.1", "Fabric", "1.20.1", "Quilt"]
+    );
 }
 
 #[test]

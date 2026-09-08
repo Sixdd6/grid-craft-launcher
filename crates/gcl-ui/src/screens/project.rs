@@ -466,34 +466,68 @@ fn build_version_rows(
         .collect()
 }
 
-/// Builds the description-tab row for one block.
+/// Builds the description-tab (or Notes modal) row for one block.
 ///
-/// The Slint `Block` carries a kind and one text today, so a table arrives as its rows
-/// joined with `|` and an image as its alt text. Plan 10's Task 3 gives the struct the
-/// `depth`, `url`, `columns`, and `cells` fields these kinds really need.
+/// Every field but the one or two a block's own kind uses is left at its type default — `0`,
+/// `""`, `[]`, an empty `image` — per the doc comment on `Block` in `types.slint`. A table's
+/// header and rows flatten into one row-major `cells` array, header included as row 0, with
+/// `columns` saying how to slice it back apart; `BlockList` computes the row count itself. An
+/// image block's `url` is filled here so `screens/project.rs`'s image-fetch job (Task 4) knows
+/// what to fetch, but `image`/`image_state` are left empty: nothing has been fetched yet at the
+/// point this pure conversion runs, and the per-open `url -> ImageState` side map merges the
+/// fetched result in afterward, on the UI thread.
 pub fn block_row(block: &CoreBlock) -> Block {
-    let (kind, text) = match block {
-        CoreBlock::Heading(level, text) => {
-            (format!("heading{}", (*level).clamp(1, 6)), text.clone())
+    match block {
+        CoreBlock::Heading(level, text) => Block {
+            kind: format!("heading{}", (*level).clamp(1, 6)).into(),
+            text: text.as_str().into(),
+            ..Default::default()
+        },
+        CoreBlock::Paragraph(text) => Block {
+            kind: "paragraph".into(),
+            text: text.as_str().into(),
+            ..Default::default()
+        },
+        CoreBlock::Bullet { depth, text } => Block {
+            kind: "bullet".into(),
+            text: text.as_str().into(),
+            depth: i32::from(*depth),
+            ..Default::default()
+        },
+        CoreBlock::Code(text) => Block {
+            kind: "code".into(),
+            text: text.as_str().into(),
+            ..Default::default()
+        },
+        CoreBlock::Quote(text) => Block {
+            kind: "quote".into(),
+            text: text.as_str().into(),
+            ..Default::default()
+        },
+        CoreBlock::Rule => Block {
+            kind: "rule".into(),
+            ..Default::default()
+        },
+        CoreBlock::Image { url, alt } => Block {
+            kind: "image".into(),
+            text: alt.as_str().into(),
+            url: url.as_str().into(),
+            ..Default::default()
+        },
+        CoreBlock::Table { header, rows } => {
+            let columns = header.len();
+            let cells: Vec<slint::SharedString> = header
+                .iter()
+                .chain(rows.iter().flatten())
+                .map(|cell| cell.as_str().into())
+                .collect();
+            Block {
+                kind: "table".into(),
+                columns: columns as i32,
+                cells: ModelRc::new(VecModel::from(cells)),
+                ..Default::default()
+            }
         }
-        CoreBlock::Paragraph(text) => ("paragraph".to_string(), text.clone()),
-        CoreBlock::Bullet { text, .. } => ("bullet".to_string(), text.clone()),
-        CoreBlock::Code(text) => ("code".to_string(), text.clone()),
-        CoreBlock::Quote(text) => ("quote".to_string(), text.clone()),
-        CoreBlock::Rule => ("rule".to_string(), String::new()),
-        CoreBlock::Image { alt, .. } => ("image".to_string(), alt.clone()),
-        CoreBlock::Table { header, rows } => (
-            "table".to_string(),
-            std::iter::once(header)
-                .chain(rows)
-                .map(|row| row.join(" | "))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        ),
-    };
-    Block {
-        kind: kind.into(),
-        text: text.as_str().into(),
     }
 }
 
