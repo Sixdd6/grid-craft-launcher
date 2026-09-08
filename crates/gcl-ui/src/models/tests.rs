@@ -178,6 +178,35 @@ fn content_row_falls_back_to_the_file_stem_with_no_title() {
 }
 
 #[test]
+fn content_row_labels_the_source_button_with_the_full_display_name() {
+    let modrinth = ContentEntry {
+        source: "modrinth".into(),
+        ..ContentEntry::default()
+    };
+    let curseforge = ContentEntry {
+        source: "curseforge".into(),
+        ..ContentEntry::default()
+    };
+    let manual = ContentEntry {
+        source: "file".into(),
+        ..ContentEntry::default()
+    };
+    assert_eq!(
+        content_row(&modrinth, false).source_label.as_str(),
+        "Modrinth"
+    );
+    assert_eq!(
+        content_row(&curseforge, false).source_label.as_str(),
+        "CurseForge"
+    );
+    assert_eq!(
+        content_row(&manual, false).source_label.as_str(),
+        "file",
+        "an unnamed source falls back to its own key rather than an empty label"
+    );
+}
+
+#[test]
 fn search_row_carries_the_icon_url_with_no_decoded_icon_yet() {
     let hit = SearchHit {
         source: SourceId::Modrinth,

@@ -291,11 +291,11 @@ export component InstanceScreen inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             horizontal-stretch: 0;
-                            width: 80px;
+                            width: row_source_button.min-width;
                             row_source_button := Button {
-                                text: row.source == "file" ? "No source page" : row.source;
+                                text: row.source == "file" ? "No source page" : row.source_label;
                                 access_label: row.source == "file"
-                                    ? "No source page" : "Open on " + row.source;
+                                    ? "No source page" : "Open on " + row.source_label;
                                 enabled: row.source != "file";
                                 clicked => {
                                     root.open_project(row.source, row.project_id);
@@ -775,6 +775,7 @@ export component PreviewInstanceScreen inherits InstanceScreen {
             {
                 project_id: "AANobbMI",
                 source: "modrinth",
+                source_label: "Modrinth",
                 name: "Sodium",
                 version: "OrgTMPmO",
                 kind: "mod",
@@ -785,6 +786,7 @@ export component PreviewInstanceScreen inherits InstanceScreen {
             {
                 project_id: "gvQqBUqZ",
                 source: "modrinth",
+                source_label: "Modrinth",
                 name: "Lithium",
                 version: "ZSNsJrPI",
                 kind: "mod",

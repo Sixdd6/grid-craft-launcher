@@ -50,6 +50,7 @@ pub fn content_row(e: &ContentEntry, update: bool) -> ContentRow {
     ContentRow {
         project_id: e.project_id.as_str().into(),
         source: e.source.as_str().into(),
+        source_label: source_label(&e.source).into(),
         name: e
             .title
             .as_deref()
@@ -144,6 +145,17 @@ pub fn latest_row_fields(
             installed_number.clone(),
             "older".to_string(),
         ),
+    }
+}
+
+/// The source button's label: the display name a user knows, not the lowercase key
+/// `ContentEntry::source` stores. Falls back to the key itself for a source not yet named
+/// here, so a new source shows something rather than nothing.
+fn source_label(source: &str) -> String {
+    match source {
+        "modrinth" => "Modrinth".to_string(),
+        "curseforge" => "CurseForge".to_string(),
+        other => other.to_string(),
     }
 }
 
