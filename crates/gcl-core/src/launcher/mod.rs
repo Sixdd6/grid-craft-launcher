@@ -325,6 +325,31 @@ fn check_preset(preset: GcPreset, support: &GcSupport, java: &Path) -> Result<()
     .into())
 }
 
+/// Fails when the minimum heap is above the maximum, which no JVM would start with.
+fn check_heap(jvm: &InstanceJvm) -> Result<(), crate::Error> {
+    if let (Some(min), Some(max)) = (jvm.min_mib, jvm.max_mib)
+        && min > max
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("minimum heap {min} MiB is above the maximum {max} MiB"),
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// A java path the user configured, as a [`JavaInstall`]. Only the path is real.
+fn configured_java(path: PathBuf) -> JavaInstall {
+    JavaInstall {
+        path,
+        major: 0,
+        version: "configured".to_string(),
+        vendor: "configured".to_string(),
+        source: JavaSource::Manual,
+    }
+}
+
 /// Where a Java came from, as a status line says it.
 fn java_source_text(source: JavaSource) -> &'static str {
     match source {
@@ -805,17 +830,37 @@ impl Launcher {
 
     /// Which garbage collector presets the Java this instance launches with can run. Blocks.
     ///
-    /// The Java is resolved the way a launch resolves it: the instance's own `java_path`,
-    /// else `config.toml`'s, else a runtime for the instance's Minecraft version, which is
+    /// The Java is the one [`Launcher::launch_java`] resolves, which is what a launch runs:
+    /// the instance's own `java_path`, else `config.toml`'s, else a runtime for the version
+    /// this instance launches — the loader profile merged over vanilla, not vanilla alone —
     /// installed with the usual progress events when none is present. That binary is then
     /// probed, whatever it came from, since only the probe knows its real version and flags.
     /// The answer is cached per binary and modification time, so repeated calls run java once.
     pub fn gc_support(&self, slug: &str) -> Result<GcSupportView, crate::Error> {
         let instance = self.instances().get(slug)?;
-        let install = self.configured_or_detected_java(
-            instance.config.jvm.java_path.as_deref(),
-            &instance.config.minecraft,
-        )?;
+        let install = self.launch_java(&instance, None)?;
+        self.gc_view(install, instance.config.jvm.gc)
+    }
+
+    /// [`Launcher::gc_support`] for one java binary named directly. Blocks.
+    ///
+    /// For a caller about to save that path: the presets are read off the Java the instance
+    /// will have, not the one it has now. `saved` is the preset the view reports as selected,
+    /// folded the same way [`Launcher::gc_support`] folds an instance's own.
+    pub fn gc_support_for_java(
+        &self,
+        java: &Path,
+        saved: GcPreset,
+    ) -> Result<GcSupportView, crate::Error> {
+        self.gc_view(configured_java(java.to_path_buf()), saved)
+    }
+
+    /// Probes one resolved Java and builds the picker's view of it.
+    fn gc_view(
+        &self,
+        install: JavaInstall,
+        saved: GcPreset,
+    ) -> Result<GcSupportView, crate::Error> {
         let support = self.probe_gc(&install.path)?;
         Ok(GcSupportView {
             label: format!(
@@ -826,7 +871,7 @@ impl Launcher {
             java_path: install.path,
             major: support.major,
             presets: supported_presets(support.major, &support.flags),
-            saved: instance.config.jvm.gc.for_major(support.major),
+            saved: saved.for_major(support.major),
         })
     }
 
@@ -837,19 +882,41 @@ impl Launcher {
     /// ([`GcPreset::for_major`]): asking for [`GcPreset::Zgc`] on Java 23 or later saves
     /// [`GcPreset::ZgcGenerational`], the same collector under the name the picker shows.
     pub fn set_instance_gc(&self, slug: &str, preset: GcPreset) -> Result<(), crate::Error> {
-        let view = self.gc_support(slug)?;
-        let preset = preset.for_major(view.major);
-        if preset != GcPreset::Default && !view.presets.contains(&preset) {
-            return Err(crate::java::Error::UnsupportedPreset {
-                preset: preset.to_string(),
-                java: view.java_path,
-                major: view.major,
-            }
-            .into());
-        }
+        let jvm = self.instances().get(slug)?.config.jvm;
+        self.set_instance_jvm_gc(slug, InstanceJvm { gc: preset, ..jvm })?;
+        Ok(())
+    }
+
+    /// Replaces an instance's whole JVM block, the collector preset included, in one write.
+    ///
+    /// The preset is checked against the Java this instance will launch with *after* the
+    /// call: `jvm.java_path` when it is set, else `config.toml`'s, else the runtime for the
+    /// version it launches. So a new java path and a new preset sent together are judged by
+    /// the new binary, and a refused preset leaves `instance.toml` exactly as it was.
+    /// [`GcPreset::Default`] needs no collector, so it probes nothing.
+    ///
+    /// Returns the preset as saved, which [`GcPreset::for_major`] may have folded.
+    pub fn set_instance_jvm_gc(
+        &self,
+        slug: &str,
+        jvm: InstanceJvm,
+    ) -> Result<GcPreset, crate::Error> {
+        check_heap(&jvm)?;
         let mut instance = self.instances().get(slug)?;
-        instance.config.jvm.gc = preset;
-        Ok(instance.save()?)
+        let gc = match jvm.gc {
+            GcPreset::Default => GcPreset::Default,
+            preset => {
+                let mut wanted = instance.clone();
+                wanted.config.jvm = jvm.clone();
+                let java = self.launch_java(&wanted, None)?.path;
+                let support = self.probe_gc(&java)?;
+                check_preset(preset, &support, &java)?;
+                preset.for_major(support.major)
+            }
+        };
+        instance.config.jvm = InstanceJvm { gc, ..jvm };
+        instance.save()?;
+        Ok(gc)
     }
 
     /// Runs the cached collector probe on one java binary. Blocks.
@@ -867,15 +934,7 @@ impl Launcher {
     /// A caller that sends the heap fields back with a default `gc` would otherwise silently
     /// clear a preset it never asked about.
     pub fn set_instance_jvm(&self, slug: &str, jvm: InstanceJvm) -> Result<(), crate::Error> {
-        if let (Some(min), Some(max)) = (jvm.min_mib, jvm.max_mib)
-            && min > max
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("minimum heap {min} MiB is above the maximum {max} MiB"),
-            )
-            .into());
-        }
+        check_heap(&jvm)?;
         let mut instance = self.instances().get(slug)?;
         instance.config.jvm = InstanceJvm {
             gc: instance.config.jvm.gc,
@@ -1127,16 +1186,7 @@ impl Launcher {
 
         let plan = self.install_instance(slug)?;
         let instance = self.instances().get(slug)?;
-        let java = match instance
-            .config
-            .jvm
-            .java_path
-            .clone()
-            .or_else(|| self.read_config().jvm.java_path.clone())
-        {
-            Some(path) => path,
-            None => self.ensure_java_for(&plan)?.path,
-        };
+        let java = self.launch_java(&instance, Some(&plan))?.path;
         // A preset the JVM was not built with is refused here, before a command exists: a
         // flag java does not know kills the game after the user pressed Play. With no preset
         // chosen there is nothing to check and nothing to pass, so nothing is probed either.
@@ -1795,15 +1845,75 @@ impl Launcher {
             .map(Path::to_path_buf)
             .or_else(|| self.read_config().jvm.java_path.clone())
         {
-            Some(path) => Ok(JavaInstall {
-                path,
-                major: 0,
-                version: "configured".to_string(),
-                vendor: "configured".to_string(),
-                source: JavaSource::Manual,
-            }),
+            Some(path) => Ok(configured_java(path)),
             None => self.java_for_version(mc),
         }
+    }
+
+    /// The Java one instance launches with. The one resolution every caller uses.
+    ///
+    /// The instance's own `java_path` wins, then `config.toml`'s; either is taken as given,
+    /// so nothing is probed or downloaded when the user has already pointed at a JVM. With
+    /// neither set the runtime comes from the install plan of the version this instance
+    /// launches, because a loader profile may name a different `javaVersion` than the
+    /// Minecraft version it inherits from. Pass `plan` when the caller already has one
+    /// ([`Launcher::prepare_launch`] does); `None` resolves one through
+    /// [`Launcher::launch_plan`], which downloads no game files.
+    fn launch_java(
+        &self,
+        instance: &Instance,
+        plan: Option<&InstallPlan>,
+    ) -> Result<JavaInstall, crate::Error> {
+        let configured = instance
+            .config
+            .jvm
+            .java_path
+            .clone()
+            .or_else(|| self.read_config().jvm.java_path.clone());
+        if let Some(path) = configured {
+            return Ok(configured_java(path));
+        }
+        match plan {
+            Some(plan) => self.ensure_java_for(plan),
+            None => {
+                let plan = self.launch_plan(instance)?;
+                self.ensure_java_for(&plan)
+            }
+        }
+    }
+
+    /// The install plan for the version this instance launches, fetching metadata only.
+    ///
+    /// The loader profile is read from the version cache when `loader_version` names a build
+    /// whose profile is already there; otherwise the loader is installed first, the way a
+    /// launch installs it. No library, asset, or client jar is downloaded either way, so this
+    /// is cheap enough for a settings screen that only wants the plan's `javaVersion`.
+    fn launch_plan(&self, instance: &Instance) -> Result<InstallPlan, crate::Error> {
+        let loader = instance.config.loader;
+        let mc = instance.config.minecraft.clone();
+        let cached = match (loader, instance.config.loader_version.as_deref()) {
+            (Loader::None, _) => Some(mc.clone()),
+            (_, Some(version)) => {
+                let id = crate::loaders::version_id(loader, &mc, version);
+                self.mojang().load_cached_version(&id)?.map(|_| id)
+            }
+            (_, None) => None,
+        };
+        let id = match cached {
+            Some(id) => id,
+            None => self.install_loader(&instance.slug)?,
+        };
+        let mojang = self.mojang();
+        let root = self.root.clone();
+        Ok(self.block_on(async move {
+            // The parent has to be in the cache before `resolve` can merge the chain.
+            if id != mc {
+                mojang.version(&mc).await?;
+            }
+            let profile = mojang.version(&id).await?;
+            let resolved = mojang.resolve(profile, keep_both_libraries(loader))?;
+            crate::mojang::plan_install(&resolved, &root, &RuleContext::current(), None)
+        })?)
     }
 
     /// Turns an unset, `recommended`, or `latest` loader version into a concrete build.

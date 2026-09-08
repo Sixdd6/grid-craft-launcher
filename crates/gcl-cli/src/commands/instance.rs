@@ -40,8 +40,9 @@ pub enum InstanceCommand {
     },
     /// Change one instance's JVM settings. Flags left out keep their current value.
     ///
-    /// `--gc` is checked against the Java this instance launches with, which is probed
-    /// first; a preset that Java lacks is refused and nothing is saved.
+    /// `--gc` is checked against the Java this instance will launch with once this command
+    /// has run — `--java-path` included — which is probed first. A preset that Java lacks is
+    /// refused and nothing at all is written, heap fields included.
     Jvm {
         /// Slug of the instance.
         slug: String,
@@ -52,11 +53,18 @@ pub enum InstanceCommand {
         #[arg(long)]
         max: Option<u32>,
         /// Extra JVM argument. Repeat the flag for more than one; replaces the whole list.
+        /// Passing none keeps the current list: use --clear-extra to empty it.
         #[arg(long)]
         extra: Vec<String>,
+        /// Empty the extra JVM argument list.
+        #[arg(long, conflicts_with = "extra")]
+        clear_extra: bool,
         /// Path to the `java` binary this instance launches with.
         #[arg(long)]
         java_path: Option<PathBuf>,
+        /// Forget this instance's java path, so the launcher picks a runtime again.
+        #[arg(long, conflicts_with = "java_path")]
+        clear_java_path: bool,
         /// Garbage collector preset. See `gcl instance gc <slug>` for the ones this Java has.
         #[arg(long, value_enum)]
         gc: Option<GcPresetArg>,
@@ -181,37 +189,37 @@ pub fn run(launcher: &Launcher, format: Format, command: InstanceCommand) -> Res
             min,
             max,
             extra,
+            clear_extra,
             java_path,
+            clear_java_path,
             gc,
         } => {
             let previous = launcher.instances().get(&slug)?.config.jvm.clone();
             let next = InstanceJvm {
                 min_mib: min.or(previous.min_mib),
                 max_mib: max.or(previous.max_mib),
-                java_path: java_path.or_else(|| previous.java_path.clone()),
-                extra_args: if extra.is_empty() {
-                    previous.extra_args.clone()
+                java_path: if clear_java_path {
+                    None
                 } else {
-                    extra
+                    java_path.or(previous.java_path)
                 },
-                gc: previous.gc,
+                extra_args: match (clear_extra, extra.is_empty()) {
+                    (true, _) => Vec::new(),
+                    (false, true) => previous.extra_args,
+                    (false, false) => extra,
+                },
+                gc: gc.map_or(previous.gc, Into::into),
             };
-            launcher.set_instance_jvm(&slug, next)?;
-            if let Some(arg) = gc {
-                // The preset is checked against the java this command may just have changed,
-                // so a refused one rolls the whole command back rather than half-saving it.
-                if let Err(err) = set_gc(launcher, &slug, arg.into()) {
-                    launcher.set_instance_jvm(&slug, previous)?;
-                    return Err(err);
-                }
-            }
+            // One call: it probes the java this command is about to save, checks the preset
+            // against it, and writes the whole block only once both hold. Nothing is written
+            // when the check fails, so there is nothing to roll back.
+            save_jvm(launcher, &slug, next)?;
             let saved = launcher.instances().get(&slug)?;
             report_jvm(format, &slug, &saved.config.jvm)
         }
         InstanceCommand::Gc { slug } => {
             let view = launcher.gc_support(&slug)?;
-            let selected = launcher.instances().get(&slug)?.config.jvm.gc;
-            report_gc(format, &view, selected)
+            report_gc(format, &view)
         }
         InstanceCommand::Rename { slug, new_name } => {
             let renamed = launcher.instances().rename(&slug, &new_name)?;
@@ -239,21 +247,30 @@ struct PresetRow {
     description: String,
 }
 
-/// Saves one garbage collector preset, refusing one the instance's Java lacks.
+/// Saves one instance's JVM block, naming what its Java does carry when a preset is refused.
 ///
-/// `Launcher::set_instance_gc` refuses it too; this checks first only so the message can
-/// list what the Java does carry.
-fn set_gc(launcher: &Launcher, slug: &str, preset: GcPreset) -> Result<()> {
-    let view = launcher.gc_support(slug)?;
-    if preset != GcPreset::Default && !view.presets.contains(&preset) {
-        bail!(
-            "{} cannot run the {preset} garbage collector; supported: {}",
-            view.label,
-            preset_tokens(&view.presets)
-        );
+/// Only `Launcher::set_instance_jvm_gc` decides: it probes the java it is about to save and
+/// answers `UnsupportedPreset`. This adds the list of presets that java does have, which the
+/// error itself does not carry.
+fn save_jvm(launcher: &Launcher, slug: &str, jvm: InstanceJvm) -> Result<()> {
+    match launcher.set_instance_jvm_gc(slug, jvm) {
+        Ok(_) => Ok(()),
+        Err(gcl_core::Error::Java(gcl_core::java::Error::UnsupportedPreset {
+            preset,
+            java,
+            major,
+        })) => {
+            let supported = launcher
+                .gc_support_for_java(&java, GcPreset::Default)
+                .map(|view| preset_tokens(&view.presets))
+                .unwrap_or_default();
+            bail!(
+                "Java {major} at {} cannot run the {preset} garbage collector; supported: {supported}",
+                java.display()
+            )
+        }
+        Err(err) => Err(err.into()),
     }
-    launcher.set_instance_gc(slug, preset)?;
-    Ok(())
 }
 
 /// The presets as one comma-separated line of the tokens `--gc` takes.
@@ -298,11 +315,12 @@ fn unset_or(value: Option<u32>) -> String {
 }
 
 /// Prints the presets one instance's Java offers and which one is saved.
-fn report_gc(
-    format: Format,
-    view: &gcl_core::launcher::GcSupportView,
-    selected: GcPreset,
-) -> Result<()> {
+///
+/// The saved preset comes from the view, not from `instance.toml`: `GcSupportView.saved` is
+/// the preset as this Java runs it, so a plain ZGC saved before the runtime moved to Java 23
+/// reads as the generational row that Java really offers.
+fn report_gc(format: Format, view: &gcl_core::launcher::GcSupportView) -> Result<()> {
+    let selected = view.saved;
     let supported = selected == GcPreset::Default || view.presets.contains(&selected);
     match format {
         Format::Json => print_json(&serde_json::json!({

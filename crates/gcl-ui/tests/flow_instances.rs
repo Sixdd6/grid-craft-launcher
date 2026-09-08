@@ -43,6 +43,9 @@ fn the_instances_screen_creates_launches_and_removes_an_instance() {
         the_click_after_escape_still_lands(app).await;
         renaming_and_deleting_an_instance(app).await;
         another_java_offers_another_collector_list(app).await;
+        a_saved_zgc_reads_as_the_generational_row_on_java_25(app).await;
+        a_refused_pick_reads_the_collector_block_again(app).await;
+        a_probe_that_fails_says_so_without_a_dialog(app).await;
     });
 }
 
@@ -722,4 +725,119 @@ async fn point_java_at(app: &TestApp, java: &Path, version: &str) {
         QUICK,
     )
     .await;
+}
+
+/// (g) A plain ZGC saved on Java 21 is the generational row once the Java is 25.
+///
+/// Java 25 dropped `ZGenerational` because ZGC is generational there, so the picker offers one
+/// ZGC row, named "ZGC (generational)". The saved token is still `zgc`, and the combo has to
+/// land on that row rather than falling back to the first one and calling it unavailable.
+async fn a_saved_zgc_reads_as_the_generational_row_on_java_25(app: &TestApp) {
+    let java21 = app.root().join("fake-java");
+    point_java_at(app, &java21, "Java 21").await;
+    app.select_combo("InstanceScreen::gc_combo", gc_index(&app.window, "ZGC"));
+    app.wait_until(
+        "plain ZGC to reach instance.toml",
+        |_| instance_toml(app, "jvm").contains(r#"gc = "zgc""#),
+        QUICK,
+    )
+    .await;
+
+    let java25 = support::write_java_stand_in(app.root(), "fake-java-25", support::PRINTFLAGS_25);
+    point_java_at(app, &java25, "Java 25").await;
+    assert_eq!(
+        app.el("InstanceScreen::gc_combo").accessible_value(),
+        Some("ZGC (generational)".into()),
+        "the saved plain ZGC selects the one ZGC row Java 25 offers. The list is {:?}",
+        gc_labels(&app.window)
+    );
+    assert!(
+        !app.has("InstanceScreen::gc_unavailable_text"),
+        "and nothing calls it unavailable. Showing: {:?}",
+        app.ids()
+    );
+}
+
+/// (h) A pick the Java refuses reads the collector block again, so nothing stale is left.
+///
+/// The stand-in java's dump loses its `UseSerialGC` line behind the screen's back, so the
+/// block on screen still offers a Serial row the JVM no longer runs. Picking it is refused,
+/// and the refused row must not be left selected: the block is read again from the Java that
+/// refused it, which drops Serial from the list and puts the combo back on what is saved.
+///
+/// The pick goes through `InstanceState.gc_pick` rather than the combo. `select_combo` walks
+/// the popup one row at a time and fires a pick for every row it passes, so a successful pick
+/// on the way would reload the block before the refused one ever ran.
+async fn a_refused_pick_reads_the_collector_block_again(app: &TestApp) {
+    let dump: String = support::PRINTFLAGS_25
+        .lines()
+        .filter(|line| !line.contains("UseSerialGC"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    support::write_java_stand_in(app.root(), "fake-java-25", &dump);
+
+    let serial = gc_index(&app.window, "Serial");
+    let state = app.window.global::<InstanceState>();
+    state.set_gc_selected_index(serial as i32);
+    state.invoke_gc_pick("serial".into());
+    app.wait_until(
+        "the refusal to open the error dialog",
+        |window| window.global::<App>().get_error_open(),
+        QUICK,
+    )
+    .await;
+    app.click("Dialog::cancel_button");
+    app.wait_until(
+        "the collector block to be read again from the Java that refused the pick",
+        |window| {
+            !gc_labels(window).iter().any(|label| label == "Serial")
+                && !window.global::<InstanceState>().get_gc_loading()
+        },
+        QUICK,
+    )
+    .await;
+    assert_eq!(
+        app.el("InstanceScreen::gc_combo").accessible_value(),
+        Some("ZGC (generational)".into()),
+        "the combo is back on the saved preset, not the refused row. The list is {:?}",
+        gc_labels(&app.window)
+    );
+    let toml = instance_toml(app, "jvm");
+    assert!(
+        toml.contains(r#"gc = "zgc""#),
+        "and the refused preset was not saved. instance.toml holds:
+{toml}"
+    );
+}
+
+/// (i) A Java that cannot answer the probe is a status line, not the error dialog.
+///
+/// The probe is background work nobody asked for: it runs on every load of the JVM tab. A
+/// modal over the screen for it would interrupt whatever the user was doing.
+async fn a_probe_that_fails_says_so_without_a_dialog(app: &TestApp) {
+    let broken = support::write_failing_java(app.root(), "fake-java-broken");
+    // Tab 2 is JVM, already showing from the step before.
+    app.type_into("InstanceScreen::java_path_field", &broken.to_string_lossy());
+    support::pump();
+    app.click("InstanceScreen::jvm_save_button");
+    app.wait_until(
+        "the failed probe to reach the status line",
+        |_| {
+            app.has("InstanceScreen::gc_unavailable_text")
+                && text_of(app, "InstanceScreen::gc_unavailable_text")
+                    .contains("Could not check the garbage collector")
+        },
+        QUICK,
+    )
+    .await;
+    assert!(
+        !app.window.global::<App>().get_error_open(),
+        "a failed probe opens no dialog. It says: {}",
+        app.window.global::<App>().get_error_text()
+    );
+    assert!(
+        !app.has("AppWindow::error_text"),
+        "and none is in the element tree. Showing: {:?}",
+        app.ids()
+    );
 }

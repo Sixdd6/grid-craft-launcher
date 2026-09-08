@@ -72,6 +72,12 @@ pub const PRINTFLAGS_21: &str = include_str!("../../../../tests/fixtures/java/pr
 /// The same, from a real Java 17: no `ZGenerational` flag, so no generational ZGC.
 pub const PRINTFLAGS_17: &str = include_str!("../../../../tests/fixtures/java/printflags-17.txt");
 
+/// The same, from a real Java 25, which dropped `ZGenerational`: there ZGC is generational.
+pub const PRINTFLAGS_25: &str = include_str!("../../../../tests/fixtures/java/printflags-25.txt");
+
+/// A stand-in java that cannot answer the collector probe: it fails, as a broken JVM does.
+const FAILING_JAVA: &str = "#!/bin/sh\necho 'java: could not create the VM' >&2\nexit 1\n";
+
 /// The stand-in for `java`.
 ///
 /// Two behaviours in one script. Asked for a flag dump (`-XX:+PrintFlagsFinal`, which only
@@ -823,6 +829,19 @@ pub fn write_java_stand_in(dir: &Path, name: &str, dump: &str) -> PathBuf {
     std::fs::write(&path, FAKE_JAVA).expect("write the stand-in java");
     std::fs::write(path.with_file_name(format!("{name}.flags")), dump)
         .expect("write the stand-in java flag dump");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    path
+}
+
+/// Writes a stand-in java named `name` that exits 1 whatever it is asked, and returns it.
+///
+/// For the probe failure path: a JVM that answers nothing must reach the screen as a status
+/// line, not as the shared error dialog.
+#[cfg(unix)]
+pub fn write_failing_java(dir: &Path, name: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join(name);
+    std::fs::write(&path, FAILING_JAVA).expect("write the failing stand-in java");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     path
 }

@@ -104,6 +104,11 @@ checks, so an instance saved as `zgc` before its runtime moved to 23 still launc
 are the same either way. `set_instance_gc` saves the folded preset, and `GcSupportView.saved`
 carries it, so a picker's selection is always one of `GcSupportView.presets`.
 
+`saved` is what both pickers read. `gcl instance gc` prints it as `selected:` and the JVM tab
+selects the row whose token matches it, so a `zgc` written before the runtime moved to 23
+shows as the generational row that Java really offers instead of being called unavailable.
+Neither reads `instance.toml`'s raw token for that.
+
 **One entry per set of flags.** `supported_presets(major, flags)` reads the probe's flag names
 and drops `Zgc` from 23 on, because there both ZGC presets expand to `-XX:+UseZGC` and a picker
 would show two rows that do the same thing. `ZgcGenerational`'s label reads "ZGC (generational)"
@@ -122,6 +127,16 @@ not `Default` and passes the probed major.
 `ZGenerational`. The disable form counts: `-XX:-UseG1GC` under a preset is
 `launch::Error::GcConflict` too. With `GcPreset::Default` there is no conflict, since a
 hand-written collector flag is what extra arguments are for.
+
+**`Launcher::set_instance_jvm_gc` writes the block and its preset once.** It resolves the
+java the block it is about to save will launch with — `jvm.java_path` when set, else
+`config.toml`'s, else the runtime for the version this instance launches — probes that one,
+folds and checks the preset against it, and only then saves. So `gcl instance jvm x
+--java-path <new> --gc <preset>` is judged by the new binary, and a refused preset writes
+nothing at all, heap fields included: there is no half-saved state and nothing to roll back.
+`set_instance_gc` is that call with every other field left as it was. `gcl instance jvm` also
+takes `--clear-extra` and `--clear-java-path`, because passing no `--extra` keeps the current
+list rather than emptying it.
 
 **`Launcher::set_instance_jvm` keeps the saved preset.** It replaces the heap fields, the java
 path, and the extra arguments only, whatever `jvm.gc` holds. A JVM tab that sends the heap back

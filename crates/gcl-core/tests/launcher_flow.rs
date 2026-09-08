@@ -1377,6 +1377,7 @@ const PRINTFLAGS_25: &str = include_str!("../../../tests/fixtures/java/printflag
 #[cfg(unix)]
 fn gc_probe_java(dir: &std::path::Path, dump: &str) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(dir).expect("create the directory holding the stand-in java");
     let dump_file = dir.join("printflags.txt");
     std::fs::write(&dump_file, dump).expect("write the dump");
     let path = dir.join("gc-java.sh");
@@ -1668,6 +1669,222 @@ async fn setting_plain_zgc_on_java_25_saves_the_generational_preset() {
             .jvm
             .gc;
         assert_eq!(saved, GcPreset::ZgcGenerational);
+        dir
+    })
+    .await
+    .expect("blocking task");
+}
+
+/// A stand-in java under `cache/runtimes/<name>/bin/java` that reports `version`.
+///
+/// It answers both probes from one script: `detect`'s `-XshowSettings:properties` run reads
+/// the `java.version` line, and the collector probe reads the banner at the top of the flag
+/// dump, whose recorded version is rewritten to match. A major no real machine carries keeps
+/// [`gcl_core::java::pick_exact`] off whatever JVMs the developer has installed.
+#[cfg(unix)]
+fn fake_runtime(launcher: &Launcher, name: &str, version: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let home = launcher.root().runtimes_dir().join(name);
+    let bin = home.join("bin");
+    std::fs::create_dir_all(&bin).expect("create the runtime directory");
+    let dump_file = home.join("printflags.txt");
+    let dump = PRINTFLAGS_21.replacen("21.0.7", version, 1);
+    std::fs::write(&dump_file, dump).expect("write the dump");
+    let path = bin.join("java");
+    std::fs::write(
+        &path,
+        format!(
+            "#!/bin/sh\necho '    java.version = {version}'\necho '    java.vendor = GRID test'\ncat {}\n",
+            dump_file.display()
+        ),
+    )
+    .expect("write the stand-in java");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    path
+}
+
+/// Serves a vanilla version whose `javaVersion` names `major`, and the manifest around it.
+///
+/// [`common::mock_vanilla`] publishes no `javaVersion` at all, and this flow needs vanilla and
+/// the loader profile to name different ones.
+async fn mock_vanilla_with_java(server: &MockServer, id: &str, major: u32, component: &str) {
+    let base = server.uri();
+    let index_body = serde_json::json!({ "objects": {} })
+        .to_string()
+        .into_bytes();
+    let version = serde_json::json!({
+        "id": id,
+        "type": "release",
+        "mainClass": "net.minecraft.client.main.Main",
+        "minecraftArguments": "--username ${auth_player_name}",
+        "libraries": [],
+        "downloads": {
+            "client": {
+                "sha1": sha1_hex(b"vanilla client jar"),
+                "size": b"vanilla client jar".len(),
+                "url": format!("{base}/vanilla/client.jar"),
+            }
+        },
+        "assetIndex": {
+            "id": "empty",
+            "sha1": sha1_hex(&index_body),
+            "size": index_body.len(),
+            "url": format!("{base}/vanilla/index.json"),
+        },
+        "assets": "empty",
+        "javaVersion": { "component": component, "majorVersion": major },
+    })
+    .to_string();
+    let manifest = serde_json::json!({
+        "latest": { "release": id, "snapshot": id },
+        "versions": [{
+            "id": id,
+            "type": "release",
+            "url": format!("{base}/vanilla/version.json"),
+            "time": "2026-01-01T00:00:00+00:00",
+            "releaseTime": "2026-01-01T00:00:00+00:00",
+            "sha1": sha1_hex(version.as_bytes()),
+            "complianceLevel": 1,
+        }]
+    })
+    .to_string();
+    serve(
+        server,
+        gcl_core::mojang::MANIFEST_PATH,
+        manifest.into_bytes(),
+    )
+    .await;
+    serve(server, "/vanilla/version.json", version.into_bytes()).await;
+    serve(
+        server,
+        "/vanilla/client.jar",
+        b"vanilla client jar".to_vec(),
+    )
+    .await;
+    serve(server, "/vanilla/index.json", index_body).await;
+}
+
+/// A Fabric profile that names its own `javaVersion`, so it disagrees with vanilla's.
+///
+/// The real fixture inherits vanilla's, which is exactly the case this flow cannot use.
+fn fabric_profile_with_java(major: u32, component: &str) -> String {
+    serde_json::json!({
+        "id": "fabric",
+        "inheritsFrom": MC,
+        "type": "release",
+        "mainClass": "net.fabricmc.loader.impl.launch.knot.KnotClient",
+        "libraries": [],
+        "arguments": { "game": [], "jvm": [] },
+        "javaVersion": { "component": component, "majorVersion": major },
+    })
+    .to_string()
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn the_collector_probe_uses_the_java_the_launch_uses() {
+    let server = MockServer::start().await;
+    mock_vanilla_with_java(&server, MC, 43, "gcl-test-gamma").await;
+    serve(
+        &server,
+        &format!("/v2/versions/loader/{MC}"),
+        FABRIC_LOADERS.as_bytes().to_vec(),
+    )
+    .await;
+    serve(
+        &server,
+        &format!("/v2/versions/loader/{MC}/{FABRIC}/profile/json"),
+        fabric_profile_with_java(44, "gcl-test-delta").into_bytes(),
+    )
+    .await;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let uri = server.uri();
+    tokio::task::spawn_blocking(move || {
+        let launcher = launcher(&dir, Some(uri.clone()), Some(uri));
+        let slug = launcher
+            .instances()
+            .create("Pack", MC, Loader::Fabric, None, &BTreeMap::new())
+            .expect("create instance")
+            .slug;
+        // Neither the instance nor the config names a java, so both callers have to resolve
+        // one from the version they launch. Only the loader profile's 44 is right.
+        let vanilla_java = fake_runtime(&launcher, "j43", "43.0.1");
+        let profile_java = fake_runtime(&launcher, "j44", "44.0.1");
+
+        let view = launcher.gc_support(&slug).expect("gc support");
+        let outcome = launcher
+            .launch_instance(&slug, None, Some("tester"), true)
+            .expect("dry run");
+        let LaunchOutcome::DryRun(cmd) = outcome else {
+            panic!("expected a dry run");
+        };
+        assert_eq!(
+            cmd.program, profile_java,
+            "the launch runs the java the loader profile asks for"
+        );
+        assert_eq!(
+            view.java_path,
+            cmd.program,
+            "and the picker probes that same java, not vanilla's {}",
+            vanilla_java.display()
+        );
+        assert_eq!(view.major, 44);
+        dir
+    })
+    .await
+    .expect("blocking task");
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn setting_the_jvm_block_judges_the_preset_by_the_java_path_it_saves() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    tokio::task::spawn_blocking(move || {
+        let (launcher, slug) = instance_launcher(&dir);
+        // The instance starts on a Java 17, which has no generational ZGC.
+        instance_with_probed_java(&launcher, dir.path(), &slug, PRINTFLAGS_17);
+        let java25 = gc_probe_java(&dir.path().join("j25"), PRINTFLAGS_25);
+
+        // A new java path and a new preset in one call are judged by the new binary, and
+        // Java 25's plain ZGC is the generational one.
+        let saved = launcher
+            .set_instance_jvm_gc(
+                &slug,
+                InstanceJvm {
+                    min_mib: Some(2048),
+                    java_path: Some(java25.clone()),
+                    gc: GcPreset::Zgc,
+                    ..InstanceJvm::default()
+                },
+            )
+            .expect("java 25 runs zgc");
+        assert_eq!(saved, GcPreset::ZgcGenerational);
+        let jvm = launcher.instances().get(&slug).expect("reload").config.jvm;
+        assert_eq!(jvm.gc, GcPreset::ZgcGenerational);
+        assert_eq!(
+            jvm.min_mib,
+            Some(2048),
+            "the heap was written in the same go"
+        );
+        assert_eq!(jvm.java_path, Some(java25));
+
+        // A refused preset writes nothing at all, heap fields included.
+        let java17 = gc_probe_java(&dir.path().join("j17"), PRINTFLAGS_17);
+        launcher
+            .set_instance_jvm_gc(
+                &slug,
+                InstanceJvm {
+                    min_mib: Some(4096),
+                    java_path: Some(java17),
+                    gc: GcPreset::ZgcGenerational,
+                    ..InstanceJvm::default()
+                },
+            )
+            .expect_err("the java 17 dump has no ZGenerational flag");
+        let jvm = launcher.instances().get(&slug).expect("reload").config.jvm;
+        assert_eq!(jvm.min_mib, Some(2048), "nothing was written");
+        assert_eq!(jvm.gc, GcPreset::ZgcGenerational);
         dir
     })
     .await

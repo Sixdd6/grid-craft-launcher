@@ -84,6 +84,16 @@ flag dump to stdout, so the parser reads both streams as one text.
   21.0.7 (Mojang's `java-runtime-gamma` and `java-runtime-delta`) and Red Hat OpenJDK 25.0.4.1.
   17 has no `ZGenerational`; 21 has it; 25 dropped it, because ZGC is generational there.
 
+**The picker probes the Java the launch runs.** `Launcher::gc_support` and `prepare_launch`
+resolve it through one helper, `Launcher::launch_java`: the instance's own `java_path`, then
+`config.toml`'s, then `ensure_java_for` on the plan of the version this instance launches.
+That plan is the loader profile merged over vanilla, not vanilla alone, because
+`javaVersion` merges child-wins like every other field — a Fabric or NeoForge profile naming
+its own major would otherwise send the picker to a different JVM than the launch.
+`Launcher::launch_plan` builds it without downloading a game file: it reads the profile from
+`cache/versions/<id>.json` when `loader_version` names a build already installed, and
+installs the loader first when it does not.
+
 `java::gc::ProbeCache::get_or_probe(root, java)` answers from an in-memory map, then from
 `cache/runtimes/gc-probe.json`, then by running the JVM. Both are keyed by the binary's
 canonical path and its modification time in nanoseconds, so a runtime replaced in place is

@@ -101,8 +101,10 @@ export global InstanceState {
     in-out property <string> java_path: "";
 
     // The saved instance's garbage collector preset, as `GcPreset`'s own serde token (e.g.
-    // `"g1"`). Read back by `gc_combo`'s selection and by the heap Save button, so a heap
-    // save never wipes a saved preset it does not itself edit.
+    // `"g1"`). Read back by the heap Save button, so a heap save never wipes a saved preset it
+    // does not itself edit. Rust writes it from the probe's answer, so it is the preset as the
+    // current Java runs it: a plain `"zgc"` saved before the runtime moved to Java 23 reads
+    // back here as `"zgc_generational"`.
     in-out property <string> gc_token: "";
     // Presets the probed Java supports, in menu order, `GcPreset::Default` first. Empty
     // while `gc_loading` is true or the probe has not run yet.
@@ -116,8 +118,9 @@ export global InstanceState {
     // One line naming the probed Java (e.g. "Java 21.0.4 from the Mojang runtime"), or
     // "Preparing Java…" while `gc_loading` is true.
     in-out property <string> gc_status: "";
-    // True from the start of `load` until the GC probe's job answers, whether it installs a
-    // runtime first or not.
+    // True while the collector block is busy: from the start of every `load` until the probe
+    // answers, whether it installs a runtime first or not, and again from a pick until that
+    // pick is saved or refused. A refusal reads the block again, which clears it.
     in-out property <bool> gc_loading: false;
     // Non-empty, already-formatted "Unavailable: <preset> — <reason>" line when the saved
     // preset is not one the current Java supports. Empty otherwise.

@@ -644,13 +644,29 @@ const GC_DUMP: &str = concat!(
     "     bool ZGenerational  = false  {product} {default}\n",
 );
 
+/// The same from a Java 25, which dropped `ZGenerational`: there ZGC is generational.
+const GC_DUMP_25: &str = concat!(
+    "openjdk version \"25.0.4.1\" 2026-01-20 LTS\n",
+    "OpenJDK Runtime Environment Test (build 25.0.4.1+8-LTS)\n",
+    "     bool UseG1GC        = true   {product} {ergonomic}\n",
+    "     bool UseParallelGC  = false  {product} {default}\n",
+    "     bool UseSerialGC    = false  {product} {default}\n",
+    "     bool UseZGC         = false  {product} {default}\n",
+);
+
 /// Writes a stand-in `java` shell script printing [`GC_DUMP`], so no real JVM is needed.
 #[cfg(unix)]
 fn gc_java(dir: &Path) -> std::path::PathBuf {
+    gc_java_named(dir, "gc-java.sh", GC_DUMP)
+}
+
+/// [`gc_java`] with a chosen script name and dump, for a test that needs two javas.
+#[cfg(unix)]
+fn gc_java_named(dir: &Path, name: &str, dump_text: &str) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
-    let dump = dir.join("printflags.txt");
-    std::fs::write(&dump, GC_DUMP).expect("write the dump");
-    let script = dir.join("gc-java.sh");
+    let dump = dir.join(format!("{name}.flags"));
+    std::fs::write(&dump, dump_text).expect("write the dump");
+    let script = dir.join(name);
     std::fs::write(&script, format!("#!/bin/sh\ncat {}\n", dump.display()))
         .expect("write the stand-in java");
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
@@ -809,4 +825,135 @@ fn instance_jvm_rejects_a_gc_token_that_names_no_preset() {
         .assert()
         .code(2)
         .stderr(predicates::str::contains("zgc_generational"));
+}
+
+/// Path of one instance's `instance.toml` under a test root.
+#[cfg(unix)]
+fn instance_toml_path(root: &Path, slug: &str) -> std::path::PathBuf {
+    root.join("instances").join(slug).join("instance.toml")
+}
+
+#[cfg(unix)]
+#[test]
+fn instance_jvm_gc_zgc_on_java_25_saves_the_generational_preset() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let java = gc_java_named(dir.path(), "java-25.sh", GC_DUMP_25);
+    gcl(dir.path())
+        .args(["instance", "create", "Test", "--minecraft", "1.20.1"])
+        .assert()
+        .success();
+
+    // The java path and the preset in one command: the preset is judged by the new java.
+    gcl(dir.path())
+        .args([
+            "instance",
+            "jvm",
+            "test",
+            "--java-path",
+            &java.display().to_string(),
+            "--gc",
+            "zgc",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("gc: zgc_generational"));
+
+    let text =
+        std::fs::read_to_string(instance_toml_path(dir.path(), "test")).expect("instance.toml");
+    assert!(text.contains(r#"gc = "zgc_generational""#), "{text}");
+}
+
+#[cfg(unix)]
+#[test]
+fn instance_gc_shows_a_saved_plain_zgc_as_the_generational_row_on_java_25() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let java = gc_java_named(dir.path(), "java-25.sh", GC_DUMP_25);
+    gcl(dir.path())
+        .args(["instance", "create", "Test", "--minecraft", "1.20.1"])
+        .assert()
+        .success();
+
+    gcl(dir.path())
+        .args([
+            "instance",
+            "jvm",
+            "test",
+            "--java-path",
+            &java.display().to_string(),
+        ])
+        .assert()
+        .success();
+
+    // Written by hand, the way an instance saved before its runtime moved to 25 reads.
+    let path = instance_toml_path(dir.path(), "test");
+    let text = std::fs::read_to_string(&path).expect("instance.toml");
+    std::fs::write(&path, text.replace("[jvm]\n", "[jvm]\ngc = \"zgc\"\n"))
+        .expect("rewrite instance.toml");
+
+    let out = gcl(dir.path())
+        .args(["instance", "gc", "test"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(out).expect("stdout is utf-8");
+    assert!(
+        text.contains("selected: zgc_generational"),
+        "a saved plain ZGC is selected as the row Java 25 offers. It printed:\n{text}"
+    );
+    assert!(
+        !text.contains("Unavailable"),
+        "and it is not called unavailable. It printed:\n{text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn instance_jvm_clear_flags_empty_the_extra_arguments_and_the_java_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let java = gc_java(dir.path());
+    gcl(dir.path())
+        .args(["instance", "create", "Test", "--minecraft", "1.20.1"])
+        .assert()
+        .success();
+    gcl(dir.path())
+        .args([
+            "instance",
+            "jvm",
+            "test",
+            "--java-path",
+            &java.display().to_string(),
+            // A value that starts with a dash needs the `=` form, or clap reads it as a flag.
+            "--extra=-Done=1",
+        ])
+        .assert()
+        .success();
+
+    // No --extra at all keeps the list.
+    gcl(dir.path())
+        .args(["instance", "jvm", "test", "--min", "1024"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("-Done=1"));
+
+    gcl(dir.path())
+        .args([
+            "instance",
+            "jvm",
+            "test",
+            "--clear-extra",
+            "--clear-java-path",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            predicates::str::contains("extra_args: \n")
+                .and(predicates::str::contains("java_path: <unset>")),
+        );
+
+    let text =
+        std::fs::read_to_string(instance_toml_path(dir.path(), "test")).expect("instance.toml");
+    assert!(!text.contains("-Done=1"), "{text}");
+    assert!(!text.contains("gc-java.sh"), "{text}");
 }

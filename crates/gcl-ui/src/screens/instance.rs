@@ -421,17 +421,18 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState, editor: &Editor
             bridge.run_with_error(
                 "Save garbage collector",
                 move |launcher| launcher.set_instance_gc(&job_slug, preset),
-                move |window, result| {
+                move |_window, result| {
                     let (bridge, run, shared) = after;
-                    // `run_with_error` already opened the error dialog on a failure; only a
-                    // success needs a reload, per the `slint-ui` skill's rule for this
-                    // function ("busy" clears either way, which the reload's own load()
-                    // handles for its own gc_loading flag, but a failure has to clear it
-                    // here since load() never runs).
+                    // `run_with_error` already opened the error dialog on a failure. A
+                    // success reloads the whole screen; a refusal reloads the GC block alone,
+                    // which puts the combo back on the preset that is really saved instead of
+                    // leaving it on the row the user picked and nothing accepted. Either
+                    // reload clears `gc_loading` itself.
                     if result.is_ok() {
                         load(&bridge, &run, &shared, &slug);
                     } else {
-                        window.global::<InstanceState>().set_gc_loading(false);
+                        let generation = shared.bump_gc_generation();
+                        load_gc_support(&bridge, &shared, generation);
                     }
                 },
             );
@@ -699,9 +700,13 @@ fn load_gc_support(bridge: &Bridge, shared: &Shared, generation: u64) {
     }
     let job_slug = slug.clone();
     let shared = shared.clone();
-    bridge.run_with_error(
+    // `run`, not `run_with_error`: the probe is background work nobody asked for, and a JVM
+    // that cannot answer it belongs on the tab's own status line, not in a modal over
+    // whatever the user was doing. The job therefore carries its own `Result` as its payload,
+    // so `Bridge` sees an `Ok` either way and opens no dialog.
+    bridge.run(
         "Load GC support",
-        move |launcher| launcher.gc_support(&job_slug),
+        move |launcher| Ok(launcher.gc_support(&job_slug)),
         move |window, result| {
             if shared.gc_generation() != generation {
                 return;
@@ -710,13 +715,21 @@ fn load_gc_support(bridge: &Bridge, shared: &Shared, generation: u64) {
             state.set_gc_loading(false);
             match result {
                 Ok(view) => {
-                    let saved_token = state.get_gc_token().to_string();
+                    // The saved preset comes from the view, not from `gc_token`: it is the
+                    // preset as this Java runs it, so a plain ZGC saved before the runtime
+                    // moved to Java 23 selects the generational row that Java really offers.
+                    let saved = view.saved;
+                    let saved_token = saved.to_string();
                     let rows = gc_rows(&view.presets);
                     let labels: Vec<SharedString> =
                         rows.iter().map(|row| row.label.clone()).collect();
                     let selected = rows.iter().position(|row| row.token == saved_token);
                     state.set_gc_options(ModelRc::new(VecModel::from(rows)));
                     state.set_gc_labels(ModelRc::new(VecModel::from(labels)));
+                    // The heap Save button sends this token back, so it has to be the folded
+                    // one as well: saving the unfolded name would write a preset this Java
+                    // does not list.
+                    state.set_gc_token(saved_token.into());
                     match selected {
                         Some(index) => {
                             state.set_gc_selected_index(index as i32);
@@ -724,13 +737,10 @@ fn load_gc_support(bridge: &Bridge, shared: &Shared, generation: u64) {
                         }
                         None => {
                             state.set_gc_selected_index(0);
-                            let preset = saved_token
-                                .parse::<GcPreset>()
-                                .map(|preset| preset.label().to_string())
-                                .unwrap_or(saved_token);
                             state.set_gc_unavailable_reason(
                                 format!(
-                                    "Unavailable: {preset} — the current Java does not support it"
+                                    "Unavailable: {} — the current Java does not support it",
+                                    saved.label()
                                 )
                                 .into(),
                             );
