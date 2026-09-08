@@ -300,10 +300,18 @@ pub struct GcSupportView {
     pub major: u32,
     /// The presets it can run, in menu order. [`GcPreset::Default`] is always first.
     pub presets: Vec<GcPreset>,
+    /// The instance's saved preset as this Java runs it, so it is always one of `presets`.
+    ///
+    /// [`GcPreset::Zgc`] saved before the runtime moved to Java 23 reads back as
+    /// [`GcPreset::ZgcGenerational`] here, which is the one ZGC entry the list carries there.
+    pub saved: GcPreset,
 }
 
 /// Fails when `preset` is not one the probed JVM carries.
 fn check_preset(preset: GcPreset, support: &GcSupport, java: &Path) -> Result<(), crate::Error> {
+    // Folded first: on Java 23 and later a saved plain ZGC is the generational one, which is
+    // the entry the supported list carries, and both pass the same flags.
+    let preset = preset.for_major(support.major);
     if preset == GcPreset::Default
         || supported_presets(support.major, &support.flags).contains(&preset)
     {
@@ -818,15 +826,19 @@ impl Launcher {
             java_path: install.path,
             major: support.major,
             presets: supported_presets(support.major, &support.flags),
+            saved: instance.config.jvm.gc.for_major(support.major),
         })
     }
 
     /// Saves an instance's garbage collector preset, refusing one its Java lacks. Blocks.
     ///
     /// The check runs before anything is written, so a refused preset leaves `instance.toml`
-    /// as it was.
+    /// as it was. What is saved is the preset this Java really runs
+    /// ([`GcPreset::for_major`]): asking for [`GcPreset::Zgc`] on Java 23 or later saves
+    /// [`GcPreset::ZgcGenerational`], the same collector under the name the picker shows.
     pub fn set_instance_gc(&self, slug: &str, preset: GcPreset) -> Result<(), crate::Error> {
         let view = self.gc_support(slug)?;
+        let preset = preset.for_major(view.major);
         if preset != GcPreset::Default && !view.presets.contains(&preset) {
             return Err(crate::java::Error::UnsupportedPreset {
                 preset: preset.to_string(),

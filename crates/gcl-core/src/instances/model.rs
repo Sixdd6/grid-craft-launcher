@@ -168,6 +168,19 @@ impl GcPreset {
         }
     }
 
+    /// The preset this one really is on a Java of the given major version.
+    ///
+    /// From Java 23 ZGC is generational and both ZGC presets pass `-XX:+UseZGC`, so a saved
+    /// [`GcPreset::Zgc`] is [`GcPreset::ZgcGenerational`] there. [`supported_presets`] lists
+    /// only the generational entry from 23 on, so a preset saved before the runtime was
+    /// upgraded must fold onto it rather than fail a launch or fall out of the picker.
+    pub fn for_major(self, major: u32) -> GcPreset {
+        match self {
+            GcPreset::Zgc if major >= 23 => GcPreset::ZgcGenerational,
+            other => other,
+        }
+    }
+
     /// The JVM flags this preset needs on a Java of the given major version.
     ///
     /// Java 21 and 22 ship both ZGC modes behind `ZGenerational`; 23 and later are
@@ -656,6 +669,22 @@ mod tests {
         let at_23 = supported_presets(23, &flags);
         assert!(!at_23.contains(&GcPreset::Zgc), "{at_23:?}");
         assert!(at_23.contains(&GcPreset::ZgcGenerational), "{at_23:?}");
+    }
+
+    #[test]
+    fn plain_zgc_is_the_generational_preset_from_23_on() {
+        assert_eq!(GcPreset::Zgc.for_major(21), GcPreset::Zgc);
+        assert_eq!(GcPreset::Zgc.for_major(22), GcPreset::Zgc);
+        assert_eq!(GcPreset::Zgc.for_major(23), GcPreset::ZgcGenerational);
+        assert_eq!(GcPreset::Zgc.for_major(25), GcPreset::ZgcGenerational);
+        // Every other preset is itself on every major.
+        for preset in GcPreset::all().iter().filter(|p| **p != GcPreset::Zgc) {
+            for major in [8, 17, 21, 25] {
+                assert_eq!(preset.for_major(major), *preset, "{preset} at {major}");
+            }
+        }
+        // The folded preset is one the flag table then answers the same way.
+        assert_eq!(GcPreset::Zgc.flags(25), GcPreset::ZgcGenerational.flags(25));
     }
 
     #[test]

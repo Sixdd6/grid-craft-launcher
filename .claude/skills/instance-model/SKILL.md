@@ -97,6 +97,13 @@ that will not parse, so one word written by a newer build would hide a whole pac
 `generational_zgc` and `zgcgenerational` → `zgc_generational`, `none` and `launcher` →
 `default`. `UnknownGcPreset`'s message lists every valid token.
 
+**A saved `zgc` folds onto `zgc_generational` from 23 on.** `GcPreset::for_major(major)`
+returns `ZgcGenerational` for `Zgc` when `major >= 23` and every other preset unchanged.
+`Launcher`'s `check_preset` (used by `set_instance_gc` and `prepare_launch`) folds before it
+checks, so an instance saved as `zgc` before its runtime moved to 23 still launches; the flags
+are the same either way. `set_instance_gc` saves the folded preset, and `GcSupportView.saved`
+carries it, so a picker's selection is always one of `GcSupportView.presets`.
+
 **One entry per set of flags.** `supported_presets(major, flags)` reads the probe's flag names
 and drops `Zgc` from 23 on, because there both ZGC presets expand to `-XX:+UseZGC` and a picker
 would show two rows that do the same thing. `ZgcGenerational`'s label reads "ZGC (generational)"

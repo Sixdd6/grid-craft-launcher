@@ -1367,6 +1367,8 @@ async fn stop_instance_terminates_the_game_and_clears_the_registry() {
 
 const PRINTFLAGS_17: &str = include_str!("../../../tests/fixtures/java/printflags-17.txt");
 const PRINTFLAGS_21: &str = include_str!("../../../tests/fixtures/java/printflags-21.txt");
+#[cfg(unix)]
+const PRINTFLAGS_25: &str = include_str!("../../../tests/fixtures/java/printflags-25.txt");
 
 /// A stand-in java that prints one recorded flag dump, so a probe needs no real JVM.
 ///
@@ -1591,6 +1593,81 @@ async fn saving_heap_settings_keeps_the_saved_gc_preset() {
             GcPreset::ZgcGenerational,
             "a heap save must not clear the preset"
         );
+        dir
+    })
+    .await
+    .expect("blocking task");
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_plain_zgc_preset_launches_on_java_25() {
+    let server = MockServer::start().await;
+    mock_vanilla(&server, MC).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let uri = server.uri();
+
+    tokio::task::spawn_blocking(move || {
+        let launcher = launcher(&dir, Some(uri), None);
+        let mut instance = launcher
+            .instances()
+            .create("Pack", MC, Loader::None, None, &BTreeMap::new())
+            .expect("create instance");
+        // Saved as plain ZGC on an older runtime, then the runtime was upgraded to 25.
+        instance.config.jvm.java_path = Some(gc_probe_java(dir.path(), PRINTFLAGS_25));
+        instance.config.jvm.gc = GcPreset::Zgc;
+        instance.save().expect("save instance");
+
+        let view = launcher.gc_support(&instance.slug).expect("gc support");
+        assert_eq!(view.major, 25);
+        assert!(!view.presets.contains(&GcPreset::Zgc), "{view:?}");
+        assert_eq!(
+            view.saved,
+            GcPreset::ZgcGenerational,
+            "the picker must land on the one ZGC entry"
+        );
+
+        let outcome = launcher
+            .launch_instance(&instance.slug, None, Some("tester"), true)
+            .expect("a saved plain zgc must still launch on 25");
+        let LaunchOutcome::DryRun(cmd) = outcome else {
+            panic!("expected a dry run");
+        };
+        assert!(
+            cmd.args.iter().any(|a| a == "-XX:+UseZGC"),
+            "{:?}",
+            cmd.args
+        );
+        assert!(
+            !cmd.args.iter().any(|a| a.contains("ZGenerational")),
+            "{:?}",
+            cmd.args
+        );
+        dir
+    })
+    .await
+    .expect("blocking task");
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn setting_plain_zgc_on_java_25_saves_the_generational_preset() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    tokio::task::spawn_blocking(move || {
+        let (launcher, slug) = instance_launcher(&dir);
+        instance_with_probed_java(&launcher, dir.path(), &slug, PRINTFLAGS_25);
+
+        launcher
+            .set_instance_gc(&slug, GcPreset::Zgc)
+            .expect("plain zgc is the generational one on 25");
+        let saved = launcher
+            .instances()
+            .get(&slug)
+            .expect("reload")
+            .config
+            .jvm
+            .gc;
+        assert_eq!(saved, GcPreset::ZgcGenerational);
         dir
     })
     .await
