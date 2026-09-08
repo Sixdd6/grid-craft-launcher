@@ -200,6 +200,7 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::version_row` | `Rectangle` |
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::version_kind_badge` | `Text` |
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::version_install_button` | `Button` |
+| `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::keys` | `FocusScope` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::root_path_field` | `LineEdit` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::root_change_button` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::parallel_spin` | `SpinBox` |
@@ -217,4 +218,4 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::default_add_button` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::verify_button` | `Button` |
 
-Total: 140 named elements.
+Total: 141 named elements.
