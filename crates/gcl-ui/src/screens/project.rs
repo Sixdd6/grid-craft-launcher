@@ -3,17 +3,68 @@
 //! Every call into `gcl-core` runs off the UI thread through [`Bridge`]. The screen is pure
 //! layout; this module owns the `ProjectState` global that feeds it.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use gcl_core::content::{AddRequest, compatible_loaders};
 use gcl_core::instances::model::{ContentKind, Loader};
 use gcl_core::launcher::ProjectDetails;
 use gcl_core::sources::richtext::Block as CoreBlock;
 use gcl_core::sources::{ReleaseKind, SourceId, Version, VersionFilter};
-use slint::{ComponentHandle, Model, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 
 use crate::bridge::Bridge;
-use crate::models::short_time;
+use crate::models::{decode_description_image, short_time};
 use crate::screens::browser::conflict_note;
 use crate::{AppWindow, Block, ContentVersionRow, ProjectState, Screen};
+
+/// How many images one description (or one changelog) fetches, in the order its blocks name
+/// them. The rest keep the `[Image: alt]` failure text forever, per the description-rendering
+/// spec: a pathological description is a degrade to accept, not a bug to chase further.
+const MAX_IMAGES: usize = 20;
+
+/// Which block list an image-fetch job's completions land in.
+///
+/// The Description tab and the Notes modal load their images independently, each behind its
+/// own generation counter (see [`Shared`]), so closing the modal and opening a different
+/// version's notes cannot race stale pixels onto the one that replaced it, and neither can
+/// navigating to a different project while the description's own fetch is still in flight.
+#[derive(Clone, Copy)]
+enum ImageTarget {
+    Description,
+    Notes,
+}
+
+impl ImageTarget {
+    fn blocks(self, state: &ProjectState<'_>) -> ModelRc<Block> {
+        match self {
+            ImageTarget::Description => state.get_blocks(),
+            ImageTarget::Notes => state.get_notes_blocks(),
+        }
+    }
+
+    fn set_blocks(self, state: &ProjectState<'_>, blocks: ModelRc<Block>) {
+        match self {
+            ImageTarget::Description => state.set_blocks(blocks),
+            ImageTarget::Notes => state.set_notes_blocks(blocks),
+        }
+    }
+}
+
+/// What an `open` or `open_notes` call threads through to its image-fetch job.
+///
+/// Cloning shares the same counters, which is what lets `wire`'s closures and the job each
+/// bump or read the generation that call started.
+#[derive(Clone, Default)]
+struct Shared {
+    /// Bumped once per `open()`. A description image-fetch job checks this before it starts a
+    /// fetch and again before it paints one, so a project opened after this one dropped its
+    /// stale result instead of overwriting the new project's blocks.
+    image_generation: Arc<AtomicU64>,
+    /// The Notes modal's own counter, bumped once per `open_notes()`: a changelog's images load
+    /// independently of the description's, so the two must not share one counter.
+    notes_generation: Arc<AtomicU64>,
+}
 
 /// Binds the `ProjectState` global to the launcher.
 ///
@@ -23,13 +74,16 @@ use crate::{AppWindow, Block, ContentVersionRow, ProjectState, Screen};
 /// one needs those four things before it can load anything.
 pub fn wire(window: &AppWindow, bridge: &Bridge) {
     let state = window.global::<ProjectState>();
+    let shared = Shared::default();
 
     {
         let bridge = bridge.clone();
+        let shared = shared.clone();
         state.on_open(
             move |source, project_id, target_slug, return_to, downloads, author| {
                 open(
                     &bridge,
+                    &shared,
                     source.to_string(),
                     project_id.to_string(),
                     target_slug.to_string(),
@@ -66,6 +120,20 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
         let bridge = bridge.clone();
         state.on_install(move |version_id| install(&bridge, version_id.to_string()));
     }
+
+    {
+        let bridge = bridge.clone();
+        let shared = shared.clone();
+        state.on_open_notes(move |version_id, number| {
+            open_notes(&bridge, &shared, version_id.to_string(), number.to_string());
+        });
+    }
+
+    {
+        let bridge = bridge.clone();
+        let shared = shared.clone();
+        state.on_close_notes(move || close_notes(&bridge, &shared));
+    }
 }
 
 /// The target instance's Minecraft version and loader, carried alongside a version list so a
@@ -93,6 +161,7 @@ struct VersionsLoaded {
 #[allow(clippy::too_many_arguments)]
 fn open(
     bridge: &Bridge,
+    shared: &Shared,
     source: String,
     project_id: String,
     target_slug: String,
@@ -126,6 +195,13 @@ fn open(
     ));
     state.set_show_all_versions(false);
     state.set_status("".into());
+    // The Notes modal is about a version of whatever project was open before; a new project
+    // has none of those versions loaded yet, so any modal left up from the last one is closed
+    // rather than shown over the wrong project.
+    state.set_notes_open(false);
+    state.set_notes_title("".into());
+    state.set_notes_blocks(ModelRc::new(VecModel::from(Vec::<Block>::new())));
+    state.set_notes_loading(false);
 
     let Some(source_id) = SourceId::parse(&source) else {
         state.set_status(format!("Unknown content source: {source}").into());
@@ -134,9 +210,22 @@ fn open(
 
     state.set_loading(true);
     let show_all = false;
-    run_reporting(bridge, "Project details", false, move |launcher| {
-        load(launcher, source_id, &project_id, &target_slug, show_all)
-    });
+    // Stamped before the job runs, so an image batch from a project this open replaced is
+    // recognized as stale and drops its result instead of painting over these blocks.
+    let generation = shared.image_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    // The Notes modal's own counter is bumped too: closing it above does not race a fetch job
+    // that was already in flight for the version it was showing.
+    shared.notes_generation.fetch_add(1, Ordering::SeqCst);
+    let bridge_for_images = bridge.clone();
+    run_reporting(
+        bridge,
+        bridge_for_images,
+        Arc::clone(&shared.image_generation),
+        generation,
+        "Project details",
+        false,
+        move |launcher| load(launcher, source_id, &project_id, &target_slug, show_all),
+    );
 }
 
 /// Reloads only the versions tab, keeping the description on screen: neither a filter toggle
@@ -356,8 +445,15 @@ fn install(bridge: &Bridge, version_id: String) {
 ///
 /// `preserve_status` leaves `ProjectState.status` as it is on success, for a reload that
 /// follows an install and must not overwrite the line the install itself just wrote.
+///
+/// `images_bridge` and `image_generation`/`generation` are what starts the description's own
+/// image-fetch job once `apply` has written the blocks it describes: `apply` returns the
+/// (already capped) list of urls to fetch, in block order.
 fn run_reporting(
     bridge: &Bridge,
+    images_bridge: Bridge,
+    image_generation: Arc<AtomicU64>,
+    generation: u64,
     label: &'static str,
     preserve_status: bool,
     job: impl FnOnce(&gcl_core::Launcher) -> Result<Opened, gcl_core::Error> + Send + 'static,
@@ -366,7 +462,16 @@ fn run_reporting(
         let state = window.global::<ProjectState>();
         state.set_loading(false);
         match result {
-            Ok(opened) => apply(window, opened, preserve_status),
+            Ok(opened) => {
+                let urls = apply(window, opened, preserve_status);
+                fetch_description_images(
+                    &images_bridge,
+                    ImageTarget::Description,
+                    image_generation,
+                    generation,
+                    urls,
+                );
+            }
             Err(_) => state.set_status(format!("{label} failed").into()),
         }
     });
@@ -390,8 +495,10 @@ fn run_versions_reporting(
     });
 }
 
-/// Fills every property `open` promised, from a successful full load.
-fn apply(window: &AppWindow, opened: Opened, preserve_status: bool) {
+/// Fills every property `open` promised, from a successful full load. Returns the urls of the
+/// images the caller's image-fetch job should fetch, in block order, already capped at
+/// [`MAX_IMAGES`] and marked "loading" on the blocks that were just written.
+fn apply(window: &AppWindow, opened: Opened, preserve_status: bool) -> Vec<String> {
     let state = window.global::<ProjectState>();
     let project = opened.details.project;
     let kind = project.kind;
@@ -402,7 +509,8 @@ fn apply(window: &AppWindow, opened: Opened, preserve_status: bool) {
     state.set_kind(project.kind.to_string().into());
     state.set_page_url(project.page_url.as_str().into());
 
-    let blocks: Vec<Block> = opened.details.blocks.iter().map(block_row).collect();
+    let mut blocks: Vec<Block> = opened.details.blocks.iter().map(block_row).collect();
+    let urls = prepare_images(&mut blocks, MAX_IMAGES);
     state.set_blocks(ModelRc::new(VecModel::from(blocks)));
 
     let rows = build_version_rows(
@@ -413,14 +521,14 @@ fn apply(window: &AppWindow, opened: Opened, preserve_status: bool) {
     );
     state.set_versions(ModelRc::new(VecModel::from(rows)));
 
-    if preserve_status {
-        return;
+    if !preserve_status {
+        if state.get_target_slug().is_empty() {
+            state.set_status("Pick a target instance in the browser first".into());
+        } else {
+            state.set_status(format!("{} version(s)", opened.versions.len()).into());
+        }
     }
-    if state.get_target_slug().is_empty() {
-        state.set_status("Pick a target instance in the browser first".into());
-    } else {
-        state.set_status(format!("{} version(s)", opened.versions.len()).into());
-    }
+    urls
 }
 
 /// Touches only `versions` and `status`, from a successful versions-only reload. `kind` comes
@@ -443,6 +551,191 @@ fn apply_versions(window: &AppWindow, loaded: VersionsLoaded, preserve_status: b
         state.set_status("Pick a target instance in the browser first".into());
     } else {
         state.set_status(format!("{} version(s)", loaded.versions.len()).into());
+    }
+}
+
+/// Opens the Notes modal for one version and fetches its changelog.
+///
+/// Every property the modal owns is set here, the empty case included: `notes_blocks` starts
+/// empty and `notes_loading` starts true, so the modal never shows the previous version's
+/// notes while this one loads.
+fn open_notes(bridge: &Bridge, shared: &Shared, version_id: String, number: String) {
+    let Some(window) = bridge.weak().upgrade() else {
+        return;
+    };
+    let state = window.global::<ProjectState>();
+    let Some(source_id) = SourceId::parse(state.get_source().as_str()) else {
+        return;
+    };
+    let project_id = state.get_project_id().to_string();
+
+    state.set_notes_title(number.as_str().into());
+    state.set_notes_blocks(ModelRc::new(VecModel::from(Vec::<Block>::new())));
+    state.set_notes_loading(true);
+    state.set_notes_open(true);
+
+    // Stamped before the job runs, the same way `open`'s own counter is: a changelog fetched
+    // for a version the user has since closed, or replaced by opening another one, is dropped
+    // rather than painted.
+    let generation = shared.notes_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let bridge_for_images = bridge.clone();
+    let notes_generation = Arc::clone(&shared.notes_generation);
+    bridge.run_with_error(
+        "Version notes",
+        move |launcher| launcher.version_notes(source_id, &project_id, &version_id),
+        move |window, result| {
+            let state = window.global::<ProjectState>();
+            state.set_notes_loading(false);
+            match result {
+                Ok(core_blocks) => {
+                    let mut blocks: Vec<Block> = core_blocks.iter().map(block_row).collect();
+                    let urls = prepare_images(&mut blocks, MAX_IMAGES);
+                    state.set_notes_blocks(ModelRc::new(VecModel::from(blocks)));
+                    fetch_description_images(
+                        &bridge_for_images,
+                        ImageTarget::Notes,
+                        notes_generation,
+                        generation,
+                        urls,
+                    );
+                }
+                Err(_) => {
+                    state.set_notes_blocks(ModelRc::new(VecModel::from(Vec::<Block>::new())));
+                }
+            }
+        },
+    );
+}
+
+/// Closes the Notes modal. Bumps its generation counter too, so a changelog fetch still in
+/// flight for the version it was showing paints nothing after this.
+fn close_notes(bridge: &Bridge, shared: &Shared) {
+    shared.notes_generation.fetch_add(1, Ordering::SeqCst);
+    if let Some(window) = bridge.weak().upgrade() {
+        window.global::<ProjectState>().set_notes_open(false);
+    }
+}
+
+/// Marks every image block's initial load state: "loading" for the first `cap` blocks with a
+/// non-empty `url`, in the order they appear, and "failed" for any past that cap — the
+/// permanent `[Image: alt]` degrade the description-rendering spec accepts for a pathological
+/// description rather than a bug to chase further. Returns the "loading" blocks' urls, in that
+/// same order, for the fetch job to work through.
+fn prepare_images(blocks: &mut [Block], cap: usize) -> Vec<String> {
+    let mut urls = Vec::new();
+    for block in blocks.iter_mut() {
+        if block.kind.as_str() != "image" || block.url.is_empty() {
+            continue;
+        }
+        if urls.len() < cap {
+            block.image_state = "loading".into();
+            urls.push(block.url.to_string());
+        } else {
+            block.image_state = "failed".into();
+        }
+    }
+    urls
+}
+
+/// Fetches and decodes up to [`MAX_IMAGES`] description images sequentially in one job,
+/// painting each one onto `target`'s block list as it arrives rather than waiting for the
+/// whole batch — the first image a user sees does not wait on the last.
+///
+/// This does not use [`Bridge::run`]'s own `done` callback, which only fires once after the
+/// whole job returns: instead the job posts one `upgrade_in_event_loop` closure per image,
+/// directly on `bridge`'s weak window handle, the same primitive `Bridge` itself is built on.
+/// `generation` is checked both before a fetch starts and inside every posted closure, so a
+/// project (or a Notes modal) the user has since navigated away from never has a stale image
+/// painted over it.
+fn fetch_description_images(
+    bridge: &Bridge,
+    target: ImageTarget,
+    counter: Arc<AtomicU64>,
+    generation: u64,
+    urls: Vec<String>,
+) {
+    if urls.is_empty() {
+        return;
+    }
+    let weak = bridge.weak().clone();
+    bridge.run(
+        "Description images",
+        move |launcher| {
+            for url in urls {
+                if counter.load(Ordering::SeqCst) != generation {
+                    break;
+                }
+                let decoded = launcher
+                    .fetch_image(&url)
+                    .ok()
+                    .and_then(|path| std::fs::read(path).ok())
+                    .and_then(|bytes| decode_description_image(&bytes).ok())
+                    .map(DecodedImage::from);
+                let counter = Arc::clone(&counter);
+                let url = url.clone();
+                let _ = weak.upgrade_in_event_loop(move |window| {
+                    if counter.load(Ordering::SeqCst) != generation {
+                        return;
+                    }
+                    let state = window.global::<ProjectState>();
+                    apply_image(&state, target, &url, decoded);
+                });
+            }
+            Ok(())
+        },
+        |_window, ()| {},
+    );
+}
+
+/// Writes one decoded image into every block that shares its `url`, in the block list `target`
+/// names. More than one block can carry the same url (a changelog quoting the same picture
+/// twice); every match gets the same pixels, or the same "failed" state on a fetch or decode
+/// that came back empty.
+fn apply_image(
+    state: &ProjectState<'_>,
+    target: ImageTarget,
+    url: &str,
+    decoded: Option<DecodedImage>,
+) {
+    let mut blocks: Vec<Block> = target.blocks(state).iter().collect();
+    let mut changed = false;
+    for block in blocks.iter_mut() {
+        if block.kind.as_str() != "image" || block.url.as_str() != url {
+            continue;
+        }
+        changed = true;
+        match &decoded {
+            Some(image) => {
+                let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
+                    &image.pixels,
+                    image.width,
+                    image.height,
+                );
+                block.image = slint::Image::from_rgba8(buffer);
+                block.image_state = "ready".into();
+            }
+            None => block.image_state = "failed".into(),
+        }
+    }
+    if changed {
+        target.set_blocks(state, ModelRc::new(VecModel::from(blocks)));
+    }
+}
+
+/// Raw RGBA8 pixels and dimensions for one description image, decoded off the UI thread.
+struct DecodedImage {
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+}
+
+impl From<(u32, u32, Vec<u8>)> for DecodedImage {
+    fn from((width, height, pixels): (u32, u32, Vec<u8>)) -> Self {
+        Self {
+            width,
+            height,
+            pixels,
+        }
     }
 }
 

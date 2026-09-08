@@ -1,0 +1,61 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Block } from "../types.slint";
+import { BlockList } from "block-list.slint";
+import { Dialog } from "dialog.slint";
+import { EmptyState } from "empty-state.slint";
+
+// One version's changelog in a modal, built on [`Dialog`]. `ProjectScreen`'s Versions tab opens
+// this from a row's Notes button; `BlockList` is the same renderer the Description tab uses, so
+// a table or an image in a changelog looks the same as one in the description.
+//
+// Mounted only while `open` is true, per the `slint-ui` skill's dialog rule, so Escape and the
+// keyboard behave the same way every other dialog in `app.slint` does.
+export component NotesDialog inherits Rectangle {
+    in-out property <bool> open: true;
+    // Already formatted by the caller: "<number> notes".
+    in property <string> title: "";
+    in property <[Block]> blocks: [];
+    // True while the changelog is being fetched.
+    in property <bool> loading: false;
+
+    // The user closed the modal, by its Close button, Escape, or a click outside the panel.
+    callback close();
+
+    Dialog {
+        width: root.width;
+        height: root.height;
+        open: root.open;
+        title: root.title;
+        close-text: "Close";
+        close => {
+            root.close();
+        }
+
+        // A fixed height, the same shape the error dialog's `TextEdit` uses, so a long
+        // changelog scrolls inside the panel instead of growing it past the screen.
+        ScrollView {
+            height: 16 * Theme.row-height;
+
+            VerticalLayout {
+                padding: Theme.pad;
+                spacing: Theme.gap;
+                alignment: start;
+
+                if root.loading: Text {
+                    text: "Loading…";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                }
+
+                if !root.loading && root.blocks.length == 0: EmptyState {
+                    title: "No notes";
+                }
+
+                if !root.loading: BlockList {
+                    blocks: root.blocks;
+                }
+            }
+        }
+    }
+}

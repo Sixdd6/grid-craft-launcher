@@ -13,6 +13,7 @@ import { ConfirmDialog } from "components/confirm-dialog.slint";
 import { DeviceCodeDialog } from "components/device-code-dialog.slint";
 import { CreateInstanceDialog } from "components/create-instance-dialog.slint";
 import { Dialog } from "components/dialog.slint";
+import { NotesDialog } from "components/notes-dialog.slint";
 import { PromptDialog } from "components/prompt-dialog.slint";
 import { ProgressPanel } from "components/progress-panel.slint";
 import { ToastHost } from "components/toast.slint";
@@ -525,6 +526,20 @@ export component AppWindow inherits Window {
             text: App.error_text;
             read-only: true;
             wrap: word-wrap;
+        }
+    }
+
+    // A version's changelog, opened from its Notes button on the project details screen's
+    // Versions tab. Mounted only while open, per the `slint-ui` skill's dialog rule.
+    if ProjectState.notes_open: NotesDialog {
+        width: root.width;
+        height: root.height;
+        open: ProjectState.notes_open;
+        title: "" + ProjectState.notes_title + " notes";
+        blocks: ProjectState.notes_blocks;
+        loading: ProjectState.notes_loading;
+        close => {
+            ProjectState.close_notes();
         }
     }
 }

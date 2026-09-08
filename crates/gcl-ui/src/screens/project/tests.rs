@@ -3,7 +3,8 @@ use gcl_core::sources::richtext::Block as CoreBlock;
 use gcl_core::sources::{ReleaseKind, SourceId, Version};
 use slint::Model;
 
-use super::{block_row, version_row};
+use super::{block_row, prepare_images, version_row};
+use crate::Block;
 
 fn version(id: &str) -> Version {
     Version {
@@ -100,6 +101,54 @@ fn block_row_flattens_a_table_row_major_with_the_header_as_row_zero() {
         cells,
         vec!["Minecraft", "Loader", "1.21.1", "Fabric", "1.20.1", "Quilt"]
     );
+}
+
+fn image_block(url: &str) -> Block {
+    let mut row = block_row(&CoreBlock::Image {
+        url: url.to_string(),
+        alt: "alt".to_string(),
+    });
+    row.image_state = "".into();
+    row
+}
+
+#[test]
+fn prepare_images_marks_every_image_loading_under_the_cap() {
+    let mut blocks = vec![
+        image_block("https://a.invalid/1.png"),
+        image_block("https://a.invalid/2.png"),
+    ];
+    let urls = prepare_images(&mut blocks, 5);
+    assert_eq!(
+        urls,
+        vec!["https://a.invalid/1.png", "https://a.invalid/2.png"]
+    );
+    assert!(blocks.iter().all(|b| b.image_state == "loading"));
+}
+
+#[test]
+fn prepare_images_marks_anything_past_the_cap_failed_forever() {
+    let mut blocks = vec![
+        image_block("https://a.invalid/1.png"),
+        image_block("https://a.invalid/2.png"),
+        image_block("https://a.invalid/3.png"),
+    ];
+    let urls = prepare_images(&mut blocks, 2);
+    assert_eq!(urls.len(), 2);
+    assert_eq!(blocks[0].image_state, "loading");
+    assert_eq!(blocks[1].image_state, "loading");
+    assert_eq!(blocks[2].image_state, "failed");
+}
+
+#[test]
+fn prepare_images_ignores_non_image_blocks() {
+    let mut blocks = vec![
+        block_row(&CoreBlock::Paragraph("p".to_string())),
+        image_block("https://a.invalid/1.png"),
+    ];
+    let urls = prepare_images(&mut blocks, 5);
+    assert_eq!(urls, vec!["https://a.invalid/1.png"]);
+    assert_eq!(blocks[0].image_state, "");
 }
 
 #[test]

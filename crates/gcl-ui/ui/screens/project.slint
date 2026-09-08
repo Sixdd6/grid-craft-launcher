@@ -5,6 +5,7 @@ import { BlockList } from "../components/block-list.slint";
 import { Button } from "../components/button.slint";
 import { EmptyState } from "../components/empty-state.slint";
 import { ListRow } from "../components/list-row.slint";
+import { NotesDialog } from "../components/notes-dialog.slint";
 import { TabBar } from "../components/tab-bar.slint";
 
 // Everything the project details screen reads and reports.
@@ -60,6 +61,15 @@ export global ProjectState {
     // Where `back()` returns to: the screen that opened this one.
     in-out property <Screen> return_to: Screen.browser;
 
+    // Whether the Notes modal is open.
+    in-out property <bool> notes_open: false;
+    // The modal's title, already formatted as "<number> notes".
+    in-out property <string> notes_title: "";
+    // The changelog for the version the modal was opened for, same block shape as `blocks`.
+    in-out property <[Block]> notes_blocks: [];
+    // True while that changelog is being fetched.
+    in-out property <bool> notes_loading: false;
+
     // Opens a project's details. Carries the source, the project id, the instance a version
     // installs into (empty when none was picked), the screen `back()` returns to, and the
     // download count and author to show right away, already formatted: a search row already
@@ -72,6 +82,10 @@ export global ProjectState {
     callback toggle_show_all();
     // A version row's Install button was pressed. Carries the version id.
     callback install(string /* version_id */);
+    // A version row's Notes button was pressed. Carries the version id and its display number.
+    callback open_notes(string /* version_id */, string /* number */);
+    // The Notes modal was closed.
+    callback close_notes();
 }
 
 // The project details screen: a header, a Description/Versions `TabBar`, and the tab body.
@@ -307,9 +321,19 @@ export component ProjectScreen inherits Rectangle {
                         }
                     }
 
-                    VerticalLayout {
+                    HorizontalLayout {
                         alignment: center;
                         horizontal-stretch: 0;
+                        spacing: Theme.gap;
+
+                        version_notes_button := Button {
+                            text: "Notes";
+                            access_label: "Notes " + row.number;
+                            kind: "secondary";
+                            clicked => {
+                                ProjectState.open_notes(row.id, row.number);
+                            }
+                        }
 
                         version_install_button := Button {
                             text: row.installed ? "Installed" : "Install";
@@ -346,6 +370,9 @@ export component ProjectScreen inherits Rectangle {
 // component fills the global with the sample project the screen used to carry as its
 // defaults. Nothing in the app instantiates it.
 export component PreviewProjectScreen inherits ProjectScreen {
+    width: 1200px;
+    height: 760px;
+
     init => {
         ProjectState.source = "modrinth";
         ProjectState.project_id = "AANobbMI";
@@ -424,5 +451,28 @@ export component PreviewProjectScreen inherits ProjectScreen {
                 access_label: "Not for 1.21.1 fabric",
             },
         ];
+        // `NotesDialog` is mounted in `app.slint`, not here, but the preview shows it anyway
+        // so a change to it can be checked without running the whole app: see the `notes_open`
+        // below and the `NotesDialog` instance this component adds, wired the same way
+        // `app.slint`'s own copy is.
+        ProjectState.notes_title = "0.6.13";
+        ProjectState.notes_blocks = [
+            { kind: "heading3", text: "0.6.13" },
+            { kind: "bullet", text: "Fixed a crash on some AMD drivers", depth: 0 },
+            { kind: "bullet", text: "Improved chunk build throughput", depth: 0 },
+        ];
+        ProjectState.notes_open = true;
+    }
+
+    if ProjectState.notes_open: NotesDialog {
+        width: root.width;
+        height: root.height;
+        open: ProjectState.notes_open;
+        title: "" + ProjectState.notes_title + " notes";
+        blocks: ProjectState.notes_blocks;
+        loading: ProjectState.notes_loading;
+        close => {
+            ProjectState.close_notes();
+        }
     }
 }
