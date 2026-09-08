@@ -31,11 +31,13 @@ use crate::download::images::ImageCache;
 use crate::download::{DownloadCtx, cleanup_partials};
 use crate::events::{Event, EventSink};
 use crate::http::HttpClient;
-use crate::instances::model::{ContentEntry, ContentKind, InstanceJvm, Loader, PackSource};
+use crate::instances::model::{
+    ContentEntry, ContentKind, GcPreset, InstanceJvm, Loader, PackSource, supported_presets,
+};
 use crate::instances::{Instance, Instances, now_rfc3339};
 use crate::java::{
-    JavaInstall, JavaSource, RUNTIME_MANIFEST, component_for_major, detect_all, install_runtime,
-    pick,
+    JavaInstall, JavaSource, RUNTIME_MANIFEST, component_for_major, detect_all, gc::GcSupport,
+    install_runtime, pick,
 };
 use crate::launch::{JvmSettings, LaunchCommand, LaunchInputs};
 use crate::loaders::{
@@ -287,6 +289,45 @@ pub struct ProjectDetails {
     pub blocks: Vec<Block>,
 }
 
+/// What garbage collector presets one instance's Java offers, from [`Launcher::gc_support`].
+#[derive(Debug, Clone)]
+pub struct GcSupportView {
+    /// The java binary that was probed.
+    pub java_path: PathBuf,
+    /// One line naming the Java and where it came from, for a status line.
+    pub label: String,
+    /// Its major version, as the probe read it.
+    pub major: u32,
+    /// The presets it can run, in menu order. [`GcPreset::Default`] is always first.
+    pub presets: Vec<GcPreset>,
+}
+
+/// Fails when `preset` is not one the probed JVM carries.
+fn check_preset(preset: GcPreset, support: &GcSupport, java: &Path) -> Result<(), crate::Error> {
+    if preset == GcPreset::Default
+        || supported_presets(support.major, &support.flags).contains(&preset)
+    {
+        return Ok(());
+    }
+    Err(crate::java::Error::UnsupportedPreset {
+        preset: preset.to_string(),
+        java: java.to_path_buf(),
+        major: support.major,
+    }
+    .into())
+}
+
+/// Where a Java came from, as a status line says it.
+fn java_source_text(source: JavaSource) -> &'static str {
+    match source {
+        JavaSource::Path => "PATH",
+        JavaSource::JavaHome => "JAVA_HOME",
+        JavaSource::Mojang => "the Mojang runtime",
+        JavaSource::Manual => "the configured path",
+        JavaSource::System => "the system",
+    }
+}
+
 /// Owns the runtime and every shared handle the rest of the launcher needs.
 pub struct Launcher {
     runtime: tokio::runtime::Runtime,
@@ -314,6 +355,8 @@ pub struct Launcher {
     image_hosts: Vec<String>,
     /// The description-image cache behind [`Launcher::fetch_image`].
     images: ImageCache,
+    /// Garbage collector probe answers, keyed by java binary and its modification time.
+    gc_cache: crate::java::gc::ProbeCache,
     /// The refresh-token store, opened on first use by [`Launcher::secrets`].
     secrets: OnceLock<Box<dyn SecretStore>>,
     /// The games this launcher started that have not exited, by instance slug.
@@ -397,6 +440,7 @@ impl Launcher {
             icons: IconCache::new(),
             image_hosts: Vec::new(),
             images: ImageCache::new(),
+            gc_cache: crate::java::gc::ProbeCache::new(),
             secrets: OnceLock::new(),
             running: Arc::new(Mutex::new(HashMap::new())),
         };
@@ -751,6 +795,56 @@ impl Launcher {
         Ok(removed)
     }
 
+    /// Which garbage collector presets the Java this instance launches with can run. Blocks.
+    ///
+    /// The Java is resolved the way a launch resolves it: the instance's own `java_path`,
+    /// else `config.toml`'s, else a runtime for the instance's Minecraft version, which is
+    /// installed with the usual progress events when none is present. That binary is then
+    /// probed, whatever it came from, since only the probe knows its real version and flags.
+    /// The answer is cached per binary and modification time, so repeated calls run java once.
+    pub fn gc_support(&self, slug: &str) -> Result<GcSupportView, crate::Error> {
+        let instance = self.instances().get(slug)?;
+        let install = self.configured_or_detected_java(
+            instance.config.jvm.java_path.as_deref(),
+            &instance.config.minecraft,
+        )?;
+        let support = self.probe_gc(&install.path)?;
+        Ok(GcSupportView {
+            label: format!(
+                "Java {} from {}",
+                support.version,
+                java_source_text(install.source)
+            ),
+            java_path: install.path,
+            major: support.major,
+            presets: supported_presets(support.major, &support.flags),
+        })
+    }
+
+    /// Saves an instance's garbage collector preset, refusing one its Java lacks. Blocks.
+    ///
+    /// The check runs before anything is written, so a refused preset leaves `instance.toml`
+    /// as it was.
+    pub fn set_instance_gc(&self, slug: &str, preset: GcPreset) -> Result<(), crate::Error> {
+        let view = self.gc_support(slug)?;
+        if preset != GcPreset::Default && !view.presets.contains(&preset) {
+            return Err(crate::java::Error::UnsupportedPreset {
+                preset: preset.to_string(),
+                java: view.java_path,
+                major: view.major,
+            }
+            .into());
+        }
+        let mut instance = self.instances().get(slug)?;
+        instance.config.jvm.gc = preset;
+        Ok(instance.save()?)
+    }
+
+    /// Runs the cached collector probe on one java binary. Blocks.
+    fn probe_gc(&self, java: &Path) -> Result<GcSupport, crate::Error> {
+        Ok(self.block_on(async { self.gc_cache.get_or_probe(&self.root, java).await })?)
+    }
+
     /// Replaces an instance's JVM overrides and saves `instance.toml`.
     ///
     /// A minimum heap larger than the maximum is rejected, because the JVM would refuse to
@@ -1023,6 +1117,17 @@ impl Launcher {
             Some(path) => path,
             None => self.ensure_java_for(&plan)?.path,
         };
+        // A preset the JVM was not built with is refused here, before a command exists: a
+        // flag java does not know kills the game after the user pressed Play. With no preset
+        // chosen there is nothing to check and nothing to pass, so nothing is probed either.
+        let gc_major = match instance.config.jvm.gc {
+            GcPreset::Default => 0,
+            preset => {
+                let support = self.probe_gc(&java)?;
+                check_preset(preset, &support, &java)?;
+                support.major
+            }
+        };
         let changed = self.apply_settings_overrides(&instance)?;
         if changed > 0 {
             tracing::info!(changed, "rewrote options.txt keys");
@@ -1036,10 +1141,8 @@ impl Launcher {
                 min_mib: instance.config.jvm.min_mib.unwrap_or(config.jvm.min_mib),
                 max_mib: instance.config.jvm.max_mib.unwrap_or(config.jvm.max_mib),
                 extra_args: instance.config.jvm.extra_args.clone(),
-                // The GC probe that reads the java binary's major version lands with
-                // `gc_support`; until then the launch passes no collector flag.
-                gc: crate::instances::model::GcPreset::Default,
-                gc_major: 0,
+                gc: instance.config.jvm.gc,
+                gc_major,
             }
         };
         let cmd = crate::launch::build(

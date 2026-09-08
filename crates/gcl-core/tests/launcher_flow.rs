@@ -7,7 +7,7 @@ use gcl_core::auth::secrets::{MemoryStore, SecretStoreKind};
 use gcl_core::auth::{Account, AccountKind};
 use gcl_core::content::AddRequest;
 use gcl_core::download::hash::sha1_hex;
-use gcl_core::instances::model::{InstanceJvm, Loader};
+use gcl_core::instances::model::{GcPreset, InstanceJvm, Loader};
 use gcl_core::launcher::{Endpoints, LaunchOutcome};
 use gcl_core::loaders::LoaderEndpoints;
 use gcl_core::sources::richtext::Block;
@@ -1357,6 +1357,194 @@ async fn stop_instance_terminates_the_game_and_clears_the_registry() {
             matches!(err, gcl_core::Error::Launch(gcl_core::launch::Error::NotRunning(_))),
             "got {err:?}"
         );
+        dir
+    })
+    .await
+    .expect("blocking task");
+}
+
+// --- Garbage collector presets -------------------------------------------------------
+
+const PRINTFLAGS_17: &str = include_str!("../../../tests/fixtures/java/printflags-17.txt");
+const PRINTFLAGS_21: &str = include_str!("../../../tests/fixtures/java/printflags-21.txt");
+
+/// A stand-in java that prints one recorded flag dump, so a probe needs no real JVM.
+///
+/// A dry-run launch never starts the program it builds, so the same script stands in for the
+/// game's own java as well.
+#[cfg(unix)]
+fn gc_probe_java(dir: &std::path::Path, dump: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let dump_file = dir.join("printflags.txt");
+    std::fs::write(&dump_file, dump).expect("write the dump");
+    let path = dir.join("gc-java.sh");
+    std::fs::write(&path, format!("#!/bin/sh\ncat {}\n", dump_file.display()))
+        .expect("write the stand-in java");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    path
+}
+
+/// Points the instance's `java_path` at a stand-in java printing `dump`.
+#[cfg(unix)]
+fn instance_with_probed_java(
+    launcher: &Launcher,
+    dir: &std::path::Path,
+    slug: &str,
+    dump: &str,
+) -> std::path::PathBuf {
+    let java = gc_probe_java(dir, dump);
+    launcher
+        .set_instance_jvm(
+            slug,
+            InstanceJvm {
+                java_path: Some(java.clone()),
+                ..InstanceJvm::default()
+            },
+        )
+        .expect("set the instance jvm");
+    java
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn gc_support_reports_the_presets_the_probed_java_carries() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    tokio::task::spawn_blocking(move || {
+        let (launcher, slug) = instance_launcher(&dir);
+        let java = instance_with_probed_java(&launcher, dir.path(), &slug, PRINTFLAGS_21);
+
+        let view = launcher.gc_support(&slug).expect("gc support");
+        assert_eq!(view.java_path, java);
+        assert_eq!(view.major, 21);
+        for preset in [
+            GcPreset::Default,
+            GcPreset::Serial,
+            GcPreset::Parallel,
+            GcPreset::G1,
+            GcPreset::Zgc,
+            GcPreset::ZgcGenerational,
+            GcPreset::Shenandoah,
+        ] {
+            assert!(view.presets.contains(&preset), "{preset}: {view:?}");
+        }
+        assert!(view.label.contains("21.0.7"), "{}", view.label);
+        dir
+    })
+    .await
+    .expect("blocking task");
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn set_instance_gc_saves_a_supported_preset_and_refuses_one_the_java_lacks() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    tokio::task::spawn_blocking(move || {
+        let (launcher, slug) = instance_launcher(&dir);
+        let java = instance_with_probed_java(&launcher, dir.path(), &slug, PRINTFLAGS_17);
+
+        launcher
+            .set_instance_gc(&slug, GcPreset::G1)
+            .expect("g1 is in the java 17 dump");
+        let saved = launcher.instances().get(&slug).expect("read back");
+        assert_eq!(saved.config.jvm.gc, GcPreset::G1);
+
+        // Java 17 lists `UseZGC` but no `ZGenerational`, so generational ZGC is not there.
+        let err = launcher
+            .set_instance_gc(&slug, GcPreset::ZgcGenerational)
+            .expect_err("generational zgc is not in the java 17 dump");
+        match err {
+            gcl_core::Error::Java(gcl_core::java::Error::UnsupportedPreset {
+                preset,
+                java: reported,
+                major,
+            }) => {
+                assert_eq!(preset, GcPreset::ZgcGenerational.to_string());
+                assert_eq!(reported, java);
+                assert_eq!(major, 17);
+            }
+            other => panic!("wrong error: {other:?}"),
+        }
+        // A refused preset changes nothing.
+        let saved = launcher.instances().get(&slug).expect("read back");
+        assert_eq!(saved.config.jvm.gc, GcPreset::G1);
+        dir
+    })
+    .await
+    .expect("blocking task");
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dry_run_launch_carries_the_saved_gc_flags() {
+    let server = MockServer::start().await;
+    mock_vanilla(&server, MC).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let uri = server.uri();
+
+    tokio::task::spawn_blocking(move || {
+        let launcher = launcher(&dir, Some(uri), None);
+        let slug = launcher
+            .instances()
+            .create("Pack", MC, Loader::None, None, &BTreeMap::new())
+            .expect("create instance")
+            .slug;
+        instance_with_probed_java(&launcher, dir.path(), &slug, PRINTFLAGS_21);
+        launcher
+            .set_instance_gc(&slug, GcPreset::G1)
+            .expect("g1 is supported");
+
+        let outcome = launcher
+            .launch_instance(&slug, None, Some("tester"), true)
+            .expect("dry run");
+        let LaunchOutcome::DryRun(cmd) = outcome else {
+            panic!("expected a dry run");
+        };
+        assert!(
+            cmd.args.iter().any(|a| a == "-XX:+UseG1GC"),
+            "{:?}",
+            cmd.args
+        );
+        dir
+    })
+    .await
+    .expect("blocking task");
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_launch_refuses_a_preset_the_java_lacks_before_it_builds_a_command() {
+    let server = MockServer::start().await;
+    mock_vanilla(&server, MC).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let uri = server.uri();
+
+    tokio::task::spawn_blocking(move || {
+        let launcher = launcher(&dir, Some(uri), None);
+        let mut instance = launcher
+            .instances()
+            .create("Pack", MC, Loader::None, None, &BTreeMap::new())
+            .expect("create instance");
+        let java = gc_probe_java(dir.path(), PRINTFLAGS_17);
+        // Written straight into `instance.toml`, the way a runtime swapped under a saved
+        // preset would leave it: `set_instance_gc` would have refused this.
+        instance.config.jvm.java_path = Some(java.clone());
+        instance.config.jvm.gc = GcPreset::ZgcGenerational;
+        instance.save().expect("save instance");
+
+        let err = launcher
+            .launch_instance(&instance.slug, None, Some("tester"), true)
+            .expect_err("the launch must refuse the preset");
+        match err {
+            gcl_core::Error::Java(gcl_core::java::Error::UnsupportedPreset {
+                java: reported,
+                major,
+                ..
+            }) => {
+                assert_eq!(reported, java);
+                assert_eq!(major, 17);
+            }
+            other => panic!("wrong error: {other:?}"),
+        }
         dir
     })
     .await

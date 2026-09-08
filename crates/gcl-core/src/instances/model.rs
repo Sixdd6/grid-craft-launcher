@@ -2,7 +2,7 @@
 //!
 //! Field order here is the on-disk order. See the `instance-model` skill for the schema.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -182,6 +182,28 @@ impl GcPreset {
         };
         flags.iter().map(|f| (*f).to_string()).collect()
     }
+}
+
+/// The presets a JVM can run, from the major version and the flag names its dump listed.
+///
+/// [`GcPreset::Default`] is always there: it passes no collector flag at all. Java 23 dropped
+/// `ZGenerational` and made ZGC generational, so `UseZGC` alone is enough for
+/// [`GcPreset::ZgcGenerational`] from 23 on.
+pub fn supported_presets(major: u32, flags: &BTreeSet<String>) -> Vec<GcPreset> {
+    let has = |name: &str| flags.contains(name);
+    GcPreset::all()
+        .iter()
+        .copied()
+        .filter(|preset| match preset {
+            GcPreset::Default => true,
+            GcPreset::Serial => has("UseSerialGC"),
+            GcPreset::Parallel => has("UseParallelGC"),
+            GcPreset::G1 => has("UseG1GC"),
+            GcPreset::Zgc => has("UseZGC"),
+            GcPreset::ZgcGenerational => has("UseZGC") && (major >= 23 || has("ZGenerational")),
+            GcPreset::Shenandoah => has("UseShenandoahGC"),
+        })
+        .collect()
 }
 
 impl std::fmt::Display for GcPreset {
@@ -534,5 +556,52 @@ mod tests {
             assert!(!description.is_empty(), "{preset}");
             assert!(!description.contains('\n'), "{preset}");
         }
+    }
+
+    fn flag_set(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|n| (*n).to_string()).collect()
+    }
+
+    #[test]
+    fn supported_presets_always_offers_the_default() {
+        assert_eq!(
+            supported_presets(17, &BTreeSet::new()),
+            vec![GcPreset::Default]
+        );
+    }
+
+    #[test]
+    fn zgc_without_the_generational_switch_is_generational_only_from_23() {
+        let flags = flag_set(&["UseZGC"]);
+        let at_21 = supported_presets(21, &flags);
+        assert!(at_21.contains(&GcPreset::Zgc));
+        assert!(!at_21.contains(&GcPreset::ZgcGenerational));
+
+        let at_23 = supported_presets(23, &flags);
+        assert!(at_23.contains(&GcPreset::Zgc));
+        assert!(at_23.contains(&GcPreset::ZgcGenerational));
+    }
+
+    #[test]
+    fn the_generational_switch_offers_both_zgc_presets_on_21() {
+        let flags = flag_set(&["UseZGC", "ZGenerational"]);
+        let at_21 = supported_presets(21, &flags);
+        assert!(at_21.contains(&GcPreset::Zgc));
+        assert!(at_21.contains(&GcPreset::ZgcGenerational));
+    }
+
+    #[test]
+    fn supported_presets_keeps_menu_order_and_reads_one_flag_each() {
+        let flags = flag_set(&["UseSerialGC", "UseParallelGC", "UseG1GC", "UseShenandoahGC"]);
+        assert_eq!(
+            supported_presets(17, &flags),
+            vec![
+                GcPreset::Default,
+                GcPreset::Serial,
+                GcPreset::Parallel,
+                GcPreset::G1,
+                GcPreset::Shenandoah,
+            ]
+        );
     }
 }
