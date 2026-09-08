@@ -2,12 +2,14 @@
 //!
 //! One process may hold one Slint backend, so every flow runs inside a single `#[test]`, in
 //! order, over one window: an empty list, a vanilla create, a Fabric create, a launch and a
-//! stop, a launch that fails and shows the error dialog, then a rename and a delete.
+//! stop, the JVM tab's garbage collector picker, a launch that fails and shows the error
+//! dialog, a rename and a delete, then a second instance whose Java offers a shorter list.
 
 #![cfg(unix)]
 
 mod support;
 
+use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -21,6 +23,9 @@ const QUICK: Duration = Duration::from_secs(20);
 /// How long a flow waits for the stand-in java to start or to stop.
 const LAUNCH: Duration = Duration::from_secs(30);
 
+/// An extra JVM argument the collector flow saves, to prove the preset's flags come first.
+const EXTRA_ARG: &str = "-Dgcl.flow=1";
+
 #[test]
 fn the_instances_screen_creates_launches_and_removes_an_instance() {
     support::init_backend();
@@ -33,9 +38,11 @@ fn the_instances_screen_creates_launches_and_removes_an_instance() {
         a_never_launched_instance_has_an_empty_log(app).await;
         creating_a_fabric_instance_installs_the_loader(app).await;
         launching_a_row_runs_the_game_until_stop(app).await;
+        the_jvm_tab_picks_a_garbage_collector(app).await;
         a_launch_that_cannot_start_opens_the_error_dialog(app).await;
         the_click_after_escape_still_lands(app).await;
         renaming_and_deleting_an_instance(app).await;
+        another_java_offers_another_collector_list(app).await;
     });
 }
 
@@ -66,6 +73,63 @@ fn row_index(window: &AppWindow, name: &str) -> usize {
         .iter()
         .position(|row| row.name == name)
         .unwrap_or_else(|| panic!("no row named `{name}` in {:?}", row_names(window)))
+}
+
+/// The text one label element is showing, whichever accessible field carries it.
+fn text_of(app: &TestApp, id: &str) -> String {
+    let element = app.el(id);
+    element
+        .accessible_label()
+        .or_else(|| element.accessible_value())
+        .map(|text| text.to_string())
+        .unwrap_or_default()
+}
+
+/// The labels the garbage collector combo is offering, in menu order.
+fn gc_labels(window: &AppWindow) -> Vec<String> {
+    window
+        .global::<InstanceState>()
+        .get_gc_labels()
+        .iter()
+        .map(|label| label.to_string())
+        .collect()
+}
+
+/// The position of one collector label in the combo.
+fn gc_index(window: &AppWindow, label: &str) -> usize {
+    gc_labels(window)
+        .iter()
+        .position(|row| row == label)
+        .unwrap_or_else(|| panic!("no `{label}` entry in {:?}", gc_labels(window)))
+}
+
+/// What one instance's `instance.toml` holds right now.
+fn instance_toml(app: &TestApp, slug: &str) -> String {
+    std::fs::read_to_string(
+        app.launcher
+            .root()
+            .instances_dir()
+            .join(slug)
+            .join("instance.toml"),
+    )
+    .unwrap_or_default()
+}
+
+/// Opens the JVM tab of the detail screen that is already showing and waits for the probe.
+///
+/// The probe runs `<root>/fake-java -XX:+PrintFlagsFinal -version`, which the stand-in
+/// answers with the recorded dump beside it, so the status line names that dump's version.
+async fn open_jvm_tab(app: &TestApp, version: &str) {
+    // Tab 2 is JVM.
+    app.el_nth("TabBar::tab_entry", 2)
+        .invoke_accessible_default_action();
+    support::pump();
+    app.wait_until(
+        &format!("the collector probe to report {version}"),
+        |_| text_of(app, "InstanceScreen::gc_status_text").contains(version),
+        QUICK,
+    )
+    .await;
 }
 
 /// (a) A fresh root has no instances, and the screen says so.
@@ -308,6 +372,103 @@ async fn launching_a_row_runs_the_game_until_stop(app: &TestApp) {
     assert!(app.launcher.running_slugs().is_empty());
 }
 
+/// (d1b) The JVM tab offers the collectors the instance's Java carries, and a pick is launched.
+///
+/// The stand-in java answers the probe with a recorded Java 21 dump, which lists all six
+/// collector flags, so every preset is on offer. Picking one saves it on its own, a heap save
+/// afterwards must keep it, and the launch that follows must pass its flags before the
+/// instance's own extra arguments.
+async fn the_jvm_tab_picks_a_garbage_collector(app: &TestApp) {
+    open_jvm_tab(app, "Java 21").await;
+    assert_eq!(
+        gc_labels(&app.window),
+        [
+            "Launcher default",
+            "Serial",
+            "Parallel",
+            "G1",
+            "ZGC",
+            "ZGC (generational)",
+            "Shenandoah",
+        ],
+        "the Java 21 dump lists every collector flag, so every preset is offered"
+    );
+
+    let index = gc_index(&app.window, "ZGC (generational)");
+    app.select_combo("InstanceScreen::gc_combo", index);
+    app.wait_until(
+        "the picked preset to reach instance.toml",
+        |_| instance_toml(app, "vanilla").contains(r#"gc = "zgc_generational""#),
+        QUICK,
+    )
+    .await;
+    assert_eq!(
+        app.el("InstanceScreen::gc_combo").accessible_value(),
+        Some("ZGC (generational)".into()),
+        "the combo itself shows what was picked, not only the state behind it"
+    );
+
+    // A heap save writes the other JVM fields. It must not wipe the preset beside them.
+    app.type_into("InstanceScreen::memory_max_spin", "3072");
+    app.type_into("InstanceScreen::jvm_args_field", EXTRA_ARG);
+    support::pump();
+    app.click("InstanceScreen::jvm_save_button");
+    app.wait_until(
+        "the heap change to reach instance.toml",
+        |_| instance_toml(app, "vanilla").contains("max_mib = 3072"),
+        QUICK,
+    )
+    .await;
+    let toml = instance_toml(app, "vanilla");
+    assert!(
+        toml.contains(r#"gc = "zgc_generational""#),
+        "a heap save keeps the collector preset. instance.toml holds:
+{toml}"
+    );
+
+    app.click("InstanceScreen::launch_button");
+    app.wait_until(
+        "the game to be running",
+        |window| window.global::<InstanceState>().get_running(),
+        LAUNCH,
+    )
+    .await;
+    app.wait_until(
+        "the stand-in java to record the launch arguments",
+        |_| app.java_args().iter().any(|arg| arg == EXTRA_ARG),
+        LAUNCH,
+    )
+    .await;
+
+    let args = app.java_args();
+    let at = |flag: &str| {
+        args.iter()
+            .position(|arg| arg == flag)
+            .unwrap_or_else(|| panic!("no `{flag}` in the launch arguments: {args:?}"))
+    };
+    let extra = at(EXTRA_ARG);
+    assert!(
+        at("-XX:+UseZGC") < extra,
+        "the collector flags come before the instance's own arguments: {args:?}"
+    );
+    assert!(
+        at("-XX:+ZGenerational") < extra,
+        "Java 21 needs the generational switch as well: {args:?}"
+    );
+
+    app.click("InstanceScreen::stop_button");
+    app.wait_until(
+        "the game to stop",
+        |window| !window.global::<InstanceState>().get_running(),
+        LAUNCH,
+    )
+    .await;
+    // Back to the Content tab, where the next step expects the screen.
+    app.el_nth("TabBar::tab_entry", 0)
+        .invoke_accessible_default_action();
+    support::pump();
+}
+
 /// (d2) A launch the launcher cannot start opens the shared error dialog, and Dismiss shuts it.
 ///
 /// The stand-in java is made unreadable and unexecutable for the length of this sub-flow, so
@@ -448,4 +609,117 @@ async fn renaming_and_deleting_an_instance(app: &TestApp) {
         !app.launcher.root().instances_dir().join("vanilla").exists(),
         "the instance folder was removed"
     );
+}
+
+/// (f) A Java without a collector shortens the list, and a saved preset it lacks is named.
+///
+/// Two stand-in javas, both answering the probe from a recorded dump beside them: a real
+/// Java 17 one, which has no `ZGenerational` flag and so no generational ZGC, and a Java 21
+/// one with its `UseShenandoahGC` line taken out.
+async fn another_java_offers_another_collector_list(app: &TestApp) {
+    app.click("InstancesScreen::create_button");
+    app.wait_for("CreateInstanceDialog::name_field", QUICK)
+        .await;
+    app.wait_until(
+        "the Minecraft version list to load",
+        |window| {
+            window
+                .global::<InstancesState>()
+                .get_version_labels()
+                .row_count()
+                > 0
+        },
+        QUICK,
+    )
+    .await;
+    app.type_into("CreateInstanceDialog::name_field", "Jvm");
+    support::pump();
+    app.click("Dialog::confirm_button");
+    app.wait_until(
+        "the new row to appear",
+        |window| row(window, "Jvm").is_some(),
+        QUICK,
+    )
+    .await;
+
+    let index = row_index(&app.window, "Jvm");
+    app.click_nth("InstancesScreen::row_open", index);
+    app.wait_until(
+        "the detail screen to show the instance",
+        |window| {
+            window.global::<App>().get_screen() == Screen::Instance
+                && window.global::<InstanceState>().get_name() == "Jvm"
+        },
+        QUICK,
+    )
+    .await;
+
+    let java17 = support::write_java_stand_in(app.root(), "fake-java-17", support::PRINTFLAGS_17);
+    point_java_at(app, &java17, "Java 17").await;
+    let labels = gc_labels(&app.window);
+    assert!(
+        !labels.iter().any(|label| label == "ZGC (generational)"),
+        "Java 17 has no generational ZGC flag, so it must not be offered: {labels:?}"
+    );
+    assert!(
+        labels.iter().any(|label| label == "ZGC"),
+        "it does carry plain ZGC: {labels:?}"
+    );
+
+    // Save Shenandoah while the Java has it, then take that Java away.
+    let java21 = app.root().join("fake-java");
+    point_java_at(app, &java21, "Java 21").await;
+    app.select_combo(
+        "InstanceScreen::gc_combo",
+        gc_index(&app.window, "Shenandoah"),
+    );
+    app.wait_until(
+        "Shenandoah to reach instance.toml",
+        |_| instance_toml(app, "jvm").contains(r#"gc = "shenandoah""#),
+        QUICK,
+    )
+    .await;
+
+    let dump: String = support::PRINTFLAGS_21
+        .lines()
+        .filter(|line| !line.contains("UseShenandoahGC"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let plain = support::write_java_stand_in(app.root(), "fake-java-no-shenandoah", &dump);
+    point_java_at(app, &plain, "Java 21").await;
+    app.wait_for("InstanceScreen::gc_unavailable_text", QUICK)
+        .await;
+    let warning = text_of(app, "InstanceScreen::gc_unavailable_text");
+    assert!(
+        warning.contains("Shenandoah"),
+        "the saved preset this Java lacks is named. The line reads: {warning}"
+    );
+    assert!(
+        !gc_labels(&app.window)
+            .iter()
+            .any(|label| label == "Shenandoah"),
+        "and it is gone from the list"
+    );
+}
+
+/// Points the instance on screen at `java` through the JVM tab, and waits for the reprobe.
+async fn point_java_at(app: &TestApp, java: &Path, version: &str) {
+    // Tab 2 is JVM. The tab is already showing after the first call, and clicking the entry
+    // it is on changes nothing, so this is safe to repeat.
+    app.el_nth("TabBar::tab_entry", 2)
+        .invoke_accessible_default_action();
+    support::pump();
+    app.type_into("InstanceScreen::java_path_field", &java.to_string_lossy());
+    support::pump();
+    app.click("InstanceScreen::jvm_save_button");
+    app.wait_until(
+        &format!("the reprobe to report {version} from {}", java.display()),
+        |_| {
+            let status = text_of(app, "InstanceScreen::gc_status_text");
+            status.contains(version)
+                && instance_toml(app, "jvm").contains(&java.display().to_string())
+        },
+        QUICK,
+    )
+    .await;
 }

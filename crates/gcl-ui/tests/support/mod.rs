@@ -65,15 +65,34 @@ const LOG_CONFIG: &[u8] = b"<Configuration></Configuration>";
 /// The `minecraftArguments` the mock version carries: the player name only.
 const VANILLA_ARGUMENTS: &str = "--username ${auth_player_name}";
 
+/// A recorded `-XX:+PrintFlagsFinal` dump from a real Java 21, for the stand-in's probe
+/// branch. Its first line is the `openjdk version "21.0.7"` banner a real JVM prints.
+pub const PRINTFLAGS_21: &str = include_str!("../../../../tests/fixtures/java/printflags-21.txt");
+
+/// The same, from a real Java 17: no `ZGenerational` flag, so no generational ZGC.
+pub const PRINTFLAGS_17: &str = include_str!("../../../../tests/fixtures/java/printflags-17.txt");
+
 /// The stand-in for `java`.
 ///
-/// It appends its whole argument list to `java-args.txt`, says it started, then waits. A
-/// `SIGTERM` makes it exit 143, the code a shell reports for "terminated"; a `stop` file in
-/// the root is the way a flow ends it without a signal. It gives up after 30 seconds so a
-/// broken test cannot leave a process behind.
+/// Two behaviours in one script. Asked for a flag dump (`-XX:+PrintFlagsFinal`, which only
+/// the collector probe passes) it prints the dump file that sits next to it — the whole file
+/// on stdout, its banner line on stderr, the way a real JVM splits them — and exits 0 without
+/// recording anything, so `java-args.txt` holds launch arguments only.
+///
+/// Otherwise it appends its whole argument list to `java-args.txt`, says it started, then
+/// waits. A `SIGTERM` makes it exit 143, the code a shell reports for "terminated"; a `stop`
+/// file in the root is the way a flow ends it without a signal. It gives up after 30 seconds
+/// so a broken test cannot leave a process behind.
 #[cfg(unix)]
 const FAKE_JAVA: &str = "#!/bin/sh\n\
      root=$(dirname \"$0\")\n\
+     for arg in \"$@\"; do\n\
+       if [ \"$arg\" = \"-XX:+PrintFlagsFinal\" ]; then\n\
+         head -n 1 \"$0.flags\" >&2\n\
+         cat \"$0.flags\"\n\
+         exit 0\n\
+       fi\n\
+     done\n\
      printf '%s\\n' \"$@\" >> \"$root/java-args.txt\"\n\
      trap 'exit 143' TERM\n\
      echo started\n\
@@ -789,9 +808,21 @@ pub fn init_backend() {
 /// Writes the stand-in java into `dir` and returns its path.
 #[cfg(unix)]
 fn write_fake_java(dir: &Path) -> PathBuf {
+    write_java_stand_in(dir, "fake-java", PRINTFLAGS_21)
+}
+
+/// Writes one stand-in java named `name` into `dir`, answering the collector probe with
+/// `dump`, and returns its path.
+///
+/// The dump goes in a `<name>.flags` file beside the script, so a flow can stand up a second
+/// java that reports a different version or a missing collector without a second script.
+#[cfg(unix)]
+pub fn write_java_stand_in(dir: &Path, name: &str, dump: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
-    let path = dir.join("fake-java");
+    let path = dir.join(name);
     std::fs::write(&path, FAKE_JAVA).expect("write the stand-in java");
+    std::fs::write(path.with_file_name(format!("{name}.flags")), dump)
+        .expect("write the stand-in java flag dump");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     path
 }
