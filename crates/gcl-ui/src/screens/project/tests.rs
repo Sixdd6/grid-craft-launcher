@@ -15,6 +15,7 @@ fn version(id: &str) -> Version {
         game_versions: vec!["1.21.1".to_string(), "1.21".to_string()],
         loaders: vec!["fabric".to_string(), "quilt".to_string()],
         published: "2026-08-01T10:00:00Z".to_string(),
+        changelog: None,
         files: Vec::new(),
         dependencies: Vec::new(),
     }
@@ -34,7 +35,11 @@ fn block_row_maps_every_other_kind() {
         "paragraph"
     );
     assert_eq!(
-        block_row(&CoreBlock::Bullet("b".to_string())).kind,
+        block_row(&CoreBlock::Bullet {
+            depth: 1,
+            text: "b".to_string()
+        })
+        .kind,
         "bullet"
     );
     assert_eq!(block_row(&CoreBlock::Code("c".to_string())).kind, "code");

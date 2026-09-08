@@ -467,12 +467,29 @@ fn build_version_rows(
 }
 
 /// Builds the description-tab row for one block.
+///
+/// The Slint `Block` carries a kind and one text today, so a table arrives as its rows
+/// joined with `|` and an image as its alt text. Plan 10's Task 3 gives the struct the
+/// `depth`, `url`, `columns`, and `cells` fields these kinds really need.
 pub fn block_row(block: &CoreBlock) -> Block {
     let (kind, text) = match block {
-        CoreBlock::Heading(level, text) => (format!("heading{}", (*level).clamp(1, 6)), text),
-        CoreBlock::Paragraph(text) => ("paragraph".to_string(), text),
-        CoreBlock::Bullet(text) => ("bullet".to_string(), text),
-        CoreBlock::Code(text) => ("code".to_string(), text),
+        CoreBlock::Heading(level, text) => {
+            (format!("heading{}", (*level).clamp(1, 6)), text.clone())
+        }
+        CoreBlock::Paragraph(text) => ("paragraph".to_string(), text.clone()),
+        CoreBlock::Bullet { text, .. } => ("bullet".to_string(), text.clone()),
+        CoreBlock::Code(text) => ("code".to_string(), text.clone()),
+        CoreBlock::Quote(text) => ("quote".to_string(), text.clone()),
+        CoreBlock::Rule => ("rule".to_string(), String::new()),
+        CoreBlock::Image { alt, .. } => ("image".to_string(), alt.clone()),
+        CoreBlock::Table { header, rows } => (
+            "table".to_string(),
+            std::iter::once(header)
+                .chain(rows)
+                .map(|row| row.join(" | "))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
     };
     Block {
         kind: kind.into(),

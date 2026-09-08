@@ -124,30 +124,45 @@ with CurseForge only when a key was found; the list is cached on the `Launcher`,
 
 ## Rich text (`sources::richtext`)
 
-`Block::{Heading(level, text), Paragraph(text), Bullet(text), Code(text)}`, built by
-`from_markdown` (Modrinth) or `from_html` (CurseForge). Both are display converters, not
-parsers: headings, paragraphs, list items, code blocks, and links (`text (url)`) survive;
-images, tables, `<script>`, and `<style>` are dropped with their contents; every other tag or
-marker is stripped and its text kept. No dependency — the markdown side is a line scanner, the
-HTML side a tag-aware stripper.
+`Block::{Heading(level, text), Paragraph(text), Bullet { depth, text }, Code(text),
+Table { header, rows }, Rule, Image { url, alt }, Quote(text)}`, built by `from_markdown`
+(Modrinth) or `from_html` (CurseForge). Both are display converters, not parsers: headings,
+paragraphs, list items with their nesting depth, code blocks, tables, rules, quotes, images,
+and links (`text (url)`) survive; `<script>` and `<style>` are dropped with their contents;
+every other tag or marker is stripped and its text kept. No dependency — the markdown side is
+a line scanner, the HTML side a tag-aware stripper.
+
+`Block::text()` answers the block's own text: `""` for `Rule` and `Table` (a table's strings
+are its `header` and `rows`), the alt text for `Image`.
 
 A real Modrinth `body` is markdown with HTML in it: `<center><img>`, `<details>`, `<summary>`,
 badge tables, `<br>`. The rules, all covered by tests over the recorded bodies of Sodium,
-Create, and JEI (`tests/fixtures/modrinth/project_body_*.json`):
+Create, JEI, ImmediatelyFast (a pipe table), and Mod Menu (`<details>`, a blockquote)
+(`tests/fixtures/modrinth/project_body_*.json`):
 
-- **Tags in markdown are stripped** with the same tokenizer `from_html` uses, outside code
-  fences only, so a fenced `<config>` survives. `<img>` goes, a `<script>`, `<style>`, or
-  `<table>` subtree goes whole, a block-level tag becomes a line break, `<li>` becomes `- `,
-  and entities are decoded.
+- **Tags in markdown are rewritten as markdown** with the same tokenizer `from_html` uses,
+  outside code fences only, so a fenced `<config>` survives. `<img>` becomes `![alt](src)`,
+  `<summary>` becomes a `###` heading line, `<hr>` becomes a `***` rule line, `<li>` becomes
+  `- ` indented by its `<ul>`/`<ol>` nesting, a block-level tag becomes a line break, and
+  entities are decoded. A `<script>`, `<style>`, or `<table>` subtree goes whole — a markdown
+  body's HTML tables are badge layout, and its real tables are written with pipes.
 - **A body that is block-level HTML** (`<p>`, `<ul>`, `<h1..6>` in it) **with no markdown
   structure at all** — no `#` heading, list marker, or fence — is handed to `from_html` whole.
   A mixed body stays on the markdown path.
 - **Ordered lists** (`1. `, `1) `) become `Bullet`, since a `Block` carries no numbering.
+  **Bullet depth** comes from the line's indent: two spaces or one tab per level, capped at 6.
+- **Pipe tables**: a row whose next line is an alignment row (`|---|---|`) is the header, and
+  body rows run until the first line that is not a pipe row. A row is a pipe row when it
+  starts with `|` or holds a ` | `. An alignment row no table row precedes is dropped.
 - **Setext headings**: a `===` or `---` underline after a text line is a `Heading` (1 or 2).
-  A `---` on its own is a rule and is dropped, as is a table separator row (only `|`, `-`, and
-  `:` in it). A leading `> ` is dropped.
+  On its own, `===`, `---`, `***`, or `___` is a `Rule`.
+- **A one-level `> ` line** is a `Quote`, and a run of them joins into one block. A nested
+  `>>` is not: `unquote` strips its markers and the text joins the paragraph, as before.
+- **A paragraph that is one `**bold**` run and nothing else** becomes `Heading(4, text)`.
 - **Two `<br>` in a row end the paragraph**; one is a space.
-- **A badge** — `[![alt](image)](url)` — is dropped whole, like an `<a>` with no text.
+- **A badge** — `[![alt](image)](url)` — is dropped whole, image and all, like an `<a>` with
+  no text. A plain `![alt](url)` becomes an `Image` block emitted after the paragraph or
+  bullet whose line carried it.
 - **Entities**: numeric (`&#8217;`, `&#x2019;`) plus `nbsp lt gt quot apos amp mdash ndash
   hellip rsquo lsquo ldquo rdquo middot copy trade reg`. Anything else stays as written.
 - **`</a>` appends ` (href)` only when the anchor produced text**, so an image-only link keeps
@@ -155,10 +170,16 @@ Create, and JEI (`tests/fixtures/modrinth/project_body_*.json`):
   not mistaken for the `href`.
 - **A self-closing `<script/>`, `<style/>`, or `<table/>` opens no subtree**: `parse_tag`
   reports `self_closing`, so it cannot swallow the rest of the document.
+- **On the HTML path**, `<table>` builds a `Block::Table` — the first `<tr>` with `<th>` cells
+  is the header, else the first row — `<hr>` a `Rule`, `<blockquote>` a `Quote` (prose inside
+  one flushes as a quote, however many `<p>` it holds), `<summary>` a level-3 heading, and
+  `<img src alt>` an `Image`. `<ul>`/`<ol>` nesting sets each `<li>`'s depth. An `<img>` inside
+  a table cell is ignored, so a badge grid does not spray images into the middle of a table.
 - **Bounded work and bounded output**: a link label is looked for within 512 characters and no
   scan starts past the last `]`, so a line of unmatched `[` stays linear. At most 2 000 blocks
   and 8 KiB per block; a longer block ends in `…`, and a longer body ends with one
-  `Paragraph("…")`.
+  `Paragraph("…")`. A table holds at most 50 body rows and 8 columns, extra ones dropped rather
+  than refused, and a cell is cut at 200 characters with the same `…` marker.
 
 ## Fingerprint (`sources::fingerprint`)
 
