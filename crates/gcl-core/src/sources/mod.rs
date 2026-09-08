@@ -7,6 +7,7 @@
 pub mod curseforge;
 pub mod fingerprint;
 pub mod modrinth;
+pub mod richtext;
 pub mod types;
 
 pub use types::{
@@ -118,6 +119,12 @@ pub trait Source: Send + Sync {
     }
     /// Fetches one project by id or slug.
     async fn project(&self, id_or_slug: &str) -> Result<Project, Error>;
+    /// Fetches a project's long description, in the source's own markup.
+    ///
+    /// Modrinth answers markdown (the project's `body`), CurseForge answers HTML.
+    /// The caller converts with [`richtext::from_markdown`] or
+    /// [`richtext::from_html`]. There is no default body: every source answers this.
+    async fn description(&self, project_id: &str) -> Result<String, Error>;
     /// Lists a project's versions, optionally filtered.
     async fn versions(&self, project_id: &str, f: &VersionFilter) -> Result<Vec<Version>, Error>;
     /// Fetches one version by id.

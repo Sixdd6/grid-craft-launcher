@@ -1,0 +1,3 @@
+{
+  "data": "<h1>Example Mod</h1>\n<p>Example Mod adds one thing to the game.<br>It works on <b>Forge</b>.</p>\n<img src=\"https://example.com/banner.png\" alt=\"banner\">\n<ul>\n<li>Fast</li>\n<li>Small</li>\n<li><a href=\"https://example.com/docs\">Docs</a></li>\n</ul>\n<pre><code>[example]\nenabled = true</code></pre>\n<table><tr><td>Version</td><td>1.20.1</td></tr></table>\n<h2>Install</h2>\n<p>Drop the jar in mods/ &amp; play.</p>\n"
+}

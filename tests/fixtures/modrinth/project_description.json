@@ -1,0 +1,18 @@
+{
+  "id": "AAaaBBbb",
+  "slug": "example-mod",
+  "project_type": "mod",
+  "title": "Example Mod",
+  "description": "Adds one thing to the game.",
+  "body": "# Example Mod\n\nExample Mod adds one thing to the game.\nIt works on **Fabric** and Quilt.\n\n- Fast\n- Small\n- [Docs](https://example.com/docs)\n\n```toml\n[example]\nenabled = true\n```\n\n## Install\n\nDrop the jar in `mods/`.\n",
+  "downloads": 1234,
+  "icon_url": "https://cdn.modrinth.com/data/AAaaBBbb/icon.png",
+  "categories": [
+    "fabric",
+    "quilt"
+  ],
+  "versions": [
+    "v1",
+    "v2"
+  ]
+}

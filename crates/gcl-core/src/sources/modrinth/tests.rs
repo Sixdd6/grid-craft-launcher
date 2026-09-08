@@ -17,6 +17,8 @@ const VERSIONS_SODIUM: &str =
     include_str!("../../../../../tests/fixtures/modrinth/versions_sodium_1.20.1_fabric.json");
 const VERSION_FILES: &str =
     include_str!("../../../../../tests/fixtures/modrinth/version_files_lookup.json");
+const PROJECT_DESCRIPTION: &str =
+    include_str!("../../../../../tests/fixtures/modrinth/project_description.json");
 const SEARCH_TYPES: &str = include_str!("../../../../../tests/fixtures/modrinth/search_types.json");
 const SEARCH_PACKS: &str = include_str!("../../../../../tests/fixtures/modrinth/search_packs.json");
 
@@ -732,4 +734,54 @@ async fn a_mod_search_hit_is_not_a_pack() {
     let source = serve(&server, "/search", SEARCH_SODIUM).await;
     let page = source.search(&mod_query("sodium")).await.expect("search");
     assert!(page.hits.iter().all(|h| !h.is_pack), "{:?}", page.hits);
+}
+
+#[tokio::test]
+async fn description_returns_the_project_body() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/project/example-mod"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(PROJECT_DESCRIPTION))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let source = Modrinth::with_base_url(client(), server.uri());
+
+    let body = source.description("example-mod").await.expect("body");
+
+    assert!(body.starts_with("# Example Mod"), "got {body:?}");
+    assert!(body.contains("[Docs](https://example.com/docs)"));
+}
+
+#[tokio::test]
+async fn description_of_a_project_without_a_body_is_empty() {
+    let server = MockServer::start().await;
+    let source = serve(
+        &server,
+        "/project/bare",
+        r#"{"id":"a","slug":"bare","title":"Bare","project_type":"mod"}"#,
+    )
+    .await;
+
+    assert_eq!(source.description("bare").await.expect("body"), "");
+}
+
+#[tokio::test]
+async fn description_404_is_not_found() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/project/nope"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let source = Modrinth::with_base_url(client(), server.uri());
+
+    match source.description("nope").await.expect_err("404 fails") {
+        Error::NotFound { source_id, id } => {
+            assert_eq!(source_id, SourceId::Modrinth);
+            assert_eq!(id, "nope");
+        }
+        other => panic!("got {other:?}"),
+    }
 }

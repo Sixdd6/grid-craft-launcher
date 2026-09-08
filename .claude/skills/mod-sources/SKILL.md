@@ -17,6 +17,7 @@ pub trait Source: Send + Sync {
     async fn search(&self, q: &SearchQuery) -> Result<SearchPage, Error>;
     async fn search_packs(&self, q: &SearchQuery) -> Result<SearchPage, Error>;  // modpacks; default: UnsupportedPacks
     async fn project(&self, id_or_slug: &str) -> Result<Project, Error>;
+    async fn description(&self, project_id: &str) -> Result<String, Error>;  // no default body
     async fn versions(&self, project_id: &str, f: &VersionFilter) -> Result<Vec<Version>, Error>;
     async fn version(&self, version_id: &str) -> Result<Version, Error>;
     async fn resolve_by_hash(&self, sha1: &[String]) -> Result<Vec<Version>, Error>;
@@ -58,6 +59,9 @@ with CurseForge only when a key was found; the list is cached on the `Launcher`,
   AND, inner array OR.
 - Versions: `GET /project/{id}/version?loaders=["fabric"]&game_versions=["1.20.1"]&include_changelog=false`.
 - Hash lookup: `POST /version_files { hashes, algorithm: "sha1" }`.
+- Description: no endpoint of its own. `Source::description` re-fetches `GET /project/{id}` and
+  returns its `body` (markdown), which `sources::richtext::from_markdown` turns into blocks. A
+  project with no body answers an empty string, not an error.
 - Files have both `sha1` and `sha512`; the object store only checks sha1.
 - **`world` is not a Modrinth project type.** `KINDS` in `modrinth.rs` lists `Mod`,
   `ResourcePack`, `Shader`, `DataPack` only; `ContentKind::World` is left out and `search`
@@ -84,6 +88,12 @@ with CurseForge only when a key was found; the list is cached on the `Launcher`,
   searching for that kind then fails with `Error::UnsupportedKind`, whatever `supported_kinds`
   lists. **This machine has no `CURSEFORGE_API_KEY`, so the shader and data pack class ids are
   unverified.** `tests/fixtures/curseforge/README.md` says why the fixtures are synthetic.
+- Description: `GET /v1/mods/{id}/description`, HTML, turned into blocks by
+  `sources::richtext::from_html`. **VERIFY: the response envelope is assumed to be
+  `{"data": "<html string>"}`**, matching every other CurseForge endpoint this codebase parses.
+  No `CURSEFORGE_API_KEY` on this machine, so `tests/fixtures/curseforge/get_mod_description.json`
+  is synthetic and the shape is unconfirmed against a live response. A non-numeric project id is
+  `Error::NotFound`, as with `versions`.
 - Loader ids (`modLoaderType`): Forge 1, Fabric 4, Quilt 5, NeoForge 6.
 - Files: `GET /v1/mods/{id}/files?gameVersion=&modLoaderType=&pageSize=50&index=0`.
   `downloadUrl` may be null. `CurseForge::mod_files` and `CurseForge::pack_files` both call
@@ -98,6 +108,15 @@ with CurseForge only when a key was found; the list is cached on the `Launcher`,
 - `CurseForge::resolve_pack_id(id_or_slug)` resolves a modpack's id or slug to its numeric mod
   id, for `modpacks::fetch_pack` — `Source::project` refuses a modpack outright, since a modpack
   is not a `ContentKind`.
+
+## Rich text (`sources::richtext`)
+
+`Block::{Heading(level, text), Paragraph(text), Bullet(text), Code(text)}`, built by
+`from_markdown` (Modrinth) or `from_html` (CurseForge). Both are display converters, not
+parsers: headings, paragraphs, list items, code blocks, and links (`text (url)`) survive;
+images, tables, `<script>`, and `<style>` are dropped with their contents; every other tag or
+marker is stripped and its text kept. No dependency — the markdown side is a line scanner, the
+HTML side a tag-aware stripper.
 
 ## Fingerprint (`sources::fingerprint`)
 

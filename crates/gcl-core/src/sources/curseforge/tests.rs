@@ -21,6 +21,9 @@ const FILES_BATCH: &str =
 const FINGERPRINTS: &str =
     include_str!("../../../../../tests/fixtures/curseforge/fingerprints.json");
 
+const DESCRIPTION: &str =
+    include_str!("../../../../../tests/fixtures/curseforge/get_mod_description.json");
+
 const KEY: &str = "test-api-key";
 
 /// A client with no backoff, so a retry in a failing test does not stall the suite.
@@ -916,4 +919,65 @@ async fn search_packs_sends_the_modpack_class_id_and_keeps_only_packs() {
         "got {}",
         search.url
     );
+}
+
+#[tokio::test]
+async fn description_returns_the_html_from_the_data_envelope() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/mods/394468/description"))
+        .and(header("x-api-key", KEY))
+        .respond_with(ResponseTemplate::new(200).set_body_string(DESCRIPTION))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let html = source(&server)
+        .description("394468")
+        .await
+        .expect("description");
+
+    assert!(html.starts_with("<h1>Example Mod</h1>"), "got {html:?}");
+    assert!(html.contains("<a href=\"https://example.com/docs\">Docs</a>"));
+}
+
+#[tokio::test]
+async fn description_of_a_non_numeric_id_is_not_found() {
+    let server = MockServer::start().await;
+
+    match source(&server)
+        .description("sodium")
+        .await
+        .expect_err("slug fails")
+    {
+        Error::NotFound { source_id, id } => {
+            assert_eq!(source_id, SourceId::CurseForge);
+            assert_eq!(id, "sodium");
+        }
+        other => panic!("got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn description_404_is_not_found() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/mods/1/description"))
+        .and(header("x-api-key", KEY))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    match source(&server)
+        .description("1")
+        .await
+        .expect_err("404 fails")
+    {
+        Error::NotFound { source_id, id } => {
+            assert_eq!(source_id, SourceId::CurseForge);
+            assert_eq!(id, "1");
+        }
+        other => panic!("got {other:?}"),
+    }
 }

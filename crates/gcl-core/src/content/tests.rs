@@ -91,6 +91,13 @@ impl Source for FakeSource {
             })
     }
 
+    /// Stands in for a real description: the project's summary as one markdown
+    /// paragraph under its title.
+    async fn description(&self, project_id: &str) -> Result<String, crate::sources::Error> {
+        let project = self.project(project_id).await?;
+        Ok(format!("# {}\n\n{}\n", project.title, project.description))
+    }
+
     async fn versions(
         &self,
         project_id: &str,

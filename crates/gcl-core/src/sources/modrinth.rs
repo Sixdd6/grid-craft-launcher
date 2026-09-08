@@ -274,6 +274,19 @@ impl Source for Modrinth {
     }
 
     #[tracing::instrument(skip(self))]
+    async fn description(&self, project_id: &str) -> Result<String, Error> {
+        // The long description is the project's own `body` field: Modrinth has no
+        // separate description endpoint, so this is the same GET as `project`.
+        let url = format!("{}/project/{}", self.base, encode(project_id));
+        let raw: RawProject = self
+            .http
+            .get_json(&url)
+            .await
+            .map_err(|e| map_err(e, "description", Some(project_id)))?;
+        Ok(raw.body)
+    }
+
+    #[tracing::instrument(skip(self))]
     async fn versions(&self, project_id: &str, f: &VersionFilter) -> Result<Vec<Version>, Error> {
         self.fetch_versions(project_id, f.minecraft.as_deref(), &f.loaders)
             .await
@@ -468,6 +481,9 @@ struct RawProject {
     title: String,
     #[serde(default)]
     description: String,
+    /// The long description, in markdown. Absent on a project that has none.
+    #[serde(default)]
+    body: String,
     project_type: String,
 }
 

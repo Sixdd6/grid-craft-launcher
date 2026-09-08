@@ -28,3 +28,9 @@ the research doc's **VERIFY** table and are themselves unconfirmed against a liv
 The `api-verifier` agent must re-record every one of these fixtures against the real API with a
 valid `CURSEFORGE_API_KEY` before any CurseForge client code that depends on them is considered
 verified. Until then, treat exact field values (not just field names) as unverified.
+
+`get_mod_description.json` is synthetic in one more way: the **envelope shape itself is
+unverified**. `GET /v1/mods/{id}/description` is written here as `{"data": "<html string>"}`,
+matching every other endpoint in this API, but no live response was available to confirm it is
+not a bare string. The api-verifier agent must check this before the CurseForge description
+path is trusted.

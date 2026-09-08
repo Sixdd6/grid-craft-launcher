@@ -533,6 +533,24 @@ impl Source for CurseForge {
     }
 
     #[tracing::instrument(skip(self))]
+    async fn description(&self, project_id: &str) -> Result<String, Error> {
+        let id = project_id.parse::<u32>().map_err(|_| Error::NotFound {
+            source_id: ID,
+            id: project_id.to_string(),
+        })?;
+        // VERIFY: the envelope is assumed to be `{"data": "<html>"}`, like every other
+        // CurseForge endpoint this client parses. No `CURSEFORGE_API_KEY` was
+        // available to record a real response, so the fixture is synthetic; see
+        // `tests/fixtures/curseforge/README.md` and the `mod-sources` skill.
+        let url = format!("{}/v1/mods/{id}/description", self.base);
+        let body: Envelope<String> = self
+            .get(&url)
+            .await
+            .map_err(|e| map_err(e, "description", Some(project_id)))?;
+        Ok(body.data)
+    }
+
+    #[tracing::instrument(skip(self))]
     async fn versions(&self, project_id: &str, f: &VersionFilter) -> Result<Vec<Version>, Error> {
         let id = project_id.parse::<u32>().map_err(|_| Error::NotFound {
             source_id: ID,
