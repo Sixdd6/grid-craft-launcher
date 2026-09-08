@@ -34,9 +34,17 @@ pub const MAX_BYTES: u64 = 2 * 1024 * 1024;
 /// Downloads icons into `cache/icons/`, at most one request per URL at a time.
 ///
 /// Hold one per launcher. It is `Send + Sync`, so any thread may ask it for an icon.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct IconCache {
     inner: MediaCache,
+}
+
+impl Default for IconCache {
+    fn default() -> Self {
+        Self {
+            inner: MediaCache::new(policy()),
+        }
+    }
 }
 
 impl IconCache {
@@ -61,9 +69,7 @@ impl IconCache {
         url: &str,
         extra_hosts: &[String],
     ) -> Result<PathBuf, Error> {
-        self.inner
-            .fetch(http, root, url, extra_hosts, &policy())
-            .await
+        self.inner.fetch(http, root, url, extra_hosts).await
     }
 }
 
@@ -72,6 +78,7 @@ fn policy() -> Policy {
     Policy {
         allowed_hosts: Some(ALLOWED_HOSTS.iter().map(|h| (*h).to_string()).collect()),
         max_bytes: MAX_BYTES,
+        refuse_private: true,
         dir: Root::icons_dir,
     }
 }
@@ -280,5 +287,46 @@ mod tests {
             matches!(&err, Error::DisallowedHost { host, .. } if host == "evil.example"),
             "{err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_redirect_to_a_host_outside_the_allowlist_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_matcher("/hop.png"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("location", "https://evil.example/icon.png"),
+            )
+            .mount(&server)
+            .await;
+
+        let url = format!("{}/hop.png", server.uri());
+        let err = IconCache::new()
+            .fetch(&client(), &root, &url, &local_hosts())
+            .await
+            .expect_err("the hop leaves the allowlist");
+
+        assert!(matches!(err, Error::DisallowedHost { .. }), "{err:?}");
+        assert!(!root.icons_dir().join(cache_file_name(&url)).exists());
+    }
+
+    #[tokio::test]
+    async fn a_backslash_before_the_at_sign_does_not_make_a_url_the_cdn() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        let url = "https://evil.example\\@cdn.modrinth.com/a.png";
+        let err = IconCache::new()
+            .fetch(&client(), &root, url, &[])
+            .await
+            .expect_err("the host is evil.example, not the CDN");
+
+        assert!(
+            matches!(&err, Error::DisallowedHost { host, .. } if host == "evil.example"),
+            "{err:?}"
+        );
+        assert!(!root.icons_dir().join(cache_file_name(url)).exists());
     }
 }

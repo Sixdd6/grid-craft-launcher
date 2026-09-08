@@ -145,6 +145,12 @@ and links (`text (url)`) survive; `<script>` and `<style>` are dropped with thei
 every other tag or marker is stripped and its text kept. No dependency — the markdown side is
 a line scanner, the HTML side a tag-aware stripper.
 
+The module is five files: `richtext/mod.rs` (`Block` and the output caps), `markdown.rs` (the
+line scanner and the tag stripper that feeds it), `inline.rs` (links, images, emphasis),
+`html.rs` (`HtmlState`, the block builder), and `tokenize.rs` (tags, attributes, entities).
+`from_markdown` and `from_html` are re-exported from `mod.rs`, so every path a caller uses is
+`sources::richtext::…` as before. Each file keeps its own tests beside it.
+
 `Block::text()` answers the block's own text: `""` for `Rule` and `Table` (a table's strings
 are its `header` and `rows`), the alt text for `Image`.
 
@@ -163,19 +169,29 @@ Create, JEI, ImmediatelyFast (a pipe table), and Mod Menu (`<details>`, a blockq
   structure at all** — no `#` heading, list marker, or fence — is handed to `from_html` whole.
   A mixed body stays on the markdown path.
 - **Ordered lists** (`1. `, `1) `) become `Bullet`, since a `Block` carries no numbering.
-  **Bullet depth** comes from the line's indent: two spaces or one tab per level, capped at 6.
+  **Bullet depth** comes from a stack of the indent columns seen so far in the list, not from
+  a fixed step: a deeper indent than the top of the stack pushes one level whatever its width,
+  so a list written with four spaces per step nests one level per step and not two. A tab
+  counts as two columns. Depth is capped at 6, and the stack is cleared by any block that ends
+  the list.
 - **Pipe tables**: a row whose next line is an alignment row (`|---|---|`) is the header, and
-  body rows run until the first line that is not a pipe row. A row is a pipe row when it
-  starts with `|` or holds a ` | `. An alignment row no table row precedes is dropped.
+  body rows run until the first line that is not a pipe row. A row is a pipe row when it holds
+  an unescaped `|`: neither outer pipes nor spaces around them are needed, so `a|b` is a row,
+  and a `\|` stays text inside the cell it sits in. What keeps a sentence with a pipe in it
+  from becoming a table is the alignment row underneath. An alignment row no table row precedes
+  is dropped.
 - **Setext headings**: a `===` or `---` underline after a text line is a `Heading` (1 or 2).
   On its own, `===`, `---`, `***`, or `___` is a `Rule`.
-- **A one-level `> ` line** is a `Quote`, and a run of them joins into one block. A nested
-  `>>` is not: `unquote` strips its markers and the text joins the paragraph, as before.
+- **A one-level `> ` line** is a `Quote`, and a run of them joins into one block, which a blank
+  line ends. An image on a quote line is kept and emitted after the quote, the way a paragraph's
+  images are. A nested `>>` is not a quote: `unquote` strips its markers and the text joins the
+  paragraph, as before.
 - **A paragraph that is one `**bold**` run and nothing else** becomes `Heading(4, text)`.
 - **Two `<br>` in a row end the paragraph**; one is a space.
 - **A badge** — `[![alt](image)](url)` — is dropped whole, image and all, like an `<a>` with
   no text. A plain `![alt](url)` becomes an `Image` block emitted after the paragraph or
-  bullet whose line carried it.
+  bullet whose line carried it. An `<img src>` rewritten into markdown has its `(` and `)`
+  percent-encoded, since either would end the link early when the scanner reads the line back.
 - **Entities**: numeric (`&#8217;`, `&#x2019;`) plus `nbsp lt gt quot apos amp mdash ndash
   hellip rsquo lsquo ldquo rdquo middot copy trade reg`. Anything else stays as written.
 - **`</a>` appends ` (href)` only when the anchor produced text**, so an image-only link keeps
@@ -184,13 +200,16 @@ Create, JEI, ImmediatelyFast (a pipe table), and Mod Menu (`<details>`, a blockq
 - **A self-closing `<script/>`, `<style/>`, or `<table/>` opens no subtree**: `parse_tag`
   reports `self_closing`, so it cannot swallow the rest of the document.
 - **On the HTML path**, `<table>` builds a `Block::Table` — the first `<tr>` with `<th>` cells
-  is the header, else the first row — `<hr>` a `Rule`, `<blockquote>` a `Quote` (prose inside
+  is the header, else the first row, and rows past the cap are dropped as each `<tr>` closes
+  rather than at the end, so a document with a hundred thousand rows costs bounded memory —
+  `<hr>` a `Rule`, `<blockquote>` a `Quote` (prose inside
   one flushes as a quote, however many `<p>` it holds), `<summary>` a level-3 heading, and
   `<img src alt>` an `Image`. `<ul>`/`<ol>` nesting sets each `<li>`'s depth. An `<img>` inside
   a table cell is ignored, so a badge grid does not spray images into the middle of a table.
 - **Bounded work and bounded output**: a link label is looked for within 512 characters and no
   scan starts past the last `]`, so a line of unmatched `[` stays linear. At most 2 000 blocks
-  and 8 KiB per block; a longer block ends in `…`, and a longer body ends with one
+  and 8 KiB per block, the `…` spent out of that budget rather than added past it; a longer
+  block ends in `…`, and a longer body ends with one
   `Paragraph("…")`. A table holds at most 50 body rows and 8 columns, extra ones dropped rather
   than refused, and a cell is cut at 200 characters with the same `…` marker.
 

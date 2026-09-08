@@ -4,6 +4,7 @@
 //! [`crate::USER_AGENT`]. See the `download-cache` skill for the retry policy.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -48,6 +49,16 @@ pub enum Error {
         /// The underlying I/O error.
         source: std::io::Error,
     },
+    /// The body ran past the cap the caller set, so the transfer was stopped.
+    #[error("{url} sent more than {max} bytes")]
+    TooLarge {
+        /// The URL that was requested.
+        url: String,
+        /// Bytes received when the transfer was stopped.
+        size: u64,
+        /// The cap the caller set.
+        max: u64,
+    },
     /// Every attempt failed with a retryable error.
     #[error("retries exhausted for {url}: last error: {last}")]
     RetriesExhausted {
@@ -58,6 +69,16 @@ pub enum Error {
     },
 }
 
+impl Error {
+    /// Whether the request failed because a redirect was refused or the chain ran too
+    /// long. A guarded client ([`HttpClient::with_redirect_guard`]) answers this way when
+    /// a hop names a host or a scheme the caller does not allow.
+    #[must_use]
+    pub fn is_redirect(&self) -> bool {
+        matches!(self, Error::Request { source, .. } if source.is_redirect())
+    }
+}
+
 /// What [`HttpClient::stream_to_file`] observed while writing the file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamResult {
@@ -65,6 +86,20 @@ pub struct StreamResult {
     pub sha1: String,
     /// Number of bytes written.
     pub size: u64,
+}
+
+/// Most redirect hops a guarded client follows. Every hop is checked by the guard.
+pub const MAX_REDIRECTS: usize = 5;
+
+/// Why [`HttpClient::with_redirect_guard`] stopped a redirect chain.
+#[derive(Debug, thiserror::Error)]
+enum RedirectRefused {
+    /// The hop's URL is not one the guard allows.
+    #[error("redirect to {0} is not allowed")]
+    Disallowed(String),
+    /// The chain ran past [`MAX_REDIRECTS`].
+    #[error("too many redirects")]
+    TooManyHops,
 }
 
 /// Connect timeout for every request. There is no overall timeout: jars are large.
@@ -133,6 +168,41 @@ impl HttpClient {
             retries: 3,
             backoff: default_backoff(),
         })
+    }
+
+    /// Rebuilds the client so every redirect hop is checked by `guard` before it is
+    /// followed, with at most [`MAX_REDIRECTS`] hops.
+    ///
+    /// A hop `guard` refuses, and one past the hop budget, fail the request with a
+    /// redirect error, which [`Error::is_redirect`] answers for. Retries and backoff carry
+    /// over from `self`. The media caches use this: an allowlist that is only checked on
+    /// the URL a caller passed is no allowlist at all, since the first host may answer 302
+    /// and send the transfer anywhere.
+    pub fn with_redirect_guard(
+        mut self,
+        guard: Arc<dyn Fn(&reqwest::Url) -> bool + Send + Sync>,
+    ) -> Result<Self, Error> {
+        let policy = reqwest::redirect::Policy::custom(move |attempt| {
+            if attempt.previous().len() >= MAX_REDIRECTS {
+                return attempt.error(RedirectRefused::TooManyHops);
+            }
+            if guard(attempt.url()) {
+                return attempt.follow();
+            }
+            let refused = RedirectRefused::Disallowed(attempt.url().to_string());
+            attempt.error(refused)
+        });
+        self.inner = reqwest::Client::builder()
+            .user_agent(crate::USER_AGENT)
+            .connect_timeout(CONNECT_TIMEOUT)
+            .gzip(true)
+            .redirect(policy)
+            .build()
+            .map_err(|source| Error::Request {
+                url: "<client builder>".to_string(),
+                source,
+            })?;
+        Ok(self)
     }
 
     /// Sets the total number of attempts per request. Default 3.
@@ -422,11 +492,17 @@ impl HttpClient {
     /// Writes to exactly `dest` (creating parent directories); `.part` naming is the
     /// caller's job. `expected_size` is only used to log a mismatched `Content-Length`.
     /// The partial file is removed if the transfer fails.
+    ///
+    /// `max_bytes` is a hard cap on the body: the transfer stops inside the chunk loop
+    /// with [`Error::TooLarge`] as soon as the next chunk would run past it, so nothing
+    /// larger than the cap is ever written and a server that streams forever cannot fill
+    /// the disk. `None` means no cap, which is what a hash-verified download uses.
     pub async fn stream_to_file(
         &self,
         url: &str,
         dest: &Path,
         expected_size: Option<u64>,
+        max_bytes: Option<u64>,
         on_chunk: &mut dyn FnMut(u64),
     ) -> Result<StreamResult, Error> {
         let resp = self.send(url, &[]).await?;
@@ -448,7 +524,7 @@ impl HttpClient {
                     source,
                 })?;
         }
-        match write_stream(resp, url, dest, on_chunk).await {
+        match write_stream(resp, url, dest, max_bytes, on_chunk).await {
             Ok(res) => Ok(res),
             Err(err) => {
                 let _ = tokio::fs::remove_file(dest).await;
@@ -463,6 +539,7 @@ async fn write_stream(
     resp: reqwest::Response,
     url: &str,
     dest: &Path,
+    max_bytes: Option<u64>,
     on_chunk: &mut dyn FnMut(u64),
 ) -> Result<StreamResult, Error> {
     let io_err = |source: std::io::Error| Error::Io {
@@ -478,6 +555,17 @@ async fn write_stream(
             url: url.to_string(),
             source,
         })?;
+        // The cap is checked before the chunk is written, so the file on disk never holds
+        // more than the caller allowed, whatever a server sends.
+        if let Some(max) = max_bytes
+            && size + chunk.len() as u64 > max
+        {
+            return Err(Error::TooLarge {
+                url: url.to_string(),
+                size: size + chunk.len() as u64,
+                max,
+            });
+        }
         hasher.update(&chunk);
         size += chunk.len() as u64;
         file.write_all(&chunk).await.map_err(io_err)?;
@@ -882,6 +970,7 @@ mod tests {
                 &format!("{}/blob.bin", server.uri()),
                 &dest,
                 Some(payload.len() as u64),
+                None,
                 &mut on_chunk,
             )
             .await
@@ -908,6 +997,7 @@ mod tests {
             .stream_to_file(
                 &format!("{}/blob.bin", server.uri()),
                 &dest,
+                None,
                 None,
                 &mut |_| {},
             )
@@ -945,6 +1035,7 @@ mod tests {
                 &format!("http://{addr}/cut.bin"),
                 &dest,
                 Some(4096),
+                None,
                 &mut |done| seen.push(done),
             )
             .await
@@ -952,5 +1043,39 @@ mod tests {
         assert!(matches!(err, Error::Request { .. }), "got {err:?}");
         assert!(!seen.is_empty(), "the failure was not mid-stream");
         assert!(!dest.exists(), "partial file was left behind");
+    }
+
+    #[tokio::test]
+    async fn stream_to_file_stops_at_the_byte_cap_mid_stream() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![3u8; 8 * 1024 * 1024]))
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("big.bin");
+        let cap = 64 * 1024;
+        let mut seen = Vec::new();
+        let err = test_client()
+            .stream_to_file(
+                &format!("{}/big.bin", server.uri()),
+                &dest,
+                None,
+                Some(cap),
+                &mut |done| seen.push(done),
+            )
+            .await
+            .expect_err("the body runs past the cap");
+
+        assert!(
+            matches!(err, Error::TooLarge { size, max, .. } if size > cap && max == cap),
+            "got {err:?}"
+        );
+        assert!(
+            seen.iter().all(|done| *done <= cap),
+            "wrote past the cap: {seen:?}"
+        );
+        assert!(!dest.exists(), "the part file was left behind");
     }
 }

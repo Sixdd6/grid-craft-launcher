@@ -20,9 +20,17 @@ pub const MAX_BYTES: u64 = 5 * 1024 * 1024;
 /// Downloads description images into `cache/images/`, at most one request per URL at a time.
 ///
 /// Hold one per launcher. It is `Send + Sync`, so any thread may ask it for an image.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ImageCache {
     inner: MediaCache,
+}
+
+impl Default for ImageCache {
+    fn default() -> Self {
+        Self {
+            inner: MediaCache::new(policy()),
+        }
+    }
 }
 
 impl ImageCache {
@@ -49,9 +57,7 @@ impl ImageCache {
         url: &str,
         extra_hosts: &[String],
     ) -> Result<PathBuf, Error> {
-        self.inner
-            .fetch(http, root, url, extra_hosts, &policy())
-            .await
+        self.inner.fetch(http, root, url, extra_hosts).await
     }
 }
 
@@ -60,6 +66,7 @@ fn policy() -> Policy {
     Policy {
         allowed_hosts: None,
         max_bytes: MAX_BYTES,
+        refuse_private: true,
         dir: Root::images_dir,
     }
 }
@@ -216,5 +223,125 @@ mod tests {
             );
             assert!(!root.images_dir().join(cache_file_name(url)).exists());
         }
+    }
+
+    /// A 302 to `location`, served once at `/hop.png`.
+    async fn redirect(server: &MockServer, location: &str) {
+        Mock::given(method("GET"))
+            .and(path_matcher("/hop.png"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", location))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_redirect_to_a_plain_http_host_is_refused_and_nothing_is_stored() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        let server = MockServer::start().await;
+        redirect(&server, "http://images.example/shot.png").await;
+
+        let url = format!("{}/hop.png", server.uri());
+        let err = ImageCache::new()
+            .fetch(&client(), &root, &url, &local_hosts())
+            .await
+            .expect_err("the hop is not https");
+
+        assert!(matches!(err, Error::DisallowedHost { .. }), "{err:?}");
+        assert!(!root.images_dir().join(cache_file_name(&url)).exists());
+        assert!(!root.images_dir().exists() || dir_is_empty(&root.images_dir()));
+    }
+
+    #[tokio::test]
+    async fn a_redirect_to_a_private_host_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        let server = MockServer::start().await;
+        redirect(&server, "https://files.internal/shot.png").await;
+
+        // The first URL is allowed by the test seam; the hop is the one refused.
+        let url = format!("{}/hop.png", server.uri());
+        let err = ImageCache::new()
+            .fetch(&client(), &root, &url, &local_hosts())
+            .await
+            .expect_err("the hop names a private host");
+
+        assert!(matches!(err, Error::DisallowedHost { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn a_same_host_redirect_is_followed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        let server = MockServer::start().await;
+        redirect(&server, "/shot.png").await;
+        Mock::given(method("GET"))
+            .and(path_matcher("/shot.png"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"image bytes".to_vec()))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let url = format!("{}/hop.png", server.uri());
+        let path = ImageCache::new()
+            .fetch(&client(), &root, &url, &local_hosts())
+            .await
+            .expect("the hop stays on the same host");
+
+        assert_eq!(std::fs::read(&path).expect("read image"), b"image bytes");
+    }
+
+    #[tokio::test]
+    async fn a_redirect_chain_past_the_hop_budget_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        let server = MockServer::start().await;
+        for hop in 0..crate::http::MAX_REDIRECTS + 2 {
+            Mock::given(method("GET"))
+                .and(path_matcher(format!("/loop{hop}.png")))
+                .respond_with(
+                    ResponseTemplate::new(302)
+                        .insert_header("location", format!("/loop{}.png", hop + 1)),
+                )
+                .mount(&server)
+                .await;
+        }
+
+        let url = format!("{}/loop0.png", server.uri());
+        let err = ImageCache::new()
+            .fetch(&client(), &root, &url, &local_hosts())
+            .await
+            .expect_err("the chain runs past the budget");
+
+        assert!(matches!(err, Error::DisallowedHost { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn a_private_host_is_refused_before_any_request() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        for url in [
+            "https://127.0.0.1/shot.png",
+            "https://[::1]/shot.png",
+            "https://localhost/shot.png",
+            "https://build.localhost/shot.png",
+            "https://files.internal/shot.png",
+            "https://nas.local/shot.png",
+        ] {
+            let err = ImageCache::new()
+                .fetch(&client(), &root, url, &[])
+                .await
+                .expect_err("the host is private");
+            assert!(
+                matches!(err, Error::DisallowedHost { .. }),
+                "{url}: {err:?}"
+            );
+            assert!(!root.images_dir().join(cache_file_name(url)).exists());
+        }
+    }
+
+    /// Whether a directory holds nothing, for the "nothing was stored" assertions.
+    fn dir_is_empty(dir: &std::path::Path) -> bool {
+        std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_none())
     }
 }

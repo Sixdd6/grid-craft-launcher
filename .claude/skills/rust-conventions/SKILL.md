@@ -42,6 +42,7 @@ checked 2026-09-06:
 |---|---|
 | async | tokio 1.53, tokio-util 0.7 (`CancellationToken`) |
 | HTTP | reqwest 0.13 with `rustls`, `stream`, `json`, `gzip`; `default-features = false` (0.13 renamed `rustls-tls` to `rustls`) |
+| URLs | url 2.5 (`Url::parse`, `Host`) — parse a URL before checking its scheme or host, never split the string by hand |
 | hashing | sha1 0.11, sha2 0.11, md-5 0.11, murmur2 0.1 |
 | zip | zip 8 (latest stable, not the 9.0 pre-release) |
 | config | serde 1, serde_json 1, toml 1.1 |

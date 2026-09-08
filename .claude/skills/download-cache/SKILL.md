@@ -6,7 +6,16 @@ description: Content-addressed download cache, parallel queue, hash and size ver
 ## HttpClient
 
 One `reqwest::Client` with `USER_AGENT`, rustls, gzip, 30 s connect timeout, no overall timeout
-(large jars). `get_json<T>`, `get_bytes`, `stream_to_file`. Retries: 3 attempts with 500 ms, 2 s,
+(large jars). `get_json<T>`, `get_bytes`, `stream_to_file`.
+`stream_to_file(url, dest, expected_size, max_bytes, on_chunk)` takes an `Option<u64>` cap: the
+transfer stops **inside the chunk loop** with `http::Error::TooLarge` as soon as the next chunk
+would run past it, before that chunk is written, so nothing over the cap ever reaches the disk
+and a server that streams forever cannot fill it. The partial file is removed either way.
+`None` is what a hash-verified download passes.
+`HttpClient::with_redirect_guard(guard)` rebuilds the client with
+`reqwest::redirect::Policy::custom`: every hop is handed to `guard` and at most
+`http::MAX_REDIRECTS` (5) hops are followed. A refused hop, and one past the budget, fail the
+request with a redirect error, which `http::Error::is_redirect()` answers for. Retries: 3 attempts with 500 ms, 2 s,
 8 s backoff on connect errors, 5xx, and 429 (honor `Retry-After` and Modrinth `X-Ratelimit-Reset`).
 The client holds no base URL; callers pass full URLs. Source clients own their base URL.
 
@@ -25,15 +34,16 @@ The client holds no base URL; callers pass full URLs. Source clients own their b
 ## Icons (`download::icons`)
 
 Project icons have no published hash, so `cache/icons/<sha1(url)>.<ext>` is keyed by the URL,
-not by the bytes. `IconCache::fetch` refuses a URL that does not start with `https://` and a
+not by the bytes. `IconCache::fetch` refuses a URL whose scheme is not `https` and a
 host outside `ALLOWED_HOSTS` (`cdn.modrinth.com`, `media.forgecdn.net`, `edge.forgecdn.net`)
 with `Error::DisallowedHost`, before any request. `extra_hosts` is the test seam
 (`Launcher::with_icon_hosts`, empty in a shipped launcher): a host named there may be plain
 HTTP, so wiremock can serve an icon.
 
-The 2 MiB cap (`MAX_BYTES`) is checked **after** the transfer, not from `Content-Length`: a
-host may send none. An oversized body is deleted and `Error::TooLarge` returned. One request
-per URL at a time; a second caller waits and then finds the file.
+The 2 MiB cap (`MAX_BYTES`) is a streaming cap, not a `Content-Length` check: a host may send
+no length, so the transfer is stopped mid-body and the part file deleted with
+`Error::TooLarge`. One request per URL at a time; a second caller waits and then finds the
+file.
 
 **`cache/icons` has no eviction.** Nothing prunes it — not `cleanup_partials`, which only
 sweeps `*.part` files. The directory grows with the number of distinct icon URLs a user
@@ -52,12 +62,36 @@ after-the-transfer size check. Two things differ, on purpose:
   `docs/superpowers/specs/2026-09-08-description-rendering-design.md`.
 - **A 5 MiB cap** (`images::MAX_BYTES`), not 2 MiB.
 
-Both caches are one type underneath: `download::media::MediaCache` with a
-`Policy { allowed_hosts: Option<Vec<String>>, max_bytes, dir }` — `None` allowlist means any
-host, and `dir` is the `Root` accessor the file lands under (`icons_dir` or `images_dir`).
-`icons.rs` and `images.rs` are the two policies over it; the streaming, staging, capping, and
-single-flight code lives in `media.rs` once. `cache/images` has no eviction, the same gap
-`cache/icons` carries.
+Both caches are one type underneath: `download::media::MediaCache::new(policy)` with a
+`Policy { allowed_hosts: Option<Vec<String>>, max_bytes, refuse_private, dir }` — `None`
+allowlist means any host, and `dir` is the `Root` accessor the file lands under (`icons_dir` or
+`images_dir`). `icons.rs` and `images.rs` are the two policies over it; the streaming, staging,
+capping, and single-flight code lives in `media.rs` once. `cache/images` has no eviction, the
+same gap `cache/icons` carries.
+
+### The three media rules
+
+`media::url_allowed(url, extra_hosts, policy)` is the one check, and it runs twice: before the
+first request, and again on **every redirect hop**, through the guarded client the cache builds
+with `HttpClient::with_redirect_guard`. An allowlist checked only on the URL a caller passed is
+no allowlist: the first host can answer 302 and send the transfer anywhere. A refused hop comes
+back as `Error::DisallowedHost`, the same answer the up-front check gives, and so does a chain
+past five hops. The guarded client is built on first use and kept while callers pass the same
+`extra_hosts`.
+
+1. **Scheme.** `https` only, unless the host is one of `extra_hosts` — the test seam
+   (`Launcher::with_icon_hosts` / `with_image_hosts`, empty in a shipped launcher) that lets a
+   wiremock server speak plain HTTP.
+2. **Host.** On the icon policy, `ALLOWED_HOSTS` plus `extra_hosts`. The image policy has no
+   list.
+3. **Private hosts** (`Policy.refuse_private`, true for both): every IP literal, v4 and v6,
+   plus `localhost`, `*.localhost`, `*.internal`, and `*.local`. A host named in `extra_hosts`
+   is exempt, which is the only reason wiremock on `127.0.0.1` still answers in a test.
+
+The URL is parsed with the `url` crate, not split by hand. That is what refuses
+`https://evil.example\@cdn.modrinth.com/a.png`: the backslash ends the authority the way a
+browser reads it, so the host is `evil.example` and the CDN name is only path text. A
+hand-rolled "everything after the last `@`" split reads the same string as the CDN.
 
 ## Queue
 

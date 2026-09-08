@@ -34,3 +34,10 @@ unverified**. `GET /v1/mods/{id}/description` is written here as `{"data": "<htm
 matching every other endpoint in this API, but no live response was available to confirm it is
 not a bare string. The api-verifier agent must check this before the CurseForge description
 path is trusted.
+
+`get_file_changelog.json` carries the same warning. `GET /v1/mods/{id}/files/{fileId}/changelog`
+is written here as `{"data": "<html string>"}`, matching every other endpoint in this API, but
+no live response was available to confirm it. The HTML inside is hand-written to exercise
+`sources::richtext::from_html` — an `<h2>`, a `<ul>`, and inline `<b>` — and is not a recording
+of any real changelog. `CurseForge::changelog` parses it, so the api-verifier agent must check the
+envelope before a version's release notes are trusted.

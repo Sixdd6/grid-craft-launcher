@@ -158,7 +158,9 @@ async fn fetch_into_cache(
         let part = staging_path(ctx.root, spec);
         let result = ctx
             .http
-            .stream_to_file(&spec.url, &part, spec.size, &mut |done| task.progress(done))
+            .stream_to_file(&spec.url, &part, spec.size, None, &mut |done| {
+                task.progress(done)
+            })
             .await;
         let result = match result {
             Ok(result) => result,
