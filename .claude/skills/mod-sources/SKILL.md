@@ -145,6 +145,35 @@ with CurseForge only when a key was found; the list is cached on the `Launcher`,
   id, for `modpacks::fetch_pack` — `Source::project` refuses a modpack outright, since a modpack
   is not a `ContentKind`.
 
+## Latest version and install state (`Launcher`)
+
+`latest_versions(source, hits, target)` and `latest_versions_each(source, hits, target,
+on_answer)` are the same lookup; the second calls `on_answer` as each hit resolves, under the
+same four-in-flight semaphore and the same in-memory cache, and the first is a wrapper that
+collects the answers back into hit order. The rules:
+
+- **"Latest" is release-first**: `content::pick_latest` sorts by release channel and then by
+  publish time, so a newer beta never outranks an older release. It is the version Add would
+  install.
+- **A mod on a vanilla target has no latest.** A `VersionTarget` with a Minecraft version and
+  `Loader::None` answers `version: None` for a `ContentKind::Mod` hit and asks for nothing: a
+  vanilla instance runs no mods. `index_file_id` follows the same rule and takes a
+  loader-less `latestFilesIndexes` entry only.
+- **The CurseForge index is a fast path, not an answer.** The file it names is fetched with
+  one `POST /v1/mods/files` and cached under its own key (`index:<file_id>`), never under the
+  listing's key, so a listing key always holds a whole listing. When `pick_latest` rejects
+  that file — its `gameVersions` names no loader, say — the listing is fetched as usual.
+
+`install_state(slug, source, project_id, target, latest)` reads those cached lists.
+`Older` when `latest` was published after the installed version, `Installed` when the publish
+times are equal. An installed CurseForge id the listing does not hold is resolved with one
+`files_batch(&[id])` (cached under the same `index:` key), so `Older.installed_number` is a
+version number and never a raw file id. A pack-imported entry, recorded under the source
+`file`, is matched by `content::entry_holding_file` against the latest file and against every
+version in the cached list, so a pack carrying an older build reads as `Older`. A failed
+lookup answers `InstallState::Unknown` — the UI shows "Checking…" and then leaves the line
+blank — while a source that cannot be built at all (no CurseForge key) is still an error.
+
 ## Rich text (`sources::richtext`)
 
 `Block::{Heading(level, text), Paragraph(text), Bullet { depth, text }, Code(text),

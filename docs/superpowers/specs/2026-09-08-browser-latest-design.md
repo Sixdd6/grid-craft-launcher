@@ -24,6 +24,8 @@ button reads Add, Update, or Installed accordingly. Update replaces the installe
   the same versions list), or when the installed id is absent from the list and differs from
   the latest id. Modpack-file entries match by resolved project id or sha1 as `content::add`
   does.
+- "Latest" is release-first — the version Add would install — so a newer beta never outranks
+  an older release; equal publish times read as `Installed`.
 - Update reuses `content::add` with `version: Some(latest.id)` at depth 0.
 
 ## UI
