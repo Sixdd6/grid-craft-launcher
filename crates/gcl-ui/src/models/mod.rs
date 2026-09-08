@@ -8,14 +8,14 @@ use std::collections::BTreeMap;
 use gcl_core::auth::{Account, AccountKind};
 use gcl_core::content::ManualDownload;
 use gcl_core::instances::Instance;
-use gcl_core::instances::model::ContentEntry;
+use gcl_core::instances::model::{ContentEntry, GcPreset};
 use gcl_core::loaders::LoaderVersion;
 use gcl_core::mojang::manifest::ManifestEntry;
 use gcl_core::sources::SearchHit;
 
 use crate::{
-    AccountRow, ContentRow, InstanceRow, LoaderVersionRow, PendingRow, SearchRow, SettingRow,
-    VersionRow,
+    AccountRow, ContentRow, GcPresetRow, InstanceRow, LoaderVersionRow, PendingRow, SearchRow,
+    SettingRow, VersionRow,
 };
 
 pub mod settings;
@@ -260,6 +260,21 @@ pub fn short_time(rfc3339: &str) -> String {
         Ok(t) => t.format(&format).unwrap_or_else(|_| rfc3339.to_string()),
         Err(_) => rfc3339.to_string(),
     }
+}
+
+/// Builds the JVM tab's GC combo rows, one per supported preset, in the order given.
+///
+/// `label` and `description` come straight from `GcPreset::label()`/`GcPreset::description()`
+/// in gcl-core, never hand-written here, so the UI's copy cannot drift from the CLI's.
+pub fn gc_rows(presets: &[GcPreset]) -> Vec<GcPresetRow> {
+    presets
+        .iter()
+        .map(|preset| GcPresetRow {
+            token: preset.to_string().into(),
+            label: preset.label().into(),
+            description: preset.description().into(),
+        })
+        .collect()
 }
 
 /// The file name without its last extension.

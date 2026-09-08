@@ -1,4 +1,4 @@
-import { AccountRow, ContentRow, LogLine, PendingRow, SettingRow, SettingRowModel } from "types.slint";
+import { AccountRow, ContentRow, GcPresetRow, LogLine, PendingRow, SettingRow, SettingRowModel } from "types.slint";
 
 // The shell service a screen may reach.
 //
@@ -99,6 +99,33 @@ export global InstanceState {
     in-out property <string> jvm_extra: "";
     // Path to a specific `java`, empty when the launcher may choose one.
     in-out property <string> java_path: "";
+
+    // The saved instance's garbage collector preset, as `GcPreset`'s own serde token (e.g.
+    // `"g1"`). Read back by `gc_combo`'s selection and by the heap Save button, so a heap
+    // save never wipes a saved preset it does not itself edit.
+    in-out property <string> gc_token: "";
+    // Presets the probed Java supports, in menu order, `GcPreset::Default` first. Empty
+    // while `gc_loading` is true or the probe has not run yet.
+    in-out property <[GcPresetRow]> gc_options: [];
+    // `gc_options`' labels, index-parallel with it. A `ComboBox` model must be `[string]`,
+    // so this exists purely for `gc_combo` to bind to; `gc_options` is what a row's token
+    // and description are read from, same index.
+    in-out property <[string]> gc_labels: [];
+    // Which row of `gc_options` (and `gc_labels`) is selected.
+    in-out property <int> gc_selected_index: 0;
+    // One line naming the probed Java (e.g. "Java 21.0.4 from the Mojang runtime"), or
+    // "Preparing Java…" while `gc_loading` is true.
+    in-out property <string> gc_status: "";
+    // True from the start of `load` until the GC probe's job answers, whether it installs a
+    // runtime first or not.
+    in-out property <bool> gc_loading: false;
+    // Non-empty, already-formatted "Unavailable: <preset> — <reason>" line when the saved
+    // preset is not one the current Java supports. Empty otherwise.
+    in-out property <string> gc_unavailable_reason: "";
+
+    // A combo row was picked. Carries the chosen preset's token; saves immediately, with no
+    // separate Save button, unlike the heap fields above.
+    callback gc_pick(string /* token */);
 
     // Output of the running or last game, oldest first. Empty until a game runs: an
     // instance that has never been launched has written nothing.

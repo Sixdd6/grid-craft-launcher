@@ -5,15 +5,16 @@
 //! screen itself is pure layout; this module owns the `InstanceState` global that feeds it.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use gcl_core::content::{ManualDownload, UpdateCandidate};
-use gcl_core::instances::model::{ContentEntry, InstanceJvm};
+use gcl_core::instances::model::{ContentEntry, GcPreset, InstanceJvm};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::bridge::Bridge;
 use crate::launch_flow;
-use crate::models::{content_row, pending_row};
+use crate::models::{content_row, gc_rows, pending_row};
 use crate::screens::settings_editor::{EditTarget, Editor};
 use crate::state::RunState;
 use crate::{
@@ -51,6 +52,11 @@ struct Shared {
     /// from a re-read of the instance already on screen: only the first one throws away the
     /// game log and the status line, which no read from disk can fill again.
     shown: Arc<Mutex<String>>,
+    /// Bumped every time `load` starts a GC probe job. A probe's `done` closure checks this
+    /// against the value it captured before it started, so a slow probe for an instance the
+    /// user has since navigated away from (or reloaded again) never paints its answer onto
+    /// whatever is on screen by the time it lands.
+    gc_generation: Arc<AtomicU64>,
 }
 
 impl Shared {
@@ -83,6 +89,18 @@ impl Shared {
         }
         *shown = slug.to_string();
         true
+    }
+
+    /// Starts a new GC probe generation and returns it. Call once per `load`, before the
+    /// probe job is spawned.
+    fn bump_gc_generation(&self) -> u64 {
+        self.gc_generation.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// The current GC probe generation, for a probe job's `done` closure to compare against
+    /// the value it captured when it started.
+    fn gc_generation(&self) -> u64 {
+        self.gc_generation.load(Ordering::SeqCst)
     }
 
     /// The pending manual download with this project id, if the last load carried one.
@@ -361,7 +379,15 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState, editor: &Editor
                 status(&bridge, "The minimum heap must not be above the maximum");
                 return;
             }
-            let jvm = instance_jvm(min, max, extra.as_str(), java_path.as_str());
+            // The heap Save button edits only the heap, extra args, and java path; the GC
+            // preset is saved separately by `gc_pick`. Reading it back off `InstanceState`
+            // here, rather than defaulting it, is what keeps a heap save from wiping it.
+            let gc_token = bridge
+                .weak()
+                .upgrade()
+                .map(|window| window.global::<InstanceState>().get_gc_token().to_string())
+                .unwrap_or_default();
+            let jvm = instance_jvm(min, max, extra.as_str(), java_path.as_str(), &gc_token);
             let after = (bridge.clone(), run.clone(), shared.clone());
             let job_slug = slug.clone();
             bridge.run(
@@ -371,6 +397,42 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState, editor: &Editor
                     let (bridge, run, shared) = after;
                     status(&bridge, "JVM settings saved");
                     load(&bridge, &run, &shared, &slug);
+                },
+            );
+        });
+    }
+
+    {
+        let bridge = bridge.clone();
+        let run = run.clone();
+        let shared = shared.clone();
+        state.on_gc_pick(move |token| {
+            let Some(slug) = shown_slug(&bridge) else {
+                return;
+            };
+            let Ok(preset) = token.as_str().parse::<GcPreset>() else {
+                return;
+            };
+            if let Some(window) = bridge.weak().upgrade() {
+                window.global::<InstanceState>().set_gc_loading(true);
+            }
+            let after = (bridge.clone(), run.clone(), shared.clone());
+            let job_slug = slug.clone();
+            bridge.run_with_error(
+                "Save garbage collector",
+                move |launcher| launcher.set_instance_gc(&job_slug, preset),
+                move |window, result| {
+                    let (bridge, run, shared) = after;
+                    // `run_with_error` already opened the error dialog on a failure; only a
+                    // success needs a reload, per the `slint-ui` skill's rule for this
+                    // function ("busy" clears either way, which the reload's own load()
+                    // handles for its own gc_loading flag, but a failure has to clear it
+                    // here since load() never runs).
+                    if result.is_ok() {
+                        load(&bridge, &run, &shared, &slug);
+                    } else {
+                        window.global::<InstanceState>().set_gc_loading(false);
+                    }
                 },
             );
         });
@@ -533,6 +595,15 @@ fn clear_view(window: &AppWindow) {
     state.set_jvm_max(0);
     state.set_jvm_extra(SharedString::new());
     state.set_java_path(SharedString::new());
+    state.set_gc_token(SharedString::new());
+    state.set_gc_options(ModelRc::new(VecModel::from(
+        Vec::<crate::GcPresetRow>::new(),
+    )));
+    state.set_gc_labels(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
+    state.set_gc_selected_index(0);
+    state.set_gc_status(SharedString::new());
+    state.set_gc_loading(false);
+    state.set_gc_unavailable_reason(SharedString::new());
     // A game log is the output of one game. An instance nobody has launched has none.
     state.set_game_log(ModelRc::new(VecModel::from(Vec::<crate::LogLine>::new())));
     state.set_update_count(0);
@@ -549,7 +620,16 @@ fn load(bridge: &Bridge, run: &RunState, shared: &Shared, slug: &str) {
     if shared.editor.target() == EditTarget::Instance(slug.to_string()) {
         shared.editor.reload(bridge);
     }
-    let (job_slug, run, shared) = (slug.to_string(), run.clone(), shared.clone());
+    // A fresh generation for the GC probe this load starts once the fast fields land, so a
+    // probe from an earlier load (or one still running for this same instance) never paints
+    // over what a later load already put on screen.
+    let generation = shared.bump_gc_generation();
+    let (job_slug, run, shared, gc_bridge) = (
+        slug.to_string(),
+        run.clone(),
+        shared.clone(),
+        bridge.clone(),
+    );
     let slug = slug.to_string();
     bridge.run(
         "Load instance",
@@ -594,6 +674,81 @@ fn load(bridge: &Bridge, run: &RunState, shared: &Shared, slug: &str) {
                     .unwrap_or_default()
                     .into(),
             );
+            state.set_gc_token(jvm.gc.to_string().into());
+            load_gc_support(&gc_bridge, &shared, generation);
+        },
+    );
+}
+
+/// Runs the GC probe for the instance the JVM tab's fast fields just loaded, off its own
+/// `Bridge::run` job so a runtime download it may need does not hold up the heap fields.
+///
+/// `generation` is the value [`Shared::bump_gc_generation`] returned right before the fast
+/// job started; the probe's answer is discarded once it lands if that is no longer current,
+/// which is what keeps a slow probe for one instance from painting into another (or into a
+/// later load of the same one).
+fn load_gc_support(bridge: &Bridge, shared: &Shared, generation: u64) {
+    let Some(slug) = shown_slug(bridge) else {
+        return;
+    };
+    if let Some(window) = bridge.weak().upgrade() {
+        let state = window.global::<InstanceState>();
+        state.set_gc_loading(true);
+        state.set_gc_status(SharedString::new());
+        state.set_gc_unavailable_reason(SharedString::new());
+    }
+    let job_slug = slug.clone();
+    let shared = shared.clone();
+    bridge.run_with_error(
+        "Load GC support",
+        move |launcher| launcher.gc_support(&job_slug),
+        move |window, result| {
+            if shared.gc_generation() != generation {
+                return;
+            }
+            let state = window.global::<InstanceState>();
+            state.set_gc_loading(false);
+            match result {
+                Ok(view) => {
+                    let saved_token = state.get_gc_token().to_string();
+                    let rows = gc_rows(&view.presets);
+                    let labels: Vec<SharedString> =
+                        rows.iter().map(|row| row.label.clone()).collect();
+                    let selected = rows.iter().position(|row| row.token == saved_token);
+                    state.set_gc_options(ModelRc::new(VecModel::from(rows)));
+                    state.set_gc_labels(ModelRc::new(VecModel::from(labels)));
+                    match selected {
+                        Some(index) => {
+                            state.set_gc_selected_index(index as i32);
+                            state.set_gc_unavailable_reason(SharedString::new());
+                        }
+                        None => {
+                            state.set_gc_selected_index(0);
+                            let preset = saved_token
+                                .parse::<GcPreset>()
+                                .map(|preset| preset.label().to_string())
+                                .unwrap_or(saved_token);
+                            state.set_gc_unavailable_reason(
+                                format!(
+                                    "Unavailable: {preset} — the current Java does not support it"
+                                )
+                                .into(),
+                            );
+                        }
+                    }
+                    state.set_gc_status(view.label.into());
+                }
+                Err(err) => {
+                    state.set_gc_status(SharedString::new());
+                    state.set_gc_unavailable_reason(
+                        format!(
+                            "Could not check the garbage collector: {}",
+                            crate::bridge::error_chain(&err)
+                        )
+                        .into(),
+                    );
+                }
+            }
         },
     );
 }
@@ -651,11 +806,20 @@ pub fn content_rows(entries: &[ContentEntry], candidates: &[UpdateCandidate]) ->
     rows
 }
 
-/// Builds the JVM overrides from the four fields of the JVM tab.
+/// Builds the JVM overrides from the heap Save button's four fields, plus the GC preset
+/// carried through from `InstanceState.gc_token` so this save cannot wipe it.
 ///
-/// An empty java path means "let the launcher choose", and extra arguments are split on
-/// whitespace, which is how a command line reads them.
-pub fn instance_jvm(min: i32, max: i32, extra: &str, java_path: &str) -> InstanceJvm {
+/// An empty java path means "let the launcher choose", extra arguments are split on
+/// whitespace, which is how a command line reads them, and an empty or unparsable
+/// `gc_token` (nothing probed yet) keeps [`GcPreset::Default`], the same as a fresh
+/// instance's own default.
+pub fn instance_jvm(
+    min: i32,
+    max: i32,
+    extra: &str,
+    java_path: &str,
+    gc_token: &str,
+) -> InstanceJvm {
     InstanceJvm {
         min_mib: Some(min.max(0) as u32),
         max_mib: Some(max.max(0) as u32),
@@ -664,7 +828,7 @@ pub fn instance_jvm(min: i32, max: i32, extra: &str, java_path: &str) -> Instanc
             .split_whitespace()
             .map(|arg| arg.to_string())
             .collect(),
-        ..InstanceJvm::default()
+        gc: gc_token.parse().unwrap_or_default(),
     }
 }
 

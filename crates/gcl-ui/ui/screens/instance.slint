@@ -1,4 +1,4 @@
-import { CheckBox, LineEdit, ListView, ScrollView, SpinBox } from "std-widgets.slint";
+import { CheckBox, ComboBox, LineEdit, ListView, ScrollView, SpinBox } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
 import { InstanceState, Shell } from "../state.slint";
 import { Button } from "../components/button.slint";
@@ -554,6 +554,51 @@ export component InstanceScreen inherits Rectangle {
             }
 
             Text {
+                text: "Garbage collector";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+            }
+
+            gc_combo := ComboBox {
+                model: InstanceState.gc_labels;
+                current-index <=> InstanceState.gc_selected_index;
+                enabled: InstanceState.gc_options.length > 0;
+                // Saves on selection: unlike the heap fields' explicit Save button, a GC
+                // pick is one flag, has no half-typed state to protect, and the design doc
+                // wants it to take effect the moment it is chosen.
+                selected => {
+                    if (self.current-index >= 0
+                            && self.current-index < InstanceState.gc_options.length) {
+                        InstanceState.gc_pick(
+                            InstanceState.gc_options[self.current-index].token);
+                    }
+                }
+            }
+
+            Text {
+                text: InstanceState.gc_selected_index >= 0
+                    && InstanceState.gc_selected_index < InstanceState.gc_options.length
+                    ? InstanceState.gc_options[InstanceState.gc_selected_index].description
+                    : "";
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+                wrap: word-wrap;
+            }
+
+            gc_status_text := Text {
+                text: InstanceState.gc_loading ? "Preparing Java…" : InstanceState.gc_status;
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+            }
+
+            if InstanceState.gc_unavailable_reason != "": gc_unavailable_text := Text {
+                text: InstanceState.gc_unavailable_reason;
+                color: Theme.warning;
+                font-size: Theme.font-size-small;
+                wrap: word-wrap;
+            }
+
+            Text {
                 text: "Extra JVM arguments";
                 color: Theme.text-muted;
                 font-size: Theme.font-size-small;
@@ -696,6 +741,15 @@ export component PreviewInstanceScreen inherits InstanceScreen {
         InstanceState.jvm_min = 2048;
         InstanceState.jvm_max = 4096;
         InstanceState.jvm_extra = "-XX:+UseG1GC";
+        InstanceState.gc_token = "g1";
+        InstanceState.gc_options = [
+            { token: "default", label: "Launcher default", description: "Launcher default: no collector flag, the JVM chooses" },
+            { token: "g1", label: "G1", description: "G1: balanced pauses and throughput, the usual choice" },
+            { token: "zgc", label: "ZGC", description: "ZGC: low pause times, needs more memory" },
+        ];
+        InstanceState.gc_labels = ["Launcher default", "G1", "ZGC"];
+        InstanceState.gc_selected_index = 1;
+        InstanceState.gc_status = "Java 21.0.4 from the Mojang runtime";
         InstanceState.update_count = 1;
         InstanceState.content = [
             {

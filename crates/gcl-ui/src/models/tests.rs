@@ -5,15 +5,15 @@ use std::path::PathBuf;
 
 use gcl_core::auth::{Account, AccountKind};
 use gcl_core::instances::Instance;
-use gcl_core::instances::model::{ContentEntry, ContentKind, InstanceConfig, Loader};
+use gcl_core::instances::model::{ContentEntry, ContentKind, GcPreset, InstanceConfig, Loader};
 use gcl_core::loaders::LoaderVersion;
 use gcl_core::mojang::manifest::{ManifestEntry, VersionType};
 use gcl_core::sources::{SearchHit, SourceId};
 
 use super::{
     account_row, content_row, decode_description_image, decode_icon, format_bytes,
-    format_downloads, instance_row, loader_version_row, search_row, setting_rows, short_time,
-    version_row,
+    format_downloads, gc_rows, instance_row, loader_version_row, search_row, setting_rows,
+    short_time, version_row,
 };
 
 #[test]
@@ -23,6 +23,23 @@ fn format_bytes_uses_binary_units() {
     assert_eq!(format_bytes(1536), "1.5 KiB");
     assert_eq!(format_bytes(1024 * 1024), "1.0 MiB");
     assert_eq!(format_bytes(3 * 1024 * 1024 * 1024), "3.0 GiB");
+}
+
+#[test]
+fn gc_rows_carries_the_token_label_and_description_of_each_preset_given() {
+    let rows = gc_rows(&[GcPreset::Default, GcPreset::G1]);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].token, "default");
+    assert_eq!(rows[0].label, GcPreset::Default.label());
+    assert_eq!(rows[0].description, GcPreset::Default.description());
+    assert_eq!(rows[1].token, "g1");
+    assert_eq!(rows[1].label, "G1");
+    assert_eq!(rows[1].description, GcPreset::G1.description());
+}
+
+#[test]
+fn gc_rows_of_an_empty_preset_list_is_empty() {
+    assert!(gc_rows(&[]).is_empty());
 }
 
 #[test]

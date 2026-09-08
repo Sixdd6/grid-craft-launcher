@@ -189,6 +189,9 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::option_row` | `ListRow` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::memory_min_spin` | `SpinBox` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::memory_max_spin` | `SpinBox` |
+| `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::gc_combo` | `ComboBox` |
+| `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::gc_status_text` | `Text` |
+| `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::gc_unavailable_text` | `Text` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::jvm_args_field` | `LineEdit` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::java_path_field` | `LineEdit` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::jvm_save_button` | `Button` |

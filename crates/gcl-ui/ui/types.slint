@@ -114,6 +114,18 @@ export struct SettingRowModel {
     resettable: bool,
 }
 
+// One garbage collector preset offered on the JVM tab's combo box.
+//
+// `token` is what `InstanceState.gc_pick` sends back to Rust (`GcPreset`'s serde token, e.g.
+// `"g1"`), matched against `GcPreset::from_str` in `src/screens/instance.rs`. `label` is the
+// combo's menu text and `description` is the one-line trade-off shown under it, both built
+// from `GcPreset::label()`/`GcPreset::description()` in gcl-core, never hand-written here.
+export struct GcPresetRow {
+    token: string,
+    label: string,
+    description: string,
+}
+
 // One loader build offered for an instance.
 export struct LoaderVersionRow {
     version: string,

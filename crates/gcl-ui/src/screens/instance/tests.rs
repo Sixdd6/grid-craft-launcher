@@ -1,7 +1,7 @@
 //! Unit tests for the screen's pure helpers. No Slint instance and no display needed.
 
 use gcl_core::content::{ManualDownload, UpdateCandidate};
-use gcl_core::instances::model::{ContentEntry, ContentKind};
+use gcl_core::instances::model::{ContentEntry, ContentKind, GcPreset};
 use gcl_core::sources::{ReleaseKind, SourceId, Version};
 
 use super::{content_rows, instance_jvm, jvm_valid, pending_rows};
@@ -76,7 +76,7 @@ fn jvm_valid_rejects_an_inverted_or_out_of_range_pair() {
 
 #[test]
 fn instance_jvm_splits_the_arguments_and_drops_an_empty_java_path() {
-    let jvm = instance_jvm(1024, 4096, "  -XX:+UseG1GC  -Dfoo=bar ", "   ");
+    let jvm = instance_jvm(1024, 4096, "  -XX:+UseG1GC  -Dfoo=bar ", "   ", "");
     assert_eq!(jvm.min_mib, Some(1024));
     assert_eq!(jvm.max_mib, Some(4096));
     assert_eq!(
@@ -85,13 +85,32 @@ fn instance_jvm_splits_the_arguments_and_drops_an_empty_java_path() {
     );
     assert_eq!(jvm.java_path, None, "a blank path lets the launcher choose");
 
-    let jvm = instance_jvm(1024, 4096, "", " /usr/bin/java ");
+    let jvm = instance_jvm(1024, 4096, "", " /usr/bin/java ", "");
     assert_eq!(
         jvm.java_path,
         Some(std::path::PathBuf::from("/usr/bin/java")),
         "a typed path is trimmed, not dropped"
     );
     assert!(jvm.extra_args.is_empty());
+}
+
+#[test]
+fn instance_jvm_carries_the_gc_token_through_a_heap_save() {
+    let jvm = instance_jvm(1024, 4096, "", "", "g1");
+    assert_eq!(
+        jvm.gc,
+        GcPreset::G1,
+        "a heap save must not wipe a saved GC preset"
+    );
+}
+
+#[test]
+fn instance_jvm_falls_back_to_default_on_an_empty_or_unknown_gc_token() {
+    assert_eq!(instance_jvm(1024, 4096, "", "", "").gc, GcPreset::Default);
+    assert_eq!(
+        instance_jvm(1024, 4096, "", "", "not-a-preset").gc,
+        GcPreset::Default
+    );
 }
 
 #[test]
