@@ -79,6 +79,15 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/app.slint` | `AppWindow::nav` | `FocusScope` |
 | `crates/gcl-ui/ui/app.slint` | `AppWindow::error_dialog` | `Dialog` |
 | `crates/gcl-ui/ui/app.slint` | `AppWindow::error_text` | `TextEdit` |
+| `crates/gcl-ui/ui/components/block-list.slint` | `BlockList::block_item` | `VerticalLayout` |
+| `crates/gcl-ui/ui/components/block-list.slint` | `BlockList::code_pane` | `Rectangle` |
+| `crates/gcl-ui/ui/components/block-list.slint` | `BlockList::table_pane` | `Rectangle` |
+| `crates/gcl-ui/ui/components/block-list.slint` | `BlockList::table_row_layout` | `HorizontalLayout` |
+| `crates/gcl-ui/ui/components/block-list.slint` | `BlockList::column` | `VerticalLayout` |
+| `crates/gcl-ui/ui/components/block-list.slint` | `BlockList::cell` | `Text` |
+| `crates/gcl-ui/ui/components/block-list.slint` | `BlockList::image_pane` | `VerticalLayout` |
+| `crates/gcl-ui/ui/components/block-list.slint` | `BlockList::placeholder` | `Rectangle` |
+| `crates/gcl-ui/ui/components/block-list.slint` | `BlockList::image_tile` | `Image` |
 | `crates/gcl-ui/ui/components/button.slint` | `Button::label` | `Text` |
 | `crates/gcl-ui/ui/components/button.slint` | `Button::touch` | `TouchArea` |
 | `crates/gcl-ui/ui/components/choice-dialog.slint` | `ChoiceDialog::choice_row` | `Rectangle` |
@@ -96,6 +105,8 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/components/empty-state.slint` | `EmptyState::empty_title` | `Text` |
 | `crates/gcl-ui/ui/components/empty-state.slint` | `EmptyState::empty_message` | `Text` |
 | `crates/gcl-ui/ui/components/list-row.slint` | `ListRow::row_touch` | `TouchArea` |
+| `crates/gcl-ui/ui/components/notes-dialog.slint` | `NotesDialog::notes_scroll` | `ScrollView` |
+| `crates/gcl-ui/ui/components/notes-dialog.slint` | `NotesDialog::body` | `VerticalLayout` |
 | `crates/gcl-ui/ui/components/progress-panel.slint` | `ProgressPanel::panel_toggle` | `Rectangle` |
 | `crates/gcl-ui/ui/components/progress-panel.slint` | `ProgressPanel::chevron` | `TouchArea` |
 | `crates/gcl-ui/ui/components/prompt-dialog.slint` | `PromptDialog::name_field` | `LineEdit` |
@@ -139,10 +150,12 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_path_field` | `LineEdit` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::install_file_button` | `Button` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_row` | `ListRow` |
+| `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_layout` | `VerticalLayout` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_install_button` | `Button` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::keys` | `FocusScope` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::row_open` | `ListRow` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::row_icon` | `Image` |
+| `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::row_layout` | `VerticalLayout` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::row_title` | `Rectangle` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::title_text` | `Text` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::title_touch` | `TouchArea` |
@@ -190,17 +203,16 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/instances.slint` | `InstancesScreen::row_open` | `ListRow` |
 | `crates/gcl-ui/ui/screens/instances.slint` | `InstancesScreen::row_launch` | `Button` |
 | `crates/gcl-ui/ui/screens/instances.slint` | `InstancesScreen::row_delete` | `Button` |
+| `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::keys` | `FocusScope` |
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::back_button` | `Button` |
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::kind_badge` | `Text` |
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::page_url_text` | `TextEdit` |
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::tabs` | `TabBar` |
-| `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::block_item` | `VerticalLayout` |
-| `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::code_pane` | `Rectangle` |
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::show_all_versions_check` | `CheckBox` |
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::version_row` | `Rectangle` |
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::version_kind_badge` | `Text` |
+| `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::version_notes_button` | `Button` |
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::version_install_button` | `Button` |
-| `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::keys` | `FocusScope` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::root_path_field` | `LineEdit` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::root_change_button` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::parallel_spin` | `SpinBox` |
@@ -218,4 +230,4 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::default_add_button` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::verify_button` | `Button` |
 
-Total: 141 named elements.
+Total: 153 named elements.
