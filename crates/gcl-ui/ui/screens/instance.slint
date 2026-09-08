@@ -32,6 +32,11 @@ export component InstanceScreen inherits Rectangle {
     property <string> override_value;
     // Whether the read-only options.txt list under Advanced is open.
     property <bool> options_open: false;
+    // How long after the last `gc_combo` step a token is saved, when no further step
+    // follows.
+    property <duration> gc_commit_delay: 500ms;
+    // The token `gc_combo` last reported, saved when `gc_commit` fires.
+    property <string> pending_gc_token: "";
     // Whether an instance is loaded. `InstanceState.name` is empty both before the first
     // load and after `InstanceState.clear()`, which is what `app.slint` calls when the
     // screen is shown with no `App.current_slug`.
@@ -563,14 +568,28 @@ export component InstanceScreen inherits Rectangle {
                 model: InstanceState.gc_labels;
                 current-index <=> InstanceState.gc_selected_index;
                 enabled: InstanceState.gc_options.length > 0;
-                // Saves on selection: unlike the heap fields' explicit Save button, a GC
-                // pick is one flag, has no half-typed state to protect, and the design doc
-                // wants it to take effect the moment it is chosen.
+                // A ComboBox reports every arrow step and every wheel tick as a `selected`,
+                // not just the value the user settles on, so a keyboard or wheel user
+                // cycling presets would write and reload once per step. Hold the token and
+                // save `gc_commit_delay` after the last change, the same shape SettingRow's
+                // choice combo uses.
                 selected => {
-                    if (self.current-index >= 0
-                            && self.current-index < InstanceState.gc_options.length) {
-                        InstanceState.gc_pick(
-                            InstanceState.gc_options[self.current-index].token);
+                    root.pending_gc_token = self.current-index >= 0
+                            && self.current-index < InstanceState.gc_options.length
+                        ? InstanceState.gc_options[self.current-index].token
+                        : "";
+                    gc_commit.running = true;
+                    gc_commit.restart();
+                }
+            }
+
+            gc_commit := Timer {
+                interval: root.gc_commit_delay;
+                running: false;
+                triggered => {
+                    self.running = false;
+                    if (root.pending_gc_token != "") {
+                        InstanceState.gc_pick(root.pending_gc_token);
                     }
                 }
             }

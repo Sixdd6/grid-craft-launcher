@@ -323,11 +323,13 @@ choice_commit := Timer {
 rearm anything — that bug shipped once and made the timer fire 500 ms after the *first* change
 instead of the last. Always end with `restart()`.
 
-**Not every `ComboBox` needs this.** The instance JVM tab's `gc_combo` saves straight through
-`set_instance_gc` on its `selected` callback, no `Timer` and no Save button — one selection is
-one write, unlike the min/max heap fields next to it, which only save when their own Save button
-is pressed. Debounce a control that reports intermediate steps on the way to a value; a
-`ComboBox` that reports the chosen value once has nothing to debounce.
+**Every `ComboBox` needs this**, including a single-selection one: a `ComboBox` reports every
+arrow step and every wheel tick as `selected`, not just the value the user settles on. The
+instance JVM tab's `gc_combo` learned this the hard way — it used to call `gc_pick` straight
+from `selected`, so a keyboard user cycling presets wrote and reloaded once per step, moving the
+list cursor under them mid-cycle. It now holds the picked token in `pending_gc_token` and
+restarts `gc_commit`, the same shape `SettingRow`'s choice combo uses, unlike the min/max heap
+fields next to it, which only save when their own Save button is pressed.
 
 ## Logging
 
