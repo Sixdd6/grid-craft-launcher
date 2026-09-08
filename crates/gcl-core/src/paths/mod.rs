@@ -118,6 +118,11 @@ impl Root {
         self.cache_dir().join("installers")
     }
 
+    /// Directory holding cached project icons, keyed by the sha1 of their URL.
+    pub fn icons_dir(&self) -> PathBuf {
+        self.cache_dir().join("icons")
+    }
+
     /// Directory holding content-addressed objects, keyed by sha1.
     pub fn objects_dir(&self) -> PathBuf {
         self.cache_dir().join("objects")

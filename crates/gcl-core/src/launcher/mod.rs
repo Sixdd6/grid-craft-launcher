@@ -26,6 +26,7 @@ use crate::auth::store::Accounts;
 use crate::auth::{Account, AccountKind, token_expires_soon};
 use crate::config::Config;
 use crate::content::{AddOutcome, AddRequest, ContentCtx, ManualDownload, UpdateCandidate};
+use crate::download::icons::IconCache;
 use crate::download::{DownloadCtx, cleanup_partials};
 use crate::events::{Event, EventSink};
 use crate::http::HttpClient;
@@ -290,6 +291,11 @@ pub struct Launcher {
     /// Hosts a modpack may fetch its files from, on top of the ones the mrpack
     /// specification names. Empty everywhere but in a test.
     pack_hosts: Vec<String>,
+    /// Hosts an icon may be fetched from, on top of [`crate::download::icons::ALLOWED_HOSTS`].
+    /// Empty everywhere but in a test.
+    icon_hosts: Vec<String>,
+    /// The project-icon cache behind [`Launcher::fetch_icon`].
+    icons: IconCache,
     /// The refresh-token store, opened on first use by [`Launcher::secrets`].
     secrets: OnceLock<Box<dyn SecretStore>>,
     /// The games this launcher started that have not exited, by instance slug.
@@ -369,6 +375,8 @@ impl Launcher {
             endpoints,
             process_runner: None,
             pack_hosts: Vec::new(),
+            icon_hosts: Vec::new(),
+            icons: IconCache::new(),
             secrets: OnceLock::new(),
             running: Arc::new(Mutex::new(HashMap::new())),
         };
@@ -1844,6 +1852,38 @@ fn env_base(var: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
+// --- Project icons -------------------------------------------------------------------
+// Added by plan 9 task 3. Keep the icon methods together here.
+
+impl Launcher {
+    /// Test seam: lets an icon be fetched from `hosts` as well.
+    ///
+    /// An icon URL's host must be one of [`crate::download::icons::ALLOWED_HOSTS`], so an
+    /// icon served by a mock server is refused with
+    /// [`crate::download::Error::DisallowedHost`]. Chain this onto
+    /// [`Launcher::open_with_endpoints`] to add that server. It defaults to empty, so a
+    /// shipped launcher fetches icons from the sources' CDNs and nowhere else.
+    #[must_use]
+    pub fn with_icon_hosts(mut self, hosts: Vec<String>) -> Self {
+        self.icon_hosts = hosts;
+        self
+    }
+
+    /// Downloads a project icon into `cache/icons/` and returns its path. Blocks.
+    ///
+    /// The cache key is the URL: the file is `cache/icons/<sha1(url)>.<ext>`, with `<ext>`
+    /// a label read off the URL's path (`img` when it names none). A file already there is
+    /// returned without a request, and two threads asking for one URL at the same time make
+    /// one request between them. A body over [`crate::download::icons::MAX_BYTES`] (2 MiB)
+    /// is refused, as is a host outside the allowlist.
+    pub fn fetch_icon(&self, url: &str) -> Result<PathBuf, crate::Error> {
+        let http = self.http.clone();
+        let root = self.root.clone();
+        let hosts = self.icon_hosts.clone();
+        Ok(self.block_on(async move { self.icons.fetch(&http, &root, url, &hosts).await })?)
+    }
+}
+
 /// Applies the config's `root` override, unless the env var or a caller override already
 /// decided the root.
 fn redirect_root(resolved: Root, config_root: Option<&Path>, overridden: bool) -> Root {
@@ -2745,6 +2785,58 @@ mod tests {
             .configured_or_detected_java(Some(&own), "1.20.1")
             .expect("instance java");
         assert_eq!(java.path, own);
+    }
+
+    #[test]
+    fn fetch_icon_stores_under_cache_icons_and_reuses_the_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+        let (server, url) = launcher.block_on(async {
+            let server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/icon.png"))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(200).set_body_bytes(b"icon bytes".to_vec()),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let url = format!("{}/icon.png", server.uri());
+            (server, url)
+        });
+        let launcher = launcher.with_icon_hosts(vec!["127.0.0.1".to_string()]);
+
+        let path = launcher.fetch_icon(&url).expect("icon fetched");
+        assert_eq!(
+            path,
+            launcher
+                .root()
+                .icons_dir()
+                .join(crate::download::icons::cache_file_name(&url))
+        );
+        assert_eq!(std::fs::read(&path).expect("read icon"), b"icon bytes");
+
+        // The second call is answered from disk, so the mock still sees one request.
+        assert_eq!(launcher.fetch_icon(&url).expect("cached icon"), path);
+        let seen = launcher.block_on(async { server.received_requests().await.map(|r| r.len()) });
+        assert_eq!(seen, Some(1));
+    }
+
+    #[test]
+    fn fetch_icon_refuses_a_host_outside_the_allowlist() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+        let err = launcher
+            .fetch_icon("https://evil.example/icon.png")
+            .expect_err("the host is not allowed");
+        assert!(
+            matches!(
+                &err,
+                crate::Error::Download(crate::download::Error::DisallowedHost { host, .. })
+                    if host == "evil.example"
+            ),
+            "{err:?}"
+        );
     }
 
     #[test]

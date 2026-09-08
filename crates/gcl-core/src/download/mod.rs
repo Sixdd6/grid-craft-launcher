@@ -4,6 +4,7 @@
 //! (or copied) to its destination. See the `download-cache` skill.
 
 pub mod hash;
+pub mod icons;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -43,6 +44,24 @@ pub enum Error {
         expected: u64,
         /// The number of bytes received.
         actual: u64,
+    },
+    /// The URL's host is not one an icon may be fetched from.
+    #[error("icon host not allowed: {host} ({url})")]
+    DisallowedHost {
+        /// The URL that was refused.
+        url: String,
+        /// The host taken from that URL, empty when it had none.
+        host: String,
+    },
+    /// The body was larger than the caller's cap.
+    #[error("{url} is {size} bytes, over the {max} byte cap")]
+    TooLarge {
+        /// The URL that was downloaded.
+        url: String,
+        /// The number of bytes received.
+        size: u64,
+        /// The largest body the caller accepts.
+        max: u64,
     },
     /// The cancellation token fired before or between attempts.
     #[error("cancelled")]
