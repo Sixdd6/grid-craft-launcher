@@ -414,8 +414,14 @@ fn open(bridge: &Bridge, shared: &Shared) {
         move |window, opened| {
             let state = window.global::<BrowserState>();
             // A page of hits belongs to the search that found it. Coming back to the screen
-            // is not that search, so the pager and both lists start over.
-            clear_rows(&state);
+            // from somewhere else is not that search, so the pager and both lists start
+            // over — unless `ProjectState.back()` just sent us here, in which case this
+            // page of hits is the one the user searched for and Back must not lose it.
+            let returning = state.get_returning();
+            state.set_returning(false);
+            if !returning {
+                clear_rows(&state);
+            }
             let labels: Vec<SharedString> = opened
                 .sources
                 .iter()

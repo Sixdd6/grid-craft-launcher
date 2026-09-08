@@ -83,7 +83,27 @@ export component ProjectScreen inherits Rectangle {
     // Whether a version has somewhere to install into.
     property <bool> has_target: ProjectState.target_slug != "";
 
-    VerticalLayout {
+    // Escape returns to where these details were opened from. This screen is mounted only
+    // while it is shown, the same as a `Dialog`, so grabbing the keyboard once on mount is
+    // safe here even though a list scope never does: `app.slint`'s own `nav` scope does not
+    // reclaim focus when navigating to this screen (see its `changed shown_screen`), so
+    // nothing takes it back from `keys`.
+    init => {
+        keys.focus();
+    }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                ProjectState.back();
+                return EventResult.accept;
+            }
+            // Everything else bubbles to `nav`, which is what keeps the rail's number
+            // shortcuts working while these details are up.
+            return EventResult.reject;
+        }
+
+        VerticalLayout {
         padding: Theme.pad;
         spacing: Theme.gap;
 
@@ -151,8 +171,11 @@ export component ProjectScreen inherits Rectangle {
 
         // The project's page at the source, read-only and selectable: there is no clipboard
         // call this crate can reach from a button, so selection is the whole copy story.
+        //
+        // A row taller than `Theme.row-height`: `TextEdit`'s own padding otherwise clips
+        // the one line of text it holds.
         page_url_text := TextEdit {
-            height: Theme.row-height;
+            height: Theme.row-height + Theme.gap;
             text: ProjectState.page_url;
             read-only: true;
             wrap: no-wrap;
@@ -250,7 +273,7 @@ export component ProjectScreen inherits Rectangle {
                 width: 100%;
 
                 for row[i] in ProjectState.versions: version_row := Rectangle {
-                    height: 3 * Theme.font-size + 3 * Theme.gap + Theme.pad;
+                    height: 2 * Theme.font-size + 2 * Theme.gap + Theme.pad;
                     border-radius: Theme.radius;
 
                     HorizontalLayout {
@@ -302,15 +325,11 @@ export component ProjectScreen inherits Rectangle {
                             }
                         }
 
+                        // Game versions and loaders on one line, shortening the row.
                         Text {
-                            text: row.game_versions;
-                            color: Theme.text-muted;
-                            font-size: Theme.font-size-small;
-                            overflow: elide;
-                        }
-
-                        Text {
-                            text: row.loaders;
+                            text: row.loaders == ""
+                                ? row.game_versions
+                                : row.game_versions + " · " + row.loaders;
                             color: Theme.text-muted;
                             font-size: Theme.font-size-small;
                             overflow: elide;
@@ -338,12 +357,13 @@ export component ProjectScreen inherits Rectangle {
         }
 
         Text {
-            text: ProjectState.status;
+            text: ProjectState.loading ? "Loading…" : ProjectState.status;
             color: Theme.text-muted;
             font-size: Theme.font-size-small;
             height: Theme.row-height;
             vertical-alignment: center;
             overflow: elide;
+        }
         }
     }
 }

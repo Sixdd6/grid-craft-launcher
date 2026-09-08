@@ -92,8 +92,10 @@ fn truncate_text(text: &mut String) {
 /// `-`, `*`, `+`, `1.`, or `1)`, code from a ``` ``` ``` fence; every other non-empty run
 /// of lines is one paragraph, joined with spaces. `[text](url)` becomes `text (url)`,
 /// `![alt](url)` is dropped, and `**`, `__`, and backtick markers are removed. A single
-/// `*` or `_` is left alone so a `snake_case` word survives. A leading `> ` is dropped,
-/// as are `---` rules and table separator rows.
+/// `*x*` or `_x_` is stripped too, but only when its markers sit at a word boundary, so
+/// `snake_case` keeps its underscores: `check_this_out` has no letter-to-letter boundary
+/// for either underscore to open or close on. A leading `> ` is dropped, as are `---`
+/// rules and table separator rows.
 ///
 /// A real body carries HTML too — `<center>`, `<details>`, badge tables, `<br>`. Tags
 /// outside a code fence are stripped first ([`strip_tags`]), and a body that is block-level
@@ -278,6 +280,14 @@ fn inline(text: &str) -> String {
             i += 2;
             continue;
         }
+        if (chars[i] == '_' || chars[i] == '*')
+            && let Some(end) = single_emphasis_at(&chars, i, chars[i])
+        {
+            let label: String = chars[i + 1..end - 1].iter().collect();
+            out.push_str(&inline(&label));
+            i = end;
+            continue;
+        }
         if chars[i] == '`' {
             i += 1;
             continue;
@@ -286,6 +296,42 @@ fn inline(text: &str) -> String {
         i += 1;
     }
     collapse(&out)
+}
+
+/// A letter, digit, or underscore: what keeps `_` inside `snake_case` from reading as an
+/// emphasis marker.
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// The index just past a single-character emphasis span (`_x_` or `*x*`) opening at `at`,
+/// or `None` when `at` does not open one.
+///
+/// Both ends have to sit at a word boundary: the character right after the opening marker,
+/// and the one right before the closing marker, must not be whitespace, and the character
+/// right before the opening marker and right after the closing marker (if either exists)
+/// must not be a [word character](is_word_char). That last rule is what keeps
+/// `check_updates_button` intact — the underscore between `check` and `updates` has a
+/// letter on both sides, so it never opens a span — while still stripping `_important_`.
+/// The closing marker is looked for within [`LINK_SCAN`] characters, the same bound
+/// [`link_at`] uses.
+fn single_emphasis_at(chars: &[char], at: usize, marker: char) -> Option<usize> {
+    if chars.get(at) != Some(&marker) {
+        return None;
+    }
+    if at > 0 && is_word_char(chars[at - 1]) {
+        return None;
+    }
+    match chars.get(at + 1) {
+        Some(c) if !c.is_whitespace() && *c != marker => {}
+        _ => return None,
+    }
+    let end = (at + 1..chars.len().min(at + 1 + LINK_SCAN)).find(|&j| {
+        chars[j] == marker
+            && !chars[j - 1].is_whitespace()
+            && chars.get(j + 1).is_none_or(|c| !is_word_char(*c))
+    })?;
+    Some(end + 1)
 }
 
 /// Whether `chars` holds `pat` at `at`.

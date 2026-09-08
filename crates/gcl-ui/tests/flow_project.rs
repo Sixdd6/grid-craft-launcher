@@ -2,9 +2,10 @@
 //!
 //! One process may hold one Slint backend, so the whole flow runs inside a single `#[test]`,
 //! in order, over one window: search, open a project's details from a search row, read its
-//! description, install an older version from the versions tab, find it in the instance's
-//! content list, reopen the details from that list's source button, install the newer version
-//! over it, and go back.
+//! description, go Back and reopen the same row, install an older version from the versions
+//! tab, find it in the instance's content list, check updates and see a title an older writer
+//! left out backfilled, reopen the details from the content list's source button, install the
+//! newer version over it, go back, and reopen once more to check Escape does the same thing.
 //!
 //! Modrinth is a wiremock host over the recorded fixtures — the search page, the project, its
 //! two versions, the jar each version points at, and the project's icon — so nothing here
@@ -54,11 +55,14 @@ fn the_details_screen_installs_a_chosen_version() {
         let app = &driver;
         searching_shows_a_decoded_icon(app).await;
         a_row_title_opens_the_description(app).await;
+        back_keeps_the_search_results_and_reopens_the_same_row(app).await;
         the_versions_tab_installs_the_older_version(app).await;
         the_content_list_shows_the_title_over_the_file_name(app).await;
+        checking_updates_backfills_the_title_and_keeps_the_mark(app).await;
         the_source_button_reopens_the_details(app).await;
         installing_the_newer_version_replaces_the_file(app).await;
         back_returns_to_the_instance_screen(app).await;
+        escape_does_what_back_does(app).await;
     });
 }
 
@@ -277,6 +281,28 @@ async fn a_row_title_opens_the_description(app: &TestApp) {
     );
 }
 
+/// (b2) Back returns to the browser with the same page of hits still on screen, and the
+/// title still opens the same project.
+async fn back_keeps_the_search_results_and_reopens_the_same_row(app: &TestApp) {
+    let titles_before = row_titles(&app.window);
+
+    app.click("ProjectScreen::back_button");
+    app.wait_until(
+        "the browser to come back",
+        |window| window.global::<App>().get_screen() == Screen::Browser,
+        QUICK,
+    )
+    .await;
+    assert_eq!(
+        row_titles(&app.window),
+        titles_before,
+        "Back must not clear the rows the search already found"
+    );
+
+    app.click_nth("BrowserScreen::row_title", 0);
+    wait_for_details(app).await;
+}
+
 /// (c) The versions tab lists both versions and installs the one it is asked for.
 async fn the_versions_tab_installs_the_older_version(app: &TestApp) {
     app.click_nth("TabBar::tab_entry", 1);
@@ -338,6 +364,36 @@ async fn the_content_list_shows_the_title_over_the_file_name(app: &TestApp) {
             .collect::<Vec<_>>(),
         "the content list is in name order, case-insensitively"
     );
+}
+
+/// (d2) Check updates finds the newer version and backfills a title an older writer left
+/// out, and the reload that follows shows it without losing the mark.
+async fn checking_updates_backfills_the_title_and_keeps_the_mark(app: &TestApp) {
+    let toml_path = app.launcher.root().instance_dir(SLUG).join("instance.toml");
+    let toml = std::fs::read_to_string(&toml_path).expect("read instance.toml");
+    let stripped: String = toml
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("title ="))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    std::fs::write(&toml_path, stripped)
+        .expect("strip the title, as an entry saved before it existed would have none");
+
+    // The screen is already showing this instance from the step before, so nothing here
+    // re-reads it from disk until Check updates does.
+    app.click("InstanceScreen::check_updates_button");
+    app.wait_until(
+        "check updates to backfill the title and keep the row marked for an update",
+        |window| {
+            window
+                .global::<InstanceState>()
+                .get_content()
+                .iter()
+                .any(|row| row.name.as_str() == support::MOD_TITLE && row.update_available)
+        },
+        QUICK,
+    )
+    .await;
 }
 
 /// (e) A content row's source button reopens the details, with the installed row marked.
@@ -437,6 +493,25 @@ async fn back_returns_to_the_instance_screen(app: &TestApp) {
                     support::MOD_FILE_NAME.to_string(),
                 )]
         },
+        QUICK,
+    )
+    .await;
+}
+
+/// (h) Escape on the details screen goes Back, same as the button.
+async fn escape_does_what_back_does(app: &TestApp) {
+    app.click_nth("InstanceScreen::row_source_button", 0);
+    wait_for_details(app).await;
+    assert_eq!(
+        app.window.global::<ProjectState>().get_return_to(),
+        Screen::Instance,
+        "reopened from the content list, so Back and Escape both return here"
+    );
+
+    app.press_key(slint::platform::Key::Escape);
+    app.wait_until(
+        "Escape to return to the instance screen",
+        |window| window.global::<App>().get_screen() == Screen::Instance,
         QUICK,
     )
     .await;

@@ -125,6 +125,10 @@ export global InstanceState {
 
     // Read this slug's instance from disk and fill every property above.
     callback load(string);
+    // Empty every property above. `app.slint` calls this when the instance screen is shown
+    // with no `App.current_slug`, so the screen shows an empty state rather than the last
+    // instance that was open.
+    callback clear();
     // Start the game.
     callback launch();
     // Stop the game: `Launcher::stop_instance` signals the child. The launch thread is what

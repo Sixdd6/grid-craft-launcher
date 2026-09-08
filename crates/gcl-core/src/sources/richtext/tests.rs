@@ -94,6 +94,22 @@ fn markdown_keeps_snake_case_words_intact() {
 }
 
 #[test]
+fn markdown_strips_single_asterisk_emphasis_at_a_word_boundary() {
+    assert_eq!(
+        from_markdown("this is *important* text"),
+        vec![Block::Paragraph("this is important text".to_string())]
+    );
+}
+
+#[test]
+fn markdown_strips_single_underscore_emphasis_at_a_word_boundary() {
+    assert_eq!(
+        from_markdown("this is _important_ text"),
+        vec![Block::Paragraph("this is important text".to_string())]
+    );
+}
+
+#[test]
 fn unclosed_markdown_fence_still_yields_its_code() {
     assert_eq!(
         from_markdown("```\nline\n"),

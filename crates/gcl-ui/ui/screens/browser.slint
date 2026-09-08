@@ -77,6 +77,10 @@ export global BrowserState {
     in-out property <bool> loading: false;
     // One line about the last thing that happened here.
     in-out property <string> status: "";
+    // Set by `ProjectState.back()` just before it returns here, so `open()` (which every
+    // navigation to this screen runs) knows this page of hits still belongs to the query on
+    // screen and must not clear it. Rust clears the flag back to false once it has read it.
+    in-out property <bool> returning: false;
 
     // Path typed into the modpack panel's "From file" field.
     in-out property <string> pack_path: "";
@@ -559,10 +563,13 @@ export component BrowserScreen inherits Rectangle {
                     height: 3 * Theme.font-size + 3 * Theme.gap + Theme.pad;
                     selected: i == root.selected;
                     clicked => {
-                        // Clicking a row is also how the keyboard gets here: the scope never
-                        // grabs focus on its own, so a field the user is typing in keeps it.
+                        // Clicking anywhere on the row but a button opens the details, the
+                        // same as clicking the title itself. Clicking a row is also how the
+                        // keyboard gets here: the scope never grabs focus on its own, so a
+                        // field the user is typing in keeps it.
                         keys.focus();
                         root.selected = i;
+                        root.open_project(row.source, row.project_id, row.downloads, row.author);
                     }
 
                     // The project's icon, or a placeholder tile until it loads (or when the
@@ -613,13 +620,30 @@ export component BrowserScreen inherits Rectangle {
 
                                 title_text := Text {
                                     text: row.title;
-                                    color: Theme.text;
+                                    color: title_touch.has-hover ? Theme.accent : Theme.text;
                                     font-size: Theme.font-size;
+                                    horizontal-alignment: left;
                                     vertical-alignment: center;
+                                    width: 100%;
                                     overflow: elide;
                                 }
 
+                                // A thin underline is the hover cue; the row's own
+                                // background already shows on hover, so this is what marks
+                                // the title itself as the clickable part. Always mounted and
+                                // toggled by `visible`, not wrapped in an `if`: a hover cue
+                                // that mounts and unmounts an element on every pointer move
+                                // is what triggers a Slint interpreter crash (issue #6426).
+                                Rectangle {
+                                    visible: title_touch.has-hover;
+                                    y: parent.height - 1px;
+                                    height: 1px;
+                                    width: min(title_text.preferred-width, parent.width);
+                                    background: Theme.accent;
+                                }
+
                                 title_touch := TouchArea {
+                                    mouse-cursor: pointer;
                                     clicked => {
                                         keys.focus();
                                         root.selected = i;

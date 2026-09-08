@@ -165,6 +165,11 @@ export component AppWindow inherits Window {
     changed shown_slug => {
         if (self.shown_slug != "") {
             InstanceState.load(self.shown_slug);
+        } else if (App.screen == Screen.instance) {
+            // The instance screen is up with no instance named — reached from the rail with
+            // nothing picked, or the one it had open was deleted — so it shows an empty
+            // state rather than whatever the last instance left on screen.
+            InstanceState.clear();
         }
     }
 
@@ -236,7 +241,10 @@ export component AppWindow inherits Window {
     property <Screen> shown_screen: App.screen;
 
     changed shown_screen => {
-        if (!root.any_dialog_open) {
+        // The project details screen grabs its own keyboard on mount, the same way a
+        // `Dialog` does, so Escape reaches it without waiting for a click; reclaiming focus
+        // for `nav` here would win that race unpredictably.
+        if (!root.any_dialog_open && App.screen != Screen.project) {
             nav.focus();
         }
     }

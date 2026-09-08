@@ -193,9 +193,13 @@ async fn searching_and_adding_a_mod_installs_its_file(app: &TestApp) {
         "Add content names the instance it was pressed on as the target"
     );
 
+    // Enter in the field runs the search, the same as pressing the button: a real click
+    // focuses it first, since a flow's `type_into` sets the value through an accessible
+    // action rather than a keystroke.
+    app.click("SearchBox::search_field");
     app.type_into("SearchBox::search_field", "sodium");
     support::pump();
-    app.click("BrowserScreen::search_button");
+    app.press_key(slint::platform::Key::Return);
     app.wait_until(
         "the search results to arrive",
         |window| !row_titles(window).is_empty(),
@@ -381,7 +385,72 @@ async fn installing_a_modpack_from_a_file(app: &TestApp) {
     support::pump();
     app.click("Dialog::confirm_button");
 
+    // `wait_for_new_instance` ends on the instance list, having checked the new instance is
+    // there; open its detail screen for the content-list assertions below.
     wait_for_new_instance(app, FILE_INSTANCE, "from-file").await;
+    app.click("Rail::rail_instance");
+    app.wait_until(
+        "the detail screen to show the new instance",
+        |window| window.global::<InstanceState>().get_name() == FILE_INSTANCE,
+        QUICK,
+    )
+    .await;
+
+    // (e2) The packaged mod's hash matches no known project, so it is recorded with the
+    // `file` source and its row offers no source page.
+    app.wait_for("InstanceScreen::row_source_button", QUICK)
+        .await;
+    let source_button = app.el_nth("InstanceScreen::row_source_button", 0);
+    assert_eq!(
+        source_button.accessible_label(),
+        Some("No source page".into()),
+        "a `file` entry names no page to open"
+    );
+    assert_eq!(
+        source_button.accessible_enabled(),
+        Some(false),
+        "and its button is disabled"
+    );
+
+    // (e3) Adding a second mod keeps the content list in name order.
+    app.click("InstanceScreen::add_content_button");
+    wait_for_browser(app).await;
+    // The kind combo is still on `modpack` from installing the file above; back to `mod`
+    // so Search runs a content search rather than another pack search.
+    let kinds = app.window.global::<BrowserState>().get_kind_labels();
+    let mod_kind = (0..kinds.row_count())
+        .find(|i| kinds.row_data(*i).is_some_and(|label| label == "mod"))
+        .expect("Modrinth offers the mod kind");
+    app.select_combo("BrowserScreen::kind_combo", mod_kind);
+    app.type_into("SearchBox::search_field", "sodium");
+    support::pump();
+    app.click("BrowserScreen::search_button");
+    app.wait_until(
+        "the search results to arrive",
+        |window| !row_titles(window).is_empty(),
+        QUICK,
+    )
+    .await;
+    app.click_nth("BrowserScreen::row_install", 0);
+    app.wait_until(
+        "the add to finish",
+        |window| window.global::<BrowserState>().get_status() == "installed 1",
+        QUICK,
+    )
+    .await;
+
+    app.click("Rail::rail_instance");
+    app.wait_until(
+        "the content list to show both entries",
+        |window| content_names(window).len() == 2,
+        QUICK,
+    )
+    .await;
+    assert_eq!(
+        content_names(&app.window),
+        vec!["pack-mod".to_string(), support::MOD_TITLE.to_string()],
+        "the content list is in name order, case-insensitively"
+    );
 }
 
 /// Waits for an import to land, then checks the new instance is on disk and in the list.

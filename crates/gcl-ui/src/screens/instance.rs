@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use gcl_core::content::{ManualDownload, UpdateCandidate};
 use gcl_core::instances::model::{ContentEntry, InstanceJvm};
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::bridge::Bridge;
 use crate::launch_flow;
@@ -112,6 +112,15 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState, editor: &Editor
         let run = run.clone();
         let shared = shared.clone();
         state.on_load(move |slug| open(&bridge, &run, &shared, slug.as_str()));
+    }
+
+    {
+        let weak = bridge.weak().clone();
+        state.on_clear(move || {
+            if let Some(window) = weak.upgrade() {
+                clear_view(&window);
+            }
+        });
     }
 
     {
@@ -230,19 +239,21 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState, editor: &Editor
 
     {
         let bridge = bridge.clone();
+        let run = run.clone();
         let shared = shared.clone();
         state.on_check_updates(move || {
             let Some(slug) = shown_slug(&bridge) else {
                 return;
             };
             status(&bridge, "Checking for updates…");
-            let shared = shared.clone();
+            let after = (bridge.clone(), run.clone(), shared.clone());
+            let job_slug = slug.clone();
             bridge.run(
                 "Check updates",
-                move |launcher| launcher.check_updates(&slug),
+                move |launcher| launcher.check_updates(&job_slug),
                 move |window, candidates| {
+                    let (bridge, run, shared) = after;
                     let state = window.global::<InstanceState>();
-                    state.set_update_count(candidates.len() as i32);
                     state.set_status_text(
                         match candidates.len() {
                             0 => "Everything is up to date".to_string(),
@@ -250,8 +261,11 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState, editor: &Editor
                         }
                         .into(),
                     );
-                    mark_updates(window, &candidates);
+                    // `check_updates` may have backfilled a title an older writer left out;
+                    // a fresh `load` is what shows it, and it rebuilds `content` with these
+                    // candidates too, so the update marks this check found are not lost.
                     shared.set_candidates(candidates);
+                    load(&bridge, &run, &shared, &slug);
                 },
             );
         });
@@ -633,7 +647,7 @@ pub fn content_rows(entries: &[ContentEntry], candidates: &[UpdateCandidate]) ->
             content_row(entry, update)
         })
         .collect();
-    rows.sort_by_key(|row| row.name.to_lowercase());
+    rows.sort_by_cached_key(|row| row.name.to_lowercase());
     rows
 }
 
@@ -685,22 +699,6 @@ fn option_rows(options: &[(String, String)]) -> Vec<SettingRow> {
 fn heap_or_default(mib: Option<u32>, fallback: i32) -> i32 {
     mib.map(|value| value.clamp(HEAP_MIN_MIB as u32, HEAP_MAX_MIB as u32) as i32)
         .unwrap_or(fallback)
-}
-
-/// Rewrites `update_available` on the rows the candidates name. Runs on the UI thread.
-fn mark_updates(window: &AppWindow, candidates: &[UpdateCandidate]) {
-    let state = window.global::<InstanceState>();
-    let rows: Vec<ContentRow> = state
-        .get_content()
-        .iter()
-        .map(|mut row| {
-            row.update_available = candidates
-                .iter()
-                .any(|candidate| candidate.entry.project_id.as_str() == row.project_id.as_str());
-            row
-        })
-        .collect();
-    state.set_content(ModelRc::new(VecModel::from(rows)));
 }
 
 /// The slug the detail screen is showing, if it is up.

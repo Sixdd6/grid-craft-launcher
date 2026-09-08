@@ -46,6 +46,12 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
         state.on_back(move || {
             if let Some(window) = bridge.weak().upgrade() {
                 let return_to = window.global::<ProjectState>().get_return_to();
+                if return_to == Screen::Browser {
+                    // The browser's own `open()` runs on every navigation to it; this says
+                    // the page of hits it is about to see is the one the user searched for,
+                    // not a stale one to clear.
+                    window.global::<crate::BrowserState>().set_returning(true);
+                }
                 window.global::<crate::App>().set_screen(return_to);
             }
         });
@@ -185,8 +191,18 @@ fn load(
 ) -> Result<Opened, gcl_core::Error> {
     let details = launcher.project_details(source_id, project_id)?;
     let kind = details.project.kind;
-    let loaded =
-        versions_and_installed(launcher, source_id, project_id, target_slug, kind, show_all)?;
+    // `project_id` is whatever the caller passed in — a search hit's id, or a slug typed by
+    // hand — and a source may answer either one with its own canonical id. `details` just
+    // resolved it, so the installed marker below is matched against that canonical id, the
+    // same one `Launcher::add_content` records in `instance.toml`.
+    let loaded = versions_and_installed(
+        launcher,
+        source_id,
+        &details.project.id,
+        target_slug,
+        kind,
+        show_all,
+    )?;
     Ok(Opened {
         details,
         versions: loaded.versions,
@@ -294,7 +310,9 @@ fn install(bridge: &Bridge, version_id: String) {
         move |launcher| launcher.add_content(&slug_for_job, request),
         move |window, result| {
             let state = window.global::<ProjectState>();
-            state.set_loading(false);
+            // `loading` stays true across the reload below: clearing it here would let the
+            // Install buttons flash enabled on rows the reload is about to mark installed or
+            // incompatible again.
             match result {
                 Ok(outcome) => {
                     if !outcome.conflicts.is_empty() {
@@ -323,7 +341,12 @@ fn install(bridge: &Bridge, version_id: String) {
                     }
                     reload_versions(&bridge_for_reload, true);
                 }
-                Err(_) => state.set_status("Install version failed".into()),
+                Err(_) => {
+                    // No reload follows on this path, so this is the one place left to
+                    // clear it.
+                    state.set_loading(false);
+                    state.set_status("Install version failed".into());
+                }
             }
         },
     );
@@ -372,6 +395,9 @@ fn apply(window: &AppWindow, opened: Opened, preserve_status: bool) {
     let state = window.global::<ProjectState>();
     let project = opened.details.project;
     let kind = project.kind;
+    // The canonical id, so a later `reload_versions` or `install` matches the same
+    // installed entry this open just did, even when the caller opened with a slug.
+    state.set_project_id(project.id.as_str().into());
     state.set_title(project.title.as_str().into());
     state.set_kind(project.kind.to_string().into());
     state.set_page_url(project.page_url.as_str().into());
