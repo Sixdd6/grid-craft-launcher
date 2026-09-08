@@ -46,6 +46,7 @@ fn the_instances_screen_creates_launches_and_removes_an_instance() {
         a_saved_zgc_reads_as_the_generational_row_on_java_25(app).await;
         a_refused_pick_reads_the_collector_block_again(app).await;
         a_probe_that_fails_says_so_without_a_dialog(app).await;
+        the_probe_only_ever_ran_the_stand_in_javas(app).await;
     });
 }
 
@@ -104,6 +105,44 @@ fn gc_index(window: &AppWindow, label: &str) -> usize {
         .iter()
         .position(|row| row == label)
         .unwrap_or_else(|| panic!("no `{label}` entry in {:?}", gc_labels(window)))
+}
+
+/// The token behind one collector label, as the combo's own rows carry it.
+fn gc_token(window: &AppWindow, label: &str) -> String {
+    window
+        .global::<InstanceState>()
+        .get_gc_options()
+        .iter()
+        .find(|row| row.label == label)
+        .map(|row| row.token.to_string())
+        .unwrap_or_else(|| panic!("no `{label}` entry in {:?}", gc_labels(window)))
+}
+
+/// Picks one collector, the way the combo's `selected` handler does: one pick, one save.
+///
+/// Never [`TestApp::select_combo`] on this combo. It walks the popup a row at a time and the
+/// combo saves every row it passes, each on its own background thread, so the last write to
+/// land is not the last row the walk asked for and the reload it triggers moves the popup's
+/// cursor under the walk. That race is what made this flow time out. One keypress at a time
+/// is still covered, by [`TestApp::combo_step_down`].
+fn pick_gc(app: &TestApp, label: &str) {
+    let index = gc_index(&app.window, label);
+    let token = gc_token(&app.window, label);
+    let state = app.window.global::<InstanceState>();
+    state.set_gc_selected_index(index as i32);
+    state.invoke_gc_pick(token.into());
+    support::pump();
+}
+
+/// Yields until this instance's `instance.toml` carries `line`, naming what it holds if not.
+async fn wait_for_toml(app: &TestApp, slug: &str, line: &str) {
+    app.wait_until(
+        &format!("`{line}` to reach {slug}'s instance.toml"),
+        |_| instance_toml(app, slug).contains(line),
+        QUICK,
+    )
+    .await;
+    assert!(instance_toml(app, slug).contains(line));
 }
 
 /// What one instance's `instance.toml` holds right now.
@@ -381,6 +420,9 @@ async fn launching_a_row_runs_the_game_until_stop(app: &TestApp) {
 /// collector flags, so every preset is on offer. Picking one saves it on its own, a heap save
 /// afterwards must keep it, and the launch that follows must pass its flags before the
 /// instance's own extra arguments.
+///
+/// One pick is made from the keyboard, one row down with the popup open, which is the whole
+/// of the combo-to-`gc_pick` wiring and exactly one save. The rest go through [`pick_gc`].
 async fn the_jvm_tab_picks_a_garbage_collector(app: &TestApp) {
     open_jvm_tab(app, "Java 21").await;
     assert_eq!(
@@ -397,14 +439,26 @@ async fn the_jvm_tab_picks_a_garbage_collector(app: &TestApp) {
         "the Java 21 dump lists every collector flag, so every preset is offered"
     );
 
-    let index = gc_index(&app.window, "ZGC (generational)");
-    app.select_combo("InstanceScreen::gc_combo", index);
-    app.wait_until(
-        "the picked preset to reach instance.toml",
-        |_| instance_toml(app, "vanilla").contains(r#"gc = "zgc_generational""#),
-        QUICK,
-    )
-    .await;
+    // A saved preset is what the combo is on, and nothing is saved yet, so it sits on the
+    // first row. One Down inside the popup is one `selected`, and so one save.
+    let state = app.window.global::<InstanceState>();
+    assert_eq!(
+        state.get_gc_selected_index(),
+        0,
+        "nothing is saved yet, so the combo is on `Launcher default`"
+    );
+    let stepped = gc_labels(&app.window)[1].clone();
+    let stepped_token = gc_token(&app.window, &stepped);
+    app.combo_step_down("InstanceScreen::gc_combo");
+    wait_for_toml(app, "vanilla", &format!(r#"gc = "{stepped_token}""#)).await;
+    assert_eq!(
+        app.el("InstanceScreen::gc_combo").accessible_value(),
+        Some(stepped.as_str().into()),
+        "the keyboard pick shows on the combo itself, not only in the state behind it"
+    );
+
+    pick_gc(app, "ZGC (generational)");
+    wait_for_toml(app, "vanilla", r#"gc = "zgc_generational""#).await;
     assert_eq!(
         app.el("InstanceScreen::gc_combo").accessible_value(),
         Some("ZGC (generational)".into()),
@@ -672,16 +726,8 @@ async fn another_java_offers_another_collector_list(app: &TestApp) {
     // Save Shenandoah while the Java has it, then take that Java away.
     let java21 = app.root().join("fake-java");
     point_java_at(app, &java21, "Java 21").await;
-    app.select_combo(
-        "InstanceScreen::gc_combo",
-        gc_index(&app.window, "Shenandoah"),
-    );
-    app.wait_until(
-        "Shenandoah to reach instance.toml",
-        |_| instance_toml(app, "jvm").contains(r#"gc = "shenandoah""#),
-        QUICK,
-    )
-    .await;
+    pick_gc(app, "Shenandoah");
+    wait_for_toml(app, "jvm", r#"gc = "shenandoah""#).await;
 
     let dump: String = support::PRINTFLAGS_21
         .lines()
@@ -735,13 +781,8 @@ async fn point_java_at(app: &TestApp, java: &Path, version: &str) {
 async fn a_saved_zgc_reads_as_the_generational_row_on_java_25(app: &TestApp) {
     let java21 = app.root().join("fake-java");
     point_java_at(app, &java21, "Java 21").await;
-    app.select_combo("InstanceScreen::gc_combo", gc_index(&app.window, "ZGC"));
-    app.wait_until(
-        "plain ZGC to reach instance.toml",
-        |_| instance_toml(app, "jvm").contains(r#"gc = "zgc""#),
-        QUICK,
-    )
-    .await;
+    pick_gc(app, "ZGC");
+    wait_for_toml(app, "jvm", r#"gc = "zgc""#).await;
 
     let java25 = support::write_java_stand_in(app.root(), "fake-java-25", support::PRINTFLAGS_25);
     point_java_at(app, &java25, "Java 25").await;
@@ -765,9 +806,9 @@ async fn a_saved_zgc_reads_as_the_generational_row_on_java_25(app: &TestApp) {
 /// and the refused row must not be left selected: the block is read again from the Java that
 /// refused it, which drops Serial from the list and puts the combo back on what is saved.
 ///
-/// The pick goes through `InstanceState.gc_pick` rather than the combo. `select_combo` walks
-/// the popup one row at a time and fires a pick for every row it passes, so a successful pick
-/// on the way would reload the block before the refused one ever ran.
+/// The pick goes through `InstanceState.gc_pick`, the way every pick in this flow does: see
+/// [`pick_gc`]. Walking the popup would fire a pick for every row it passed, and a successful
+/// one on the way would reload the block before the refused one ever ran.
 async fn a_refused_pick_reads_the_collector_block_again(app: &TestApp) {
     let dump: String = support::PRINTFLAGS_25
         .lines()
@@ -776,10 +817,7 @@ async fn a_refused_pick_reads_the_collector_block_again(app: &TestApp) {
         .join("\n");
     support::write_java_stand_in(app.root(), "fake-java-25", &dump);
 
-    let serial = gc_index(&app.window, "Serial");
-    let state = app.window.global::<InstanceState>();
-    state.set_gc_selected_index(serial as i32);
-    state.invoke_gc_pick("serial".into());
+    pick_gc(app, "Serial");
     app.wait_until(
         "the refusal to open the error dialog",
         |window| window.global::<App>().get_error_open(),
@@ -839,5 +877,49 @@ async fn a_probe_that_fails_says_so_without_a_dialog(app: &TestApp) {
         !app.has("AppWindow::error_text"),
         "and none is in the element tree. Showing: {:?}",
         app.ids()
+    );
+}
+
+/// (j) Every collector probe in this flow ran a stand-in java, and ran each one once.
+///
+/// Two rules in one place, both about the JVM this flow may start. Every path the probe ran
+/// is inside the temp root, so no real `java` on this machine — a `PATH` one, a `JAVA_HOME`
+/// one, or a downloaded Mojang runtime — ever decided what the picker offered. And each
+/// stand-in was run once per version of itself, so `ProbeCache` answered every later load of
+/// the JVM tab without spawning anything: a picker that reprobed per load would spend a real
+/// process on every one of this flow's dozen instance loads.
+async fn the_probe_only_ever_ran_the_stand_in_javas(app: &TestApp) {
+    let runs = app.java_probes();
+    assert!(!runs.is_empty(), "the collector probe ran at least once");
+    let root = app.root().to_string_lossy().to_string();
+    for run in &runs {
+        assert!(
+            run.starts_with(&root),
+            "the probe ran `{run}`, which is not one of the stand-ins under {root}. It ran: \
+             {runs:?}"
+        );
+    }
+    assert_eq!(
+        app.java_probe_count("fake-java"),
+        1,
+        "the Java 21 stand-in every instance load resolves to is probed once, then cached. \
+         The probe ran: {runs:?}"
+    );
+    assert_eq!(
+        app.java_probe_count("fake-java-17"),
+        1,
+        "so is the Java 17 one. The probe ran: {runs:?}"
+    );
+    assert_eq!(
+        app.java_probe_count("fake-java-no-shenandoah"),
+        1,
+        "and the one with no Shenandoah. The probe ran: {runs:?}"
+    );
+    assert_eq!(
+        app.java_probe_count("fake-java-25"),
+        2,
+        "the Java 25 one is written twice — the refused-pick flow rewrites its dump — and a \
+         cache entry is keyed by modification time, so it is probed once per writing. The \
+         probe ran: {runs:?}"
     );
 }

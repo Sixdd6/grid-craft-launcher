@@ -82,8 +82,10 @@ const FAILING_JAVA: &str = "#!/bin/sh\necho 'java: could not create the VM' >&2\
 ///
 /// Two behaviours in one script. Asked for a flag dump (`-XX:+PrintFlagsFinal`, which only
 /// the collector probe passes) it prints the dump file that sits next to it — the whole file
-/// on stdout, its banner line on stderr, the way a real JVM splits them — and exits 0 without
-/// recording anything, so `java-args.txt` holds launch arguments only.
+/// on stdout, its banner line on stderr, the way a real JVM splits them — and exits 0. A probe
+/// run writes its own path to `java-probes.txt` and nothing to `java-args.txt`, so the launch
+/// arguments stay one list and [`TestApp::java_probes`] can count how often each stand-in was
+/// really run.
 ///
 /// Otherwise it appends its whole argument list to `java-args.txt`, says it started, then
 /// waits. A `SIGTERM` makes it exit 143, the code a shell reports for "terminated"; a `stop`
@@ -94,6 +96,7 @@ const FAKE_JAVA: &str = "#!/bin/sh\n\
      root=$(dirname \"$0\")\n\
      for arg in \"$@\"; do\n\
        if [ \"$arg\" = \"-XX:+PrintFlagsFinal\" ]; then\n\
+         printf '%s\\n' \"$0\" >> \"$root/java-probes.txt\"\n\
          head -n 1 \"$0.flags\" >&2\n\
          cat \"$0.flags\"\n\
          exit 0\n\
@@ -343,6 +346,28 @@ impl TestApp {
             .collect()
     }
 
+    /// The path of every stand-in java the collector probe has run, one per run.
+    ///
+    /// A probe answered from `ProbeCache` runs nothing, so a repeated name here means the
+    /// cache missed. The list is empty until the first probe.
+    pub fn java_probes(&self) -> Vec<String> {
+        std::fs::read_to_string(self.dir.path().join("java-probes.txt"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// How often the collector probe ran the stand-in java named `name`.
+    pub fn java_probe_count(&self, name: &str) -> usize {
+        let path = self.dir.path().join(name);
+        let path = path.to_string_lossy().to_string();
+        self.java_probes()
+            .iter()
+            .filter(|run| **run == path)
+            .count()
+    }
+
     /// Asks the stand-in java to exit 0 on its own, without a signal.
     pub fn ask_java_to_stop(&self) {
         std::fs::write(self.dir.path().join("stop"), b"").expect("write the stop file");
@@ -553,6 +578,11 @@ impl TestApp {
     /// keys its own key handler reads. Up is pressed until the value stops changing, which
     /// is row 0 whatever was selected, then Down `index` times, and Return closes the popup
     /// on the wanted row.
+    ///
+    /// Every one of those presses fires the combo's `selected` callback, so this is only for
+    /// a combo whose selection does nothing on its own. A combo that saves what it is handed
+    /// gets one background write per row walked, and those land in whatever order their
+    /// threads finish: use [`TestApp::combo_step_down`], or drive the callback directly.
     pub fn select_combo(&self, id: &str, index: usize) {
         let combo = self.el(id);
         assert_ne!(
@@ -579,6 +609,26 @@ impl TestApp {
         for _ in 0..index {
             self.press_key(slint::platform::Key::DownArrow);
         }
+        self.press_key(slint::platform::Key::Return);
+        pump();
+    }
+
+    /// Moves the ComboBox with this id one row down, with the popup open, and closes it.
+    ///
+    /// One keypress, so one `selected`. [`TestApp::select_combo`] walks the whole popup and
+    /// fires `selected` for every row it passes; on a combo that saves what it is handed,
+    /// each of those is a background write, and the last one to land is not the last one the
+    /// walk asked for. A flow that drives such a combo steps it instead.
+    pub fn combo_step_down(&self, id: &str) {
+        let combo = self.el(id);
+        assert_ne!(
+            combo.accessible_enabled(),
+            Some(false),
+            "`{id}` is showing but disabled"
+        );
+        combo.invoke_accessible_expand_action();
+        pump();
+        self.press_key(slint::platform::Key::DownArrow);
         self.press_key(slint::platform::Key::Return);
         pump();
     }

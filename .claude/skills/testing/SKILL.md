@@ -251,13 +251,13 @@ Rerun it once before treating a failure as a real regression.
 `assert_cmd::Command::cargo_bin("gcl")` with `.env("GCL_ROOT", dir.path())`. Assert exit code and
 key output lines. Use `--json` and parse with serde_json for structure.
 
-`crates/gcl-cli/tests/cli.rs`'s `gc_java` writes the same kind of stand-in `sh` script as
+`crates/gcl-ui/tests/flow_instances.rs` drives the GUI picker as well, over the stand-in
+javas `tests/support/mod.rs` writes. `crates/gcl-cli/tests/cli.rs`'s `gc_java` writes the same kind of stand-in `sh` script as
 `ProbeCache`'s own tests (see `java::gc::probe`'s doc comment for the `-XX:+PrintFlagsFinal`
 dump shape), pointing an instance's `java_path` at a script that `cat`s a canned dump instead of
-spawning a real JVM. `gcl instance jvm --gc`/`gcl instance gc` tests drive that instance; GC
-coverage on the GUI side stops at the unit level — `screens::instance::tests` asserts
-`instance_jvm` threads a saved `GcPreset` through a heap save — there is no `flow_instances`
-sub-flow for it yet.
+spawning a real JVM. `gcl instance jvm --gc`/`gcl instance gc` tests drive that instance.
+`screens::instance::tests` asserts `instance_jvm` threads a saved `GcPreset` through a heap
+save.
 
 ## e2e
 
@@ -369,6 +369,18 @@ Rules:
 - **A `ComboBox` has no accessible set-value action.** `select_combo` opens the popup with
   `accessible-action-expand`, presses Up until `accessible_value` stops changing, then presses
   Down `index` times.
+- **A combo that saves on selection may not be walked.** Slint's `ComboBoxBase` fires
+  `selected` on every arrow key, so `select_combo` fires one pick per row it passes. On the
+  JVM tab's `gc_combo`, each pick is a `Bridge::run` job of its own — one thread each, no
+  order between them — that writes `instance.toml` and reloads the screen, which also moves
+  the combo's `current-index` under the walk. The last write to land was then whichever row
+  the walk passed, not the row it stopped on, and `flow_instances` timed out waiting for its
+  preset. Drive such a combo with `combo_step_down` (one keypress, one save) or invoke the
+  callback directly, the way `flow_instances::pick_gc` does.
+- **A stand-in java records its probe runs.** `FAKE_JAVA` appends its own path to
+  `java-probes.txt` when asked for a flag dump. `app.java_probe_count(name)` reads it back, so
+  a flow can assert `ProbeCache` answered every later load without spawning anything, and that
+  every path probed was a stand-in under the temp root rather than a real JVM on the machine.
 - **A flow that waits forever must not hang the run.** `.config/nextest.toml` gives every
   `flow_*` binary a slow timeout of five 60-second periods, after which nextest terminates the
   binary and reports the test as timed out.
