@@ -20,11 +20,17 @@ screen opened that dialog.
 - Dialog actions: `confirm_button`, `cancel_button` (both on `Dialog`), and `name_field` for the
   one field a prompt collects.
 - Row controls inside a repeater: `row_open`, `row_launch`, `row_delete`, `row_select`,
-  `row_refresh`, `row_toggle`, `row_install`, `row_title`, `pack_row`, `pack_install_button`,
-  `version_row`, `version_install_button`. A repeater gives every instance the same id, so a
-  test takes the nth handle `find_by_element_id` yields, in list order.
-  `version_install_button`'s `accessible-label` is the version number, not the button's
-  changing text ("Install"/"Installed"), through `Button`'s `access_label` override.
+  `row_refresh`, `row_toggle`, `row_install`, `row_title`, `row_icon`, `row_source_button`,
+  `pack_row`, `pack_install_button`, `version_row`, `version_install_button`. A repeater gives
+  every instance the same id, so a test takes the nth handle `find_by_element_id` yields, in
+  list order. `version_install_button`'s `accessible-label` is the version number, not the
+  button's changing text ("Install"/"Installed"), through `Button`'s `access_label` override.
+  `InstanceScreen::row_source_button` is the same idea for a content row's source: its
+  `access_label` is "Open on `<source>`", not the plain source name `text` shows, and its
+  `clicked` opens that project's details through `InstanceScreen.open_project`, wired in
+  `app.slint` the same way `BrowserScreen.open_project` is. `BrowserScreen::row_icon` is only
+  in the tree once its row's `icon` has been decoded (`row.icon.width > 0`); before that the
+  row shows its placeholder tile instead, which carries no id of its own.
 - Rail entries: `rail_instances`, `rail_instance`, `rail_browser`, `rail_accounts`,
   `rail_settings`.
 - Tab entries: `tab_entry` on `TabBar`, one per tab, in tab order. The project details screen's
@@ -133,6 +139,7 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_install_button` | `Button` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::keys` | `FocusScope` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::row_open` | `ListRow` |
+| `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::row_icon` | `Image` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::row_title` | `Rectangle` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::title_text` | `Text` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::title_touch` | `TouchArea` |
@@ -151,6 +158,7 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::add_content_button` | `Button` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::keys` | `FocusScope` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::row_open` | `ListRow` |
+| `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::row_source_button` | `Button` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::row_toggle` | `Button` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::row_delete` | `Button` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::entry` | `Rectangle` |
@@ -206,4 +214,4 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::default_add_button` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::verify_button` | `Button` |
 
-Total: 138 named elements.
+Total: 140 named elements.

@@ -16,6 +16,12 @@ export component InstanceScreen inherits Rectangle {
     // Content row the keyboard is on, or -1 while nothing is chosen. Arrow keys move it and
     // Enter enables or disables that file, which is the row's reversible action.
     in-out property <int> selected: -1;
+
+    // A row's source button was pressed: open that project's details. `app.slint` wires this
+    // to `ProjectState.open` and `App.navigate`, the same way `BrowserScreen.open_project`
+    // does, because `InstanceScreen` cannot reach either global itself (`app.slint` imports
+    // this file, so the reverse import would cycle).
+    callback open_project(string /* source */, string /* project_id */);
     // Smallest heap the JVM tab offers, in MiB.
     property <int> heap_min: 512;
     // Largest heap the JVM tab offers, in MiB.
@@ -228,20 +234,31 @@ export component InstanceScreen inherits Rectangle {
 
                     for row[i] in InstanceState.content: row_open := ListRow {
                         title: row.name;
-                        height: Theme.row-height + Theme.gap;
+                        height: 2 * Theme.font-size + Theme.gap + Theme.pad;
                         selected: i == root.selected;
                         clicked => {
                             root.selected = i;
                         }
 
-                        Text {
-                            text: row.name;
-                            color: row.enabled ? Theme.text : Theme.text-muted;
-                            font-size: Theme.font-size;
-                            vertical-alignment: center;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: Theme.gap / 4;
                             horizontal-stretch: 1;
                             min-width: 120px;
-                            overflow: elide;
+
+                            Text {
+                                text: row.name;
+                                color: row.enabled ? Theme.text : Theme.text-muted;
+                                font-size: Theme.font-size;
+                                overflow: elide;
+                            }
+
+                            Text {
+                                text: row.file_name;
+                                color: Theme.text-muted;
+                                font-size: Theme.font-size-small;
+                                overflow: elide;
+                            }
                         }
 
                         Text {
@@ -254,14 +271,17 @@ export component InstanceScreen inherits Rectangle {
                             overflow: elide;
                         }
 
-                        Text {
-                            text: row.source;
-                            color: Theme.text-muted;
-                            font-size: Theme.font-size-small;
-                            vertical-alignment: center;
+                        VerticalLayout {
+                            alignment: center;
                             horizontal-stretch: 0;
                             width: 80px;
-                            overflow: elide;
+                            row_source_button := Button {
+                                text: row.source;
+                                access_label: "Open on " + row.source;
+                                clicked => {
+                                    root.open_project(row.source, row.project_id);
+                                }
+                            }
                         }
 
                         Text {
@@ -668,7 +688,7 @@ export component PreviewInstanceScreen inherits InstanceScreen {
             {
                 project_id: "AANobbMI",
                 source: "modrinth",
-                name: "sodium-fabric-0.5.8",
+                name: "Sodium",
                 version: "OrgTMPmO",
                 kind: "mod",
                 enabled: true,
@@ -678,7 +698,7 @@ export component PreviewInstanceScreen inherits InstanceScreen {
             {
                 project_id: "gvQqBUqZ",
                 source: "modrinth",
-                name: "lithium-fabric-0.11.2",
+                name: "Lithium",
                 version: "ZSNsJrPI",
                 kind: "mod",
                 enabled: false,

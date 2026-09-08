@@ -17,6 +17,14 @@ fn entry(project_id: &str, file_name: &str) -> ContentEntry {
     }
 }
 
+/// An installed entry with a project title, for the sort-by-title tests.
+fn titled_entry(project_id: &str, file_name: &str, title: &str) -> ContentEntry {
+    ContentEntry {
+        title: Some(title.to_string()),
+        ..entry(project_id, file_name)
+    }
+}
+
 /// An update candidate for one entry. The new version is filler: nothing here reads it.
 fn candidate(entry: ContentEntry) -> UpdateCandidate {
     let new = Version {
@@ -93,12 +101,32 @@ fn content_rows_marks_only_the_entries_a_candidate_names() {
     ];
     let rows = content_rows(&entries, &[candidate(entries[0].clone())]);
     assert_eq!(rows.len(), 2);
-    assert!(rows[0].update_available, "sodium has a newer version");
-    assert!(!rows[1].update_available, "lithium does not");
+    let sodium = rows
+        .iter()
+        .find(|row| row.project_id.as_str() == "sodium")
+        .expect("sodium row");
+    let lithium = rows
+        .iter()
+        .find(|row| row.project_id.as_str() == "lithium")
+        .expect("lithium row");
+    assert!(sodium.update_available, "sodium has a newer version");
+    assert!(!lithium.update_available, "lithium does not");
+    assert_eq!(sodium.name.as_str(), "sodium-0.5.8", "the extension is cut");
+}
+
+#[test]
+fn content_rows_sort_by_title_case_insensitive() {
+    let entries = vec![
+        entry("sodium", "sodium-0.5.8.jar"),
+        titled_entry("lithium", "l.jar", "Lithium"),
+        titled_entry("iris", "i.jar", "iris"),
+    ];
+    let rows = content_rows(&entries, &[]);
+    let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
     assert_eq!(
-        rows[0].name.as_str(),
-        "sodium-0.5.8",
-        "the extension is cut"
+        names,
+        vec!["iris", "Lithium", "sodium-0.5.8"],
+        "iris < Lithium < sodium-0.5.8, ignoring case"
     );
 }
 

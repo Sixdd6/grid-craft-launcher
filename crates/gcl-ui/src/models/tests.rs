@@ -11,8 +11,8 @@ use gcl_core::mojang::manifest::{ManifestEntry, VersionType};
 use gcl_core::sources::{SearchHit, SourceId};
 
 use super::{
-    account_row, content_row, format_bytes, format_downloads, instance_row, loader_version_row,
-    search_row, setting_rows, short_time, version_row,
+    account_row, content_row, decode_icon, format_bytes, format_downloads, instance_row,
+    loader_version_row, search_row, setting_rows, short_time, version_row,
 };
 
 #[test]
@@ -87,6 +87,87 @@ fn content_row_names_the_file_without_its_extension() {
     assert_eq!(row.version.as_str(), "abc123");
     assert!(row.enabled);
     assert!(row.update_available);
+}
+
+#[test]
+fn content_row_shows_title_over_file_stem() {
+    let entry = ContentEntry {
+        source: "modrinth".into(),
+        project_id: "AANobbMI".into(),
+        version_id: "abc123".into(),
+        file_name: "sodium-fabric-0.5.8.jar".into(),
+        title: Some("Sodium".into()),
+        kind: ContentKind::Mod,
+        enabled: true,
+        ..ContentEntry::default()
+    };
+    let row = content_row(&entry, false);
+    assert_eq!(row.name.as_str(), "Sodium");
+    assert_eq!(
+        row.file_name.as_str(),
+        "sodium-fabric-0.5.8.jar",
+        "the file name stays on the row for the row's second line"
+    );
+}
+
+#[test]
+fn content_row_falls_back_to_the_file_stem_with_no_title() {
+    let entry = ContentEntry {
+        file_name: "sodium-fabric-0.5.8.jar".into(),
+        title: None,
+        ..ContentEntry::default()
+    };
+    assert_eq!(
+        content_row(&entry, false).name.as_str(),
+        "sodium-fabric-0.5.8"
+    );
+}
+
+#[test]
+fn search_row_carries_the_icon_url_with_no_decoded_icon_yet() {
+    let hit = SearchHit {
+        source: SourceId::Modrinth,
+        project_id: "AANobbMI".into(),
+        slug: "sodium".into(),
+        title: "Sodium".into(),
+        description: "A rendering engine".into(),
+        author: "jellysquid3".into(),
+        kind: ContentKind::Mod,
+        is_pack: false,
+        downloads: 12_345,
+        icon_url: Some("https://cdn.modrinth.com/icon.png".into()),
+        page_url: "https://modrinth.com/mod/sodium".into(),
+    };
+    let row = search_row(&hit);
+    assert_eq!(row.icon_url.as_str(), "https://cdn.modrinth.com/icon.png");
+    assert_eq!(row.icon.size().width, 0, "nothing has been fetched yet");
+}
+
+#[test]
+fn decode_icon_reads_png_webp_gif_and_jpeg_bytes() {
+    let image = image::RgbaImage::from_pixel(4, 3, image::Rgba([10, 20, 30, 255]));
+    let dynamic = image::DynamicImage::ImageRgba8(image);
+
+    for format in [
+        image::ImageFormat::Png,
+        image::ImageFormat::WebP,
+        image::ImageFormat::Gif,
+        image::ImageFormat::Jpeg,
+    ] {
+        let mut bytes = Vec::new();
+        dynamic
+            .write_to(&mut std::io::Cursor::new(&mut bytes), format)
+            .unwrap_or_else(|err| panic!("encode {format:?}: {err}"));
+        let (width, height, pixels) =
+            decode_icon(&bytes).unwrap_or_else(|err| panic!("decode {format:?}: {err}"));
+        assert_eq!((width, height), (4, 3), "{format:?}");
+        assert_eq!(pixels.len(), (4 * 3 * 4) as usize, "{format:?}");
+    }
+}
+
+#[test]
+fn decode_icon_rejects_garbage() {
+    assert!(decode_icon(b"not an image").is_err());
 }
 
 #[test]

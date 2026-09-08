@@ -26,15 +26,18 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
 
     {
         let bridge = bridge.clone();
-        state.on_open(move |source, project_id, target_slug, return_to| {
-            open(
-                &bridge,
-                source.to_string(),
-                project_id.to_string(),
-                target_slug.to_string(),
-                return_to,
-            );
-        });
+        state.on_open(
+            move |source, project_id, target_slug, return_to, downloads| {
+                open(
+                    &bridge,
+                    source.to_string(),
+                    project_id.to_string(),
+                    target_slug.to_string(),
+                    return_to,
+                    downloads.to_string(),
+                );
+            },
+        );
     }
 
     {
@@ -82,6 +85,7 @@ fn open(
     project_id: String,
     target_slug: String,
     return_to: Screen,
+    downloads: String,
 ) {
     let Some(window) = bridge.weak().upgrade() else {
         return;
@@ -89,7 +93,10 @@ fn open(
     let state = window.global::<ProjectState>();
 
     // Every property this screen owns is set here, the empty case included, so the screen
-    // never shows the previous project while this one loads.
+    // never shows the previous project while this one loads. `downloads` is the one
+    // exception carried in from the caller rather than reset to empty: `Project` has no
+    // count of its own, so a search row's already-formatted count is what the header shows,
+    // and `apply` below never overwrites it.
     state.set_source(source.as_str().into());
     state.set_project_id(project_id.as_str().into());
     state.set_target_slug(target_slug.as_str().into());
@@ -98,7 +105,7 @@ fn open(
     state.set_title("".into());
     state.set_author("".into());
     state.set_kind("".into());
-    state.set_downloads("".into());
+    state.set_downloads(downloads.as_str().into());
     state.set_page_url("".into());
     state.set_blocks(ModelRc::new(VecModel::from(Vec::<Block>::new())));
     state.set_versions(ModelRc::new(

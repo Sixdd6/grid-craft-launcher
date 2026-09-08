@@ -621,9 +621,10 @@ pub fn jvm_valid(min: i32, max: i32) -> bool {
         && min <= max
 }
 
-/// Builds the content rows, marking every entry a candidate names as updatable.
+/// Builds the content rows, marking every entry a candidate names as updatable, sorted by the
+/// row's own name (title, or file stem when it has none), case-insensitively.
 pub fn content_rows(entries: &[ContentEntry], candidates: &[UpdateCandidate]) -> Vec<ContentRow> {
-    entries
+    let mut rows: Vec<ContentRow> = entries
         .iter()
         .map(|entry| {
             let update = candidates
@@ -631,7 +632,9 @@ pub fn content_rows(entries: &[ContentEntry], candidates: &[UpdateCandidate]) ->
                 .any(|candidate| candidate.entry.project_id == entry.project_id);
             content_row(entry, update)
         })
-        .collect()
+        .collect();
+    rows.sort_by_key(|row| row.name.to_lowercase());
+    rows
 }
 
 /// Builds the JVM overrides from the four fields of the JVM tab.

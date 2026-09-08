@@ -61,8 +61,11 @@ export global ProjectState {
     in-out property <Screen> return_to: Screen.browser;
 
     // Opens a project's details. Carries the source, the project id, the instance a version
-    // installs into (empty when none was picked), and the screen `back()` returns to.
-    callback open(string /* source */, string /* project_id */, string /* target_slug */, Screen /* return_to */);
+    // installs into (empty when none was picked), the screen `back()` returns to, and the
+    // download count to show right away, already formatted: a search row already carries
+    // one, and `Launcher::project_details` answers with none of its own, so an open from the
+    // installed list passes an empty string.
+    callback open(string /* source */, string /* project_id */, string /* target_slug */, Screen /* return_to */, string /* downloads */);
     // A tab was picked. Carries its index.
     callback set_tab(int);
     // Returns to `return_to`.

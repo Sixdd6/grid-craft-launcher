@@ -140,10 +140,12 @@ export component BrowserScreen inherits Rectangle {
     // Enter runs the same action as the row's primary button.
     in-out property <int> selected: -1;
 
-    // A row's title was clicked: open its project details. `app.slint` wires this to
-    // `ProjectState.open` and `App.navigate`, because `BrowserScreen` cannot reach either
-    // global itself (`app.slint` imports this file, so the reverse import would cycle).
-    callback open_project(string /* source */, string /* project_id */);
+    // A row's title was clicked: open its project details. Carries the row's own download
+    // count, already formatted, since `Launcher::project_details` answers with none of its
+    // own. `app.slint` wires this to `ProjectState.open` and `App.navigate`, because
+    // `BrowserScreen` cannot reach either global itself (`app.slint` imports this file, so
+    // the reverse import would cycle).
+    callback open_project(string /* source */, string /* project_id */, string /* downloads */);
 
     // Runs whichever search the chosen kind means: modpacks are a search of their own,
     // because they are not content and never come back from the content search.
@@ -563,6 +565,28 @@ export component BrowserScreen inherits Rectangle {
                         root.selected = i;
                     }
 
+                    // The project's icon, or a placeholder tile until it loads (or when the
+                    // project has none). `src/screens/browser.rs` fetches and decodes it off
+                    // the UI thread and only fills `row.icon` in once it lands.
+                    Rectangle {
+                        y: (parent.height - self.height) / 2;
+                        width: Theme.icon-size;
+                        height: Theme.icon-size;
+                        horizontal-stretch: 0;
+                        background: Theme.surface-raised;
+                        border-radius: Theme.radius;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        clip: true;
+
+                        if row.icon.width > 0: row_icon := Image {
+                            source: row.icon;
+                            width: 100%;
+                            height: 100%;
+                            image-fit: cover;
+                        }
+                    }
+
                     VerticalLayout {
                         padding-top: Theme.gap;
                         padding-bottom: Theme.gap;
@@ -583,7 +607,7 @@ export component BrowserScreen inherits Rectangle {
                                 accessible-action-default => {
                                     keys.focus();
                                     root.selected = i;
-                                    root.open_project(row.source, row.project_id);
+                                    root.open_project(row.source, row.project_id, row.downloads);
                                 }
 
                                 title_text := Text {
@@ -597,7 +621,7 @@ export component BrowserScreen inherits Rectangle {
                                     clicked => {
                                         keys.focus();
                                         root.selected = i;
-                                        root.open_project(row.source, row.project_id);
+                                        root.open_project(row.source, row.project_id, row.downloads);
                                     }
                                 }
                             }

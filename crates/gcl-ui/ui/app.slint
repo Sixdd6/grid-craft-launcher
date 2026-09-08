@@ -298,11 +298,21 @@ export component AppWindow inherits Window {
                             InstancesState.filter_changed(self.filter);
                         }
                     }
-                    if App.screen == Screen.instance: InstanceScreen { }
-                    if App.screen == Screen.browser: BrowserScreen {
+                    if App.screen == Screen.instance: InstanceScreen {
                         open_project(source, project_id) => {
+                            // The instance list carries no download count for its installed
+                            // content, unlike a search row, so the header shows none.
                             ProjectState.open(
-                                source, project_id, BrowserState.target_slug, Screen.browser
+                                source, project_id, App.current_slug, Screen.instance, ""
+                            );
+                            App.navigate(Screen.project);
+                        }
+                    }
+                    if App.screen == Screen.browser: BrowserScreen {
+                        open_project(source, project_id, downloads) => {
+                            ProjectState.open(
+                                source, project_id, BrowserState.target_slug, Screen.browser,
+                                downloads,
                             );
                             App.navigate(Screen.project);
                         }

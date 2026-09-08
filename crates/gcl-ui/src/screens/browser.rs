@@ -6,16 +6,19 @@
 //! waiting to finish.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use gcl_core::content::{AddRequest, DependencyConflict};
 use gcl_core::instances::Instance;
 use gcl_core::instances::model::{ContentKind, Loader};
-use gcl_core::sources::{SearchQuery, SourceId};
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use gcl_core::sources::{SearchHit, SearchQuery, SourceId};
+use slint::{
+    ComponentHandle, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
+};
 
 use crate::bridge::{Bridge, warn};
-use crate::models::search_row;
+use crate::models::{decode_icon, search_row};
 use crate::{App, AppWindow, BrowserState, Screen, SearchRow};
 
 /// How many hits one page asks for. Matches `BrowserState.page_size`.
@@ -81,6 +84,9 @@ struct Shared {
     pending_world: Arc<Mutex<Option<Pending>>>,
     /// The pack the name prompt is open for, from a source or from disk.
     pending_pack: Arc<Mutex<Option<Pack>>>,
+    /// Bumped by every `search`, so an icon batch that finishes after a newer search has
+    /// started does not paint its rows over that newer search's own rows.
+    icon_generation: Arc<AtomicU64>,
 }
 
 impl Shared {
@@ -544,6 +550,12 @@ fn search(bridge: &Bridge, shared: &Shared) {
 
     state.set_loading(true);
     state.set_status("Searching…".into());
+    // Stamped before the search runs, so any icon batch from an older search that is still
+    // in flight when this page lands is recognized as stale and drops its result instead of
+    // painting over these rows.
+    let generation = shared.icon_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let bridge_for_icons = bridge.clone();
+    let shared_for_icons = shared.clone();
     run_reporting(
         bridge,
         "Search",
@@ -554,6 +566,12 @@ fn search(bridge: &Bridge, shared: &Shared) {
             state.set_has_more(page_bounds(page, PAGE_SIZE, rows.len(), found.total));
             state.set_status(result_status(rows.len(), found.total).into());
             state.set_rows(ModelRc::new(VecModel::from(rows)));
+            fetch_icons(
+                &bridge_for_icons,
+                &shared_for_icons,
+                generation,
+                &found.hits,
+            );
         },
     );
 }
@@ -968,6 +986,90 @@ fn error_dialog(window: &AppWindow, title: &str, text: &str) {
     app.set_error_title(title.into());
     app.set_error_text(text.into());
     app.set_error_open(true);
+}
+
+/// Fetches and decodes every row's icon on this page, one job for the whole page rather than
+/// one thread per row.
+///
+/// Runs sequentially inside that one job: `Launcher::fetch_icon` is already single-flight per
+/// URL and the icon cache makes a repeat visit to the same page free, so nothing here needs
+/// its own concurrency. The bytes are read and decoded off the UI thread; only the final
+/// `slint::Image` is built in the `done` closure, on the UI thread, per the `slint-ui` skill.
+/// A row whose icon fails to fetch or decode is left with its placeholder tile; the loop does
+/// not stop for it.
+fn fetch_icons(bridge: &Bridge, shared: &Shared, generation: u64, hits: &[SearchHit]) {
+    let urls: Vec<(usize, String)> = hits
+        .iter()
+        .enumerate()
+        .filter_map(|(index, hit)| hit.icon_url.clone().map(|url| (index, url)))
+        .collect();
+    if urls.is_empty() {
+        return;
+    }
+    let shared = shared.clone();
+    bridge.run(
+        "Search icons",
+        move |launcher| {
+            let decoded: Vec<DecodedRowIcon> = urls
+                .into_iter()
+                .map(|(index, url)| DecodedRowIcon {
+                    index,
+                    icon: launcher
+                        .fetch_icon(&url)
+                        .ok()
+                        .and_then(|path| std::fs::read(path).ok())
+                        .and_then(|bytes| decode_icon(&bytes).ok())
+                        .map(DecodedIcon::from),
+                })
+                .collect();
+            Ok(decoded)
+        },
+        move |window, decoded: Vec<DecodedRowIcon>| {
+            // A newer search has replaced these rows; this page's icons are moot.
+            if shared.icon_generation.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            let state = window.global::<BrowserState>();
+            let mut rows: Vec<SearchRow> = state.get_rows().iter().collect();
+            for decoded in decoded {
+                let (Some(row), Some(icon)) = (rows.get_mut(decoded.index), decoded.icon) else {
+                    continue;
+                };
+                let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
+                    &icon.pixels,
+                    icon.width,
+                    icon.height,
+                );
+                row.icon = slint::Image::from_rgba8(buffer);
+            }
+            state.set_rows(ModelRc::new(VecModel::from(rows)));
+        },
+    );
+}
+
+/// One search row's decoded icon, or none when it has no icon or the fetch or decode failed.
+struct DecodedRowIcon {
+    /// Position of the row this icon belongs to, in the page that was on screen when the
+    /// fetch started.
+    index: usize,
+    icon: Option<DecodedIcon>,
+}
+
+/// Raw RGBA8 pixels and dimensions for one icon, decoded off the UI thread.
+struct DecodedIcon {
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+}
+
+impl From<(u32, u32, Vec<u8>)> for DecodedIcon {
+    fn from((width, height, pixels): (u32, u32, Vec<u8>)) -> Self {
+        Self {
+            width,
+            height,
+            pixels,
+        }
+    }
 }
 
 /// Runs a launcher call and clears `loading` however it ends.

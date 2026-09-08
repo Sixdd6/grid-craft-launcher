@@ -19,6 +19,7 @@ path = "src/main.rs"
 
 [dependencies]
 gcl-core.workspace = true
+image.workspace = true
 png.workspace = true
 slint.workspace = true
 time.workspace = true

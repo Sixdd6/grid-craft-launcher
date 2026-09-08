@@ -41,11 +41,20 @@ pub fn instance_row(i: &Instance, installed: bool, running: bool) -> InstanceRow
 }
 
 /// Builds the content row for one installed file. `update` marks a newer version at the source.
+///
+/// `name` is the project's title when the entry carries one, falling back to the file's stem
+/// for an entry installed before `title` existed. `content_rows` (in `screens/instance.rs`)
+/// sorts the built rows by this same name, case-insensitively.
 pub fn content_row(e: &ContentEntry, update: bool) -> ContentRow {
     ContentRow {
         project_id: e.project_id.as_str().into(),
         source: e.source.as_str().into(),
-        name: file_stem(&e.file_name).into(),
+        name: e
+            .title
+            .as_deref()
+            .filter(|title| !title.is_empty())
+            .unwrap_or_else(|| file_stem(&e.file_name))
+            .into(),
         version: e.version_id.as_str().into(),
         kind: e.kind.to_string().into(),
         enabled: e.enabled,
@@ -54,7 +63,8 @@ pub fn content_row(e: &ContentEntry, update: bool) -> ContentRow {
     }
 }
 
-/// Builds the browser row for one search hit.
+/// Builds the browser row for one search hit. `icon` starts empty: `src/screens/browser.rs`
+/// fills it in once the row's icon has been fetched and decoded, off the UI thread.
 pub fn search_row(h: &SearchHit) -> SearchRow {
     SearchRow {
         source: h.source.to_string().into(),
@@ -66,7 +76,22 @@ pub fn search_row(h: &SearchHit) -> SearchRow {
         kind: h.kind.to_string().into(),
         downloads: format_downloads(h.downloads).into(),
         page_url: h.page_url.as_str().into(),
+        icon_url: h.icon_url.as_deref().unwrap_or_default().into(),
+        icon: Default::default(),
     }
+}
+
+/// Decodes a fetched icon's bytes into raw RGBA8 pixels and its dimensions.
+///
+/// Pure and windowless, so it is unit-tested directly: the `slint::Image` it feeds is built
+/// only in the event-loop closure that calls this, per the `slint-ui` skill's rule that a
+/// `slint::Image` is UI-thread only. `image::load_from_memory` sniffs the format from the
+/// bytes, so a `cache/icons/*.bin` file with no real extension still decodes.
+pub fn decode_icon(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+    let img = image::load_from_memory(bytes).map_err(|err| err.to_string())?;
+    let rgba = img.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    Ok((width, height, rgba.into_raw()))
 }
 
 /// Builds the accounts row for one saved account. `active` marks the launch default.

@@ -35,6 +35,13 @@ export struct SearchRow {
     kind: string,
     downloads: string,
     page_url: string,
+    // The project's icon URL at the source, empty when it has none. `src/screens/browser.rs`
+    // fetches and decodes it off the UI thread and fills `icon` once it lands; `icon.width ==
+    // 0` is "not loaded yet" and the row shows a placeholder tile in its place.
+    icon_url: string,
+    // The decoded icon, built on the UI thread. Empty (`width == 0`) until the row's icon
+    // has been fetched, or when the project has none.
+    icon: image,
 }
 
 // One saved account.

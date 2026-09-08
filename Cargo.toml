@@ -45,6 +45,7 @@ slint = { version = "1.17", default-features = false, features = ["std", "backen
 slint-build = "1.17"
 i-slint-backend-testing = "1.17"
 png = "0.18"
+image = { version = "0.25", default-features = false, features = ["png", "webp", "gif", "jpeg"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 bytes = "1"
 futures-util = "0.3"
