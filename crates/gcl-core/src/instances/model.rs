@@ -89,12 +89,19 @@ pub struct InstanceJvm {
     /// Extra JVM arguments appended after the launcher's own.
     pub extra_args: Vec<String>,
     /// Garbage collector preset. Absent in `instance.toml` means [`GcPreset::Default`].
+    ///
+    /// `config.toml`'s `jvm.gc` seeds this when the instance is created and never again:
+    /// changing the config default afterwards leaves every existing instance as it was.
     #[serde(default, skip_serializing_if = "GcPreset::is_default")]
     pub gc: GcPreset,
 }
 
 /// Garbage collector preset for an instance's JVM.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// Deserialization is lenient: a token no version of the launcher knows loads as
+/// [`GcPreset::Default`] with a warning, so an `instance.toml` written by a newer build never
+/// hides the whole instance from an older one.
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum GcPreset {
     /// No collector flag: the JVM picks its own.
@@ -141,7 +148,7 @@ impl GcPreset {
             GcPreset::Parallel => "Parallel",
             GcPreset::G1 => "G1",
             GcPreset::Zgc => "ZGC",
-            GcPreset::ZgcGenerational => "Generational ZGC",
+            GcPreset::ZgcGenerational => "ZGC (generational)",
             GcPreset::Shenandoah => "Shenandoah",
         }
     }
@@ -165,7 +172,9 @@ impl GcPreset {
     ///
     /// Java 21 and 22 ship both ZGC modes behind `ZGenerational`; 23 and later are
     /// generational only, so both ZGC presets pass `-XX:+UseZGC` alone. Below 21 the
-    /// generational mode does not exist and the probe refuses the preset.
+    /// generational mode does not exist: [`supported_presets`] never offers
+    /// [`GcPreset::ZgcGenerational`] there and a launch refuses it, so the plain ZGC flags
+    /// this returns for that pair are unreachable past validation.
     pub fn flags(&self, major: u32) -> Vec<String> {
         let flags: &[&str] = match self {
             GcPreset::Default => &[],
@@ -188,9 +197,12 @@ impl GcPreset {
 ///
 /// [`GcPreset::Default`] is always there: it passes no collector flag at all. Java 23 dropped
 /// `ZGenerational` and made ZGC generational, so `UseZGC` alone is enough for
-/// [`GcPreset::ZgcGenerational`] from 23 on.
+/// [`GcPreset::ZgcGenerational`] from 23 on — and there [`GcPreset::Zgc`] expands to exactly
+/// the same flags, so only the generational entry is listed and a picker never shows two rows
+/// that do the same thing. Its label reads "ZGC (generational)".
 pub fn supported_presets(major: u32, flags: &BTreeSet<String>) -> Vec<GcPreset> {
     let has = |name: &str| flags.contains(name);
+    let generational_only = major >= 23;
     GcPreset::all()
         .iter()
         .copied()
@@ -199,8 +211,10 @@ pub fn supported_presets(major: u32, flags: &BTreeSet<String>) -> Vec<GcPreset> 
             GcPreset::Serial => has("UseSerialGC"),
             GcPreset::Parallel => has("UseParallelGC"),
             GcPreset::G1 => has("UseG1GC"),
-            GcPreset::Zgc => has("UseZGC"),
-            GcPreset::ZgcGenerational => has("UseZGC") && (major >= 23 || has("ZGenerational")),
+            GcPreset::Zgc => has("UseZGC") && !generational_only,
+            GcPreset::ZgcGenerational => {
+                has("UseZGC") && (generational_only || has("ZGenerational"))
+            }
             GcPreset::Shenandoah => has("UseShenandoahGC"),
         })
         .collect()
@@ -221,20 +235,81 @@ impl std::fmt::Display for GcPreset {
     }
 }
 
-/// A string that names no [`GcPreset`].
-#[derive(Debug, thiserror::Error)]
-#[error("unknown garbage collector preset: {0}")]
+/// A string that names no [`GcPreset`]. Its message lists every token that does.
+#[derive(Debug)]
 pub struct UnknownGcPreset(pub String);
+
+impl std::fmt::Display for UnknownGcPreset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "unknown garbage collector preset: {}; valid tokens are {}",
+            self.0,
+            gc_tokens()
+        )
+    }
+}
+
+impl std::error::Error for UnknownGcPreset {}
+
+/// Every preset token, comma separated, for an error message.
+fn gc_tokens() -> String {
+    GcPreset::all()
+        .iter()
+        .map(GcPreset::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Folds a written token into the form [`GcPreset::to_string`] produces.
+///
+/// Trims, lowercases, and reads `-` and a space as `_`, so `ZGC-Generational` and
+/// `zgc generational` are the same token as `zgc_generational`.
+fn normalize_gc_token(s: &str) -> String {
+    s.trim()
+        .chars()
+        .map(|c| match c {
+            '-' | ' ' => '_',
+            other => other.to_ascii_lowercase(),
+        })
+        .collect()
+}
 
 impl std::str::FromStr for GcPreset {
     type Err = UnknownGcPreset;
 
+    /// Reads a preset token, leniently: see [`normalize_gc_token`], plus a few aliases.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let token = normalize_gc_token(s);
+        match token.as_str() {
+            "g1gc" => return Ok(GcPreset::G1),
+            "generational_zgc" | "zgcgenerational" => return Ok(GcPreset::ZgcGenerational),
+            "none" | "launcher" => return Ok(GcPreset::Default),
+            _ => {}
+        }
         GcPreset::all()
             .iter()
             .copied()
-            .find(|preset| preset.to_string() == s)
+            .find(|preset| preset.to_string() == token)
             .ok_or_else(|| UnknownGcPreset(s.to_string()))
+    }
+}
+
+impl<'de> Deserialize<'de> for GcPreset {
+    /// Reads a preset token, and reads one it does not know as [`GcPreset::Default`].
+    ///
+    /// A newer launcher may write a token this build has never heard of. Failing here would
+    /// fail the whole `instance.toml`, and `Instances::list` would then skip the instance, so
+    /// one unknown word would hide a whole pack. A warning and the default is the lesser harm.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Ok(text.parse().unwrap_or_else(|_| {
+            tracing::warn!(
+                token = %text,
+                "unknown garbage collector preset, using the launcher default"
+            );
+            GcPreset::Default
+        }))
     }
 }
 
@@ -577,9 +652,76 @@ mod tests {
         assert!(at_21.contains(&GcPreset::Zgc));
         assert!(!at_21.contains(&GcPreset::ZgcGenerational));
 
+        // From 23 the two presets expand to the same flags, so only one is offered.
         let at_23 = supported_presets(23, &flags);
-        assert!(at_23.contains(&GcPreset::Zgc));
-        assert!(at_23.contains(&GcPreset::ZgcGenerational));
+        assert!(!at_23.contains(&GcPreset::Zgc), "{at_23:?}");
+        assert!(at_23.contains(&GcPreset::ZgcGenerational), "{at_23:?}");
+    }
+
+    #[test]
+    fn from_23_only_one_zgc_entry_is_offered_and_it_is_labelled_generational() {
+        let flags = flag_set(&["UseSerialGC", "UseZGC"]);
+        for major in [23, 25] {
+            let presets = supported_presets(major, &flags);
+            let zgc: Vec<&GcPreset> = presets
+                .iter()
+                .filter(|p| matches!(p, GcPreset::Zgc | GcPreset::ZgcGenerational))
+                .collect();
+            assert_eq!(zgc, vec![&GcPreset::ZgcGenerational], "{major}");
+        }
+        assert_eq!(GcPreset::ZgcGenerational.label(), "ZGC (generational)");
+    }
+
+    #[test]
+    fn an_unknown_gc_token_loads_as_the_default_instead_of_failing() {
+        let jvm: InstanceJvm =
+            toml::from_str("min_mib = 2048\ngc = \"quantum\"\n").expect("an unknown token parses");
+        assert_eq!(jvm.gc, GcPreset::Default);
+        assert_eq!(jvm.min_mib, Some(2048));
+    }
+
+    #[test]
+    fn a_gc_token_is_read_leniently_by_serde_too() {
+        let jvm: InstanceJvm = toml::from_str("gc = \" ZGC-Generational \"\n").expect("parse");
+        assert_eq!(jvm.gc, GcPreset::ZgcGenerational);
+    }
+
+    #[test]
+    fn from_str_trims_lowercases_and_folds_separators() {
+        let cases: &[(&str, GcPreset)] = &[
+            ("  G1  ", GcPreset::G1),
+            ("ZGC", GcPreset::Zgc),
+            ("Zgc-Generational", GcPreset::ZgcGenerational),
+            ("zgc generational", GcPreset::ZgcGenerational),
+            ("SHENANDOAH", GcPreset::Shenandoah),
+        ];
+        for (text, want) in cases {
+            assert_eq!(text.parse::<GcPreset>().expect(text), *want, "{text}");
+        }
+    }
+
+    #[test]
+    fn from_str_accepts_the_common_aliases() {
+        let cases: &[(&str, GcPreset)] = &[
+            ("g1gc", GcPreset::G1),
+            ("generational_zgc", GcPreset::ZgcGenerational),
+            ("zgcgenerational", GcPreset::ZgcGenerational),
+            ("none", GcPreset::Default),
+            ("launcher", GcPreset::Default),
+        ];
+        for (text, want) in cases {
+            assert_eq!(text.parse::<GcPreset>().expect(text), *want, "{text}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_token_error_lists_every_valid_token() {
+        let err = "quantum".parse::<GcPreset>().expect_err("unknown");
+        let message = err.to_string();
+        assert!(message.contains("quantum"), "{message}");
+        for token in GcPreset::all().iter().map(|p| p.to_string()) {
+            assert!(message.contains(&token), "{message} is missing {token}");
+        }
     }
 
     #[test]

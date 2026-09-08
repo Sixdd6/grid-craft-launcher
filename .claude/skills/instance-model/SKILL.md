@@ -84,7 +84,49 @@ JVM flags: none for `default`, `-XX:+UseSerialGC`, `-XX:+UseParallelGC`, `-XX:+U
 `-XX:+ZGenerational` (`zgc_generational`) on Java 21 and 22 only; 23 and later pass
 `-XX:+UseZGC` alone. `GcPreset::all`, `label`, and `description` feed the CLI and the JVM tab.
 `config.jvm.gc` seeds a new instance at creation only, through
-`Instances::with_gc_default`, which `Launcher::instances()` sets from the config.
+`Instances::with_gc_default`, which `Launcher::instances()` sets from the config. Changing
+`config.jvm.gc` later leaves every existing instance as it was.
+
+**An unknown token is the launcher default, not an error.** `GcPreset`'s `Deserialize` is
+hand-written: a token this build does not know loads as `Default` and logs a `tracing::warn!`.
+Failing there would fail the whole `instance.toml`, and `Instances::list` skips an instance
+that will not parse, so one word written by a newer build would hide a whole pack.
+
+`FromStr` is lenient the same way, for a token a person types: it trims, lowercases, and reads
+`-` and a space as `_`, so `ZGC-Generational` is `zgc_generational`. Aliases: `g1gc` → `g1`,
+`generational_zgc` and `zgcgenerational` → `zgc_generational`, `none` and `launcher` →
+`default`. `UnknownGcPreset`'s message lists every valid token.
+
+**One entry per set of flags.** `supported_presets(major, flags)` reads the probe's flag names
+and drops `Zgc` from 23 on, because there both ZGC presets expand to `-XX:+UseZGC` and a picker
+would show two rows that do the same thing. `ZgcGenerational`'s label reads "ZGC (generational)"
+so the one row that stays says what it is. Below 21 the generational mode does not exist:
+`supported_presets` never offers it and `Launcher::set_instance_gc` and `prepare_launch` refuse
+it, so `flags()`'s plain-ZGC answer for that pair is unreachable past validation.
+
+**`launch::build` refuses a preset with no probed major.** Every preset's flags depend on the
+java major, so `gc != Default` with `gc_major < 8` is `launch::Error::MissingGcMajor`: it means
+the caller never probed the binary. `Launcher::prepare_launch` probes whenever the preset is
+not `Default` and passes the probed major.
+
+**A conflicting extra argument is found by flag name.** `launch::gc_conflict` strips `-XX:+` or
+`-XX:-` and compares the rest against `UseSerialGC`, `UseParallelGC`, `UseParallelOldGC`,
+`UseConcMarkSweepGC`, `UseG1GC`, `UseZGC`, `UseShenandoahGC`, `UseEpsilonGC`, and
+`ZGenerational`. The disable form counts: `-XX:-UseG1GC` under a preset is
+`launch::Error::GcConflict` too. With `GcPreset::Default` there is no conflict, since a
+hand-written collector flag is what extra arguments are for.
+
+**`Launcher::set_instance_jvm` keeps the saved preset.** It replaces the heap fields, the java
+path, and the extra arguments only, whatever `jvm.gc` holds. A JVM tab that sends the heap back
+with a default `gc` would otherwise clear a preset it never asked about. Only
+`set_instance_gc` changes the preset, because only it probes the JVM first.
+
+**The probe cache never guesses a key.** `java::gc::ProbeCache` keys an answer by the binary's
+canonical path and modification time. A binary whose metadata cannot be read has no key, so it
+is probed every time rather than cached under a made-up one. Two callers asking for the same
+key at once share one run: an in-flight gate per key means java is spawned once. A JVM that
+exits non-zero is `java::Error::Probe` carrying the exit code and the first 200 characters of
+its stderr.
 
 `title` is absent in an `instance.toml` written before the key existed, and in one a modpack
 import wrote: a pack index names no project title. `content::check_updates` backfills it, at

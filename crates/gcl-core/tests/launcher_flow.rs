@@ -1550,3 +1550,49 @@ async fn a_launch_refuses_a_preset_the_java_lacks_before_it_builds_a_command() {
     .await
     .expect("blocking task");
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn saving_heap_settings_keeps_the_saved_gc_preset() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    tokio::task::spawn_blocking(move || {
+        let (launcher, slug) = instance_launcher(&dir);
+        instance_with_probed_java(&launcher, dir.path(), &slug, PRINTFLAGS_21);
+        launcher
+            .set_instance_gc(&slug, GcPreset::ZgcGenerational)
+            .expect("java 21 carries generational zgc");
+
+        // A JVM tab that only edits the heap sends the heap fields back with no preset.
+        let java = launcher
+            .instances()
+            .get(&slug)
+            .expect("read back")
+            .config
+            .jvm
+            .java_path;
+        launcher
+            .set_instance_jvm(
+                &slug,
+                InstanceJvm {
+                    min_mib: Some(2048),
+                    max_mib: Some(6144),
+                    java_path: java,
+                    extra_args: vec!["-Dtest.flag=1".to_string()],
+                    ..InstanceJvm::default()
+                },
+            )
+            .expect("save the heap settings");
+
+        let saved = launcher.instances().get(&slug).expect("reload").config.jvm;
+        assert_eq!(saved.min_mib, Some(2048));
+        assert_eq!(saved.max_mib, Some(6144));
+        assert_eq!(
+            saved.gc,
+            GcPreset::ZgcGenerational,
+            "a heap save must not clear the preset"
+        );
+        dir
+    })
+    .await
+    .expect("blocking task");
+}

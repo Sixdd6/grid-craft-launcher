@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,13 @@ use super::detect::parse_java_version;
 use crate::paths::Root;
 
 /// How long one `java -XX:+PrintFlagsFinal -version` run may take.
+///
+/// Longer than `detect`'s ten seconds for a bare `-version`: this run prints the whole flag
+/// table, which a cold JVM on a slow disk takes noticeably longer to produce.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How much of a failing JVM's stderr the error message carries.
+const STDERR_CHARS: usize = 200;
 
 /// The flag names the probe records. Everything else in the dump is dropped.
 const FLAG_NAMES: &[&str] = &[
@@ -31,7 +37,10 @@ const FLAG_NAMES: &[&str] = &[
 
 /// Every JVM flag name a probe keeps, in the order the picker lists collectors.
 ///
-/// A later task maps a garbage collector preset onto one or more of these names.
+/// `instances::model::supported_presets` reads these names, plus the major version, to decide
+/// which `GcPreset` one JVM can run. It is a different list from the collector flags
+/// `launch::gc_conflict` refuses in an instance's extra arguments: that one also carries names
+/// no modern JVM still offers, which a probe would therefore never report.
 pub fn supported_flag_names() -> &'static [&'static str] {
     FLAG_NAMES
 }
@@ -76,13 +85,31 @@ async fn probe_with_timeout(java: &Path, timeout: Duration) -> Result<GcSupport,
         .map_err(|_| fail("timed out".to_string()))?
         .map_err(|err| fail(err.to_string()))?;
 
-    // The banner goes to stderr and the flag dump to stdout; the parser reads one text.
+    if !output.status.success() {
+        let code = match output.status.code() {
+            Some(code) => format!("exit code {code}"),
+            None => "no exit code, it was killed by a signal".to_string(),
+        };
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(fail(format!(
+            "{code}: {}",
+            first_chars(stderr.trim(), STDERR_CHARS)
+        )));
+    }
+
+    // The banner goes to stderr and the flag dump to stdout; the parser reads one text. The
+    // newline keeps the last stderr line from running into the first dump line.
     let text = format!(
-        "{}{}",
+        "{}\n{}",
         String::from_utf8_lossy(&output.stderr),
         String::from_utf8_lossy(&output.stdout)
     );
     parse(&text).ok_or_else(|| fail("no java version banner in the output".to_string()))
+}
+
+/// The first `max` characters of `text`, cut on a character boundary.
+fn first_chars(text: &str, max: usize) -> String {
+    text.chars().take(max).collect()
 }
 
 /// Reads a whole `-XX:+PrintFlagsFinal -version` text.
@@ -140,11 +167,17 @@ struct Record {
 /// Remembers probe results per java binary, in memory and on disk.
 ///
 /// An entry is keyed by the binary's canonical path and its modification time, so a runtime
-/// replaced in place is probed again instead of answered from a stale entry.
+/// replaced in place is probed again instead of answered from a stale entry. A binary whose
+/// metadata cannot be read has no key, and is probed every time rather than cached wrongly.
 #[derive(Debug, Default)]
 pub struct ProbeCache {
-    memory: Mutex<HashMap<(PathBuf, i64), GcSupport>>,
+    memory: Mutex<HashMap<Key, GcSupport>>,
+    /// One gate per key being probed right now, so two callers run java once between them.
+    inflight: Mutex<HashMap<Key, Arc<tokio::sync::Mutex<()>>>>,
 }
+
+/// What a cached probe is keyed by: the canonical java path and its modification time.
+type Key = (PathBuf, i64);
 
 impl ProbeCache {
     /// An empty cache. The disk file is read on the first miss, not here.
@@ -155,47 +188,96 @@ impl ProbeCache {
     /// Answers from memory, then from disk, then by running the JVM.
     pub async fn get_or_probe(&self, root: &Root, java: &Path) -> Result<GcSupport, Error> {
         let path = std::fs::canonicalize(java).unwrap_or_else(|_| java.to_path_buf());
-        let mtime_ns = mtime_ns(&path);
-        let key = (path.clone(), mtime_ns);
+        let key = mtime_ns(&path).map(|mtime| (path.clone(), mtime));
+        self.get_or_probe_keyed(root, &path, key).await
+    }
+
+    /// [`ProbeCache::get_or_probe`] with the cache key already made, or `None` for no cache.
+    async fn get_or_probe_keyed(
+        &self,
+        root: &Root,
+        java: &Path,
+        key: Option<Key>,
+    ) -> Result<GcSupport, Error> {
+        // No modification time means no key that a later replacement could invalidate, so this
+        // answer is never remembered: a stale entry would outlive the binary it describes.
+        let Some(key) = key else {
+            return probe(java).await;
+        };
         if let Some(hit) = self.remembered(&key) {
             return Ok(hit);
         }
+        let gate = self.gate(&key);
+        let result = {
+            let _held = gate.lock().await;
+            match self.remembered(&key) {
+                // Another caller probed the same binary while this one waited on the gate.
+                Some(hit) => Ok(hit),
+                None => self.load_or_run(root, java, &key).await,
+            }
+        };
+        self.release(&key, gate);
+        result
+    }
+
+    /// Reads the disk cache, else runs the JVM, and remembers whichever answered.
+    async fn load_or_run(&self, root: &Root, java: &Path, key: &Key) -> Result<GcSupport, Error> {
         let file = cache_file(root);
         let mut records = load(&file);
         if let Some(hit) = records
             .iter()
-            .find(|r| r.path == path && r.mtime_ns == mtime_ns)
+            .find(|r| r.path == key.0 && r.mtime_ns == key.1)
             .map(|r| r.support.clone())
         {
-            self.remember(key, hit.clone());
+            self.remember(key.clone(), hit.clone());
             return Ok(hit);
         }
-        let support = probe(&path).await?;
-        records.retain(|r| r.path != path);
+        let support = probe(java).await?;
+        records.retain(|r| r.path != key.0);
         records.push(Record {
-            path,
-            mtime_ns,
+            path: key.0.clone(),
+            mtime_ns: key.1,
             support: support.clone(),
         });
         if let Err(err) = save(&file, &records) {
             tracing::warn!(%err, "cannot write the gc probe cache");
         }
-        self.remember(key, support.clone());
+        self.remember(key.clone(), support.clone());
         Ok(support)
     }
 
+    /// The gate for one key, making it when this is the first caller to ask.
+    fn gate(&self, key: &Key) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(
+            self.inflight
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .entry(key.clone())
+                .or_default(),
+        )
+    }
+
+    /// Drops the gate for one key once no other caller still holds it.
+    fn release(&self, key: &Key, gate: Arc<tokio::sync::Mutex<()>>) {
+        let mut map = self.inflight.lock().unwrap_or_else(|err| err.into_inner());
+        // Two references left means the map's and this one's: nobody else is waiting.
+        if Arc::strong_count(&gate) == 2 {
+            map.remove(key);
+        }
+    }
+
     /// Reads one entry out of the in-memory map.
-    fn remembered(&self, key: &(PathBuf, i64)) -> Option<GcSupport> {
+    fn remembered(&self, key: &Key) -> Option<GcSupport> {
         self.lock().get(key).cloned()
     }
 
     /// Puts one entry into the in-memory map.
-    fn remember(&self, key: (PathBuf, i64), support: GcSupport) {
+    fn remember(&self, key: Key, support: GcSupport) {
         self.lock().insert(key, support);
     }
 
     /// Takes the map lock, keeping the contents when another thread panicked holding it.
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<(PathBuf, i64), GcSupport>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<Key, GcSupport>> {
         self.memory.lock().unwrap_or_else(|err| err.into_inner())
     }
 }
@@ -205,14 +287,16 @@ fn cache_file(root: &Root) -> PathBuf {
     root.runtimes_dir().join("gc-probe.json")
 }
 
-/// Modification time in nanoseconds since the epoch, or 0 when it cannot be read.
-fn mtime_ns(path: &Path) -> i64 {
+/// Modification time in nanoseconds since the epoch, or `None` when it cannot be read.
+///
+/// `None` means the binary gets no cache entry at all: a made-up time would key an answer that
+/// no later replacement of that binary could invalidate.
+fn mtime_ns(path: &Path) -> Option<i64> {
     std::fs::metadata(path)
         .and_then(|meta| meta.modified())
         .ok()
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
         .and_then(|since| i64::try_from(since.as_nanos()).ok())
-        .unwrap_or(0)
 }
 
 /// Reads the disk cache. A missing or unreadable file is an empty cache, not an error.
@@ -232,10 +316,7 @@ fn save(file: &Path, records: &[Record]) -> Result<(), Error> {
         path: file.to_path_buf(),
         source: std::io::Error::other(err),
     })?;
-    crate::paths::write_atomic(file, &bytes).map_err(|err| Error::Io {
-        path: file.to_path_buf(),
-        source: std::io::Error::other(err.to_string()),
-    })
+    Ok(crate::paths::write_atomic(file, &bytes)?)
 }
 
 #[cfg(test)]
@@ -464,6 +545,85 @@ mod tests {
             let bytes = std::fs::read(&file).expect("read back");
             let records: Vec<Record> = serde_json::from_slice(&bytes).expect("rewritten as json");
             assert_eq!(records.len(), 1);
+        }
+
+        #[tokio::test]
+        async fn a_java_that_exits_non_zero_reports_its_code_and_stderr() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let java = dir.path().join("angry-java");
+            let long = "a".repeat(200);
+            script(
+                &java,
+                &format!("#!/bin/sh\nprintf '{long}TAIL' >&2\nexit 3\n"),
+            );
+            let err = probe(&java)
+                .await
+                .expect_err("a non-zero exit is a failure");
+            match err {
+                Error::Probe { reason, .. } => {
+                    assert!(reason.contains("exit code 3"), "{reason}");
+                    assert!(reason.contains(&long), "{reason}");
+                    assert!(
+                        !reason.contains("TAIL"),
+                        "stderr must be cut at 200: {reason}"
+                    );
+                }
+                other => panic!("wrong error: {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn two_asks_for_one_java_run_it_once() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let root = Root::from_path(dir.path());
+            let dump_file = dir.path().join("dump.txt");
+            std::fs::write(&dump_file, DUMP_21).expect("write the dump");
+            let counter = dir.path().join("runs");
+            let java = dir.path().join("slow-java");
+            script(
+                &java,
+                &format!(
+                    "#!/bin/sh\nprintf x >> {}\nsleep 0.3\ncat {}\n",
+                    counter.display(),
+                    dump_file.display()
+                ),
+            );
+            let cache = ProbeCache::new();
+            let (first, second) = tokio::join!(
+                cache.get_or_probe(&root, &java),
+                cache.get_or_probe(&root, &java)
+            );
+            assert_eq!(first.expect("first"), second.expect("second"));
+            assert_eq!(runs(&counter), 1, "both asks must share one probe");
+        }
+
+        #[tokio::test]
+        async fn a_java_whose_metadata_cannot_be_read_is_not_cached() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let root = Root::from_path(dir.path());
+            let (java, counter) = fake_java(dir.path(), DUMP_17);
+            let cache = ProbeCache::new();
+
+            // `None` is what an unreadable metadata call gives: no cache key, so no cache.
+            cache
+                .get_or_probe_keyed(&root, &java, None)
+                .await
+                .expect("first");
+            cache
+                .get_or_probe_keyed(&root, &java, None)
+                .await
+                .expect("second");
+            assert_eq!(runs(&counter), 2, "an unkeyed probe must not be cached");
+            assert!(
+                !root.runtimes_dir().join("gc-probe.json").exists(),
+                "nothing may be written without a key"
+            );
+        }
+
+        #[test]
+        fn a_missing_file_has_no_cache_key() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            assert_eq!(mtime_ns(&dir.path().join("no-such-java")), None);
         }
     }
 }

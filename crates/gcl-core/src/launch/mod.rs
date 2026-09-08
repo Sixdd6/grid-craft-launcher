@@ -31,6 +31,15 @@ pub enum Error {
         /// The extra JVM argument that picks a collector itself.
         extra_flag: String,
     },
+    /// A GC preset was asked for without the java major version its flags depend on.
+    #[error(
+        "the {} garbage collector preset needs the java version, which was not probed",
+        preset.label()
+    )]
+    MissingGcMajor {
+        /// The preset saved on the instance.
+        preset: crate::instances::model::GcPreset,
+    },
     /// The resolved version JSON names no `mainClass`, so there is nothing to start.
     #[error("version json has no mainClass")]
     MissingMainClass,

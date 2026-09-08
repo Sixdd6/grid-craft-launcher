@@ -23,6 +23,9 @@ pub enum Error {
     /// Downloading a runtime file failed.
     #[error(transparent)]
     Download(#[from] crate::download::Error),
+    /// Writing a file under the app root failed.
+    #[error(transparent)]
+    Paths(#[from] crate::paths::Error),
     /// A filesystem operation on a runtime path failed.
     #[error("io error at {path}: {source}")]
     Io {

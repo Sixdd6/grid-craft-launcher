@@ -845,10 +845,15 @@ impl Launcher {
         Ok(self.block_on(async { self.gc_cache.get_or_probe(&self.root, java).await })?)
     }
 
-    /// Replaces an instance's JVM overrides and saves `instance.toml`.
+    /// Replaces an instance's heap, java path, and extra arguments, and saves `instance.toml`.
     ///
     /// A minimum heap larger than the maximum is rejected, because the JVM would refuse to
     /// start. Either bound may be `None`, which falls back to `config.toml` at launch time.
+    ///
+    /// The saved garbage collector preset is kept, whatever `jvm.gc` holds: only
+    /// [`Launcher::set_instance_gc`] changes it, because only that call probes the JVM first.
+    /// A caller that sends the heap fields back with a default `gc` would otherwise silently
+    /// clear a preset it never asked about.
     pub fn set_instance_jvm(&self, slug: &str, jvm: InstanceJvm) -> Result<(), crate::Error> {
         if let (Some(min), Some(max)) = (jvm.min_mib, jvm.max_mib)
             && min > max
@@ -860,7 +865,10 @@ impl Launcher {
             .into());
         }
         let mut instance = self.instances().get(slug)?;
-        instance.config.jvm = jvm;
+        instance.config.jvm = InstanceJvm {
+            gc: instance.config.jvm.gc,
+            ..jvm
+        };
         Ok(instance.save()?)
     }
 

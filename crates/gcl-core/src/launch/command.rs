@@ -33,20 +33,39 @@ pub struct JvmSettings {
     ///
     /// Some presets expand to different flags per major, so this is the probed major rather
     /// than the version's `javaVersion`: a manually configured `java_path` carries no major of
-    /// its own.
+    /// its own. Only [`GcPreset::Default`] may leave it unset: [`build`] refuses any other
+    /// preset with a major below 8, since that means nothing probed the java binary.
     pub gc_major: u32,
 }
 
-/// Flags a user could write by hand that choose a collector themselves.
-const CONFLICTING_FLAGS: &[&str] = &[
-    "-XX:+UseSerialGC",
-    "-XX:+UseParallelGC",
-    "-XX:+UseG1GC",
-    "-XX:+UseZGC",
-    "-XX:+UseShenandoahGC",
-    "-XX:+ZGenerational",
-    "-XX:-ZGenerational",
+/// JVM flag names that choose a collector, or choose how one runs.
+///
+/// Compared by name, not by whole argument, so `-XX:+UseG1GC` and `-XX:-UseG1GC` both count:
+/// turning a collector off is as much a choice as turning one on. The list carries the
+/// collectors older JVMs still accept (`UseParallelOldGC`, `UseConcMarkSweepGC`) and
+/// `UseEpsilonGC`, which a preset would fight just as hard.
+const COLLECTOR_FLAG_NAMES: &[&str] = &[
+    "UseSerialGC",
+    "UseParallelGC",
+    "UseParallelOldGC",
+    "UseConcMarkSweepGC",
+    "UseG1GC",
+    "UseZGC",
+    "UseShenandoahGC",
+    "UseEpsilonGC",
+    "ZGenerational",
 ];
+
+/// The collector flag name one JVM argument switches, if it switches one.
+///
+/// Reads `-XX:+Name` and `-XX:-Name` only: anything else, `-XX:MaxGCPauseMillis=50` or
+/// `-XX:+UseG1GCFoo`, names no collector.
+fn collector_flag_name(arg: &str) -> Option<&str> {
+    let name = arg
+        .strip_prefix("-XX:+")
+        .or_else(|| arg.strip_prefix("-XX:-"))?;
+    COLLECTOR_FLAG_NAMES.contains(&name).then_some(name)
+}
 
 /// The first extra JVM argument that picks a collector itself, when a preset is also set.
 ///
@@ -58,7 +77,7 @@ pub fn gc_conflict(gc: GcPreset, extra_args: &[String]) -> Option<&str> {
     }
     extra_args
         .iter()
-        .find(|a| CONFLICTING_FLAGS.contains(&a.as_str()))
+        .find(|a| collector_flag_name(a).is_some())
         .map(String::as_str)
 }
 
@@ -242,6 +261,13 @@ pub fn build(inputs: &LaunchInputs<'_>, sink: Option<&EventSink>) -> Result<Laun
         return Err(Error::GcConflict {
             preset: inputs.jvm.gc,
             extra_flag: flag.to_string(),
+        });
+    }
+    // Every preset's flags depend on the java major, and no java that can run the game is
+    // below 8, so a major under 8 means the caller never probed the binary.
+    if inputs.jvm.gc != GcPreset::Default && inputs.jvm.gc_major < 8 {
+        return Err(Error::MissingGcMajor {
+            preset: inputs.jvm.gc,
         });
     }
     args.extend(inputs.jvm.gc.flags(inputs.jvm.gc_major));
@@ -927,8 +953,12 @@ mod tests {
             None,
         )
         .expect("build");
-        let xmx = index_of(&cmd.args, "-Xmx4096M");
-        assert!(!cmd.args[xmx + 1].starts_with("-XX:+Use"), "{:?}", cmd.args);
+        // No argument anywhere on the line picks a collector, not merely the one after -Xmx.
+        assert!(
+            !cmd.args.iter().any(|a| collector_flag_name(a).is_some()),
+            "{:?}",
+            cmd.args
+        );
     }
 
     #[test]
@@ -953,7 +983,8 @@ mod tests {
     fn a_preset_and_a_hand_written_collector_flag_is_a_launch_error() {
         let f = fixture(V1_20_1);
         let java = PathBuf::from("/usr/bin/java");
-        for flag in CONFLICTING_FLAGS {
+        for flag in conflicting_flags() {
+            let flag = &flag;
             let err = build(
                 &gc_inputs(&f, &java, GcPreset::G1, 21, vec![(*flag).to_string()]),
                 None,
@@ -973,7 +1004,8 @@ mod tests {
     fn a_hand_written_collector_flag_with_no_preset_still_launches() {
         let f = fixture(V1_20_1);
         let java = PathBuf::from("/usr/bin/java");
-        for flag in CONFLICTING_FLAGS {
+        for flag in conflicting_flags() {
+            let flag = &flag;
             let cmd = build(
                 &gc_inputs(&f, &java, GcPreset::Default, 21, vec![(*flag).to_string()]),
                 None,
@@ -997,5 +1029,85 @@ mod tests {
             gc_conflict(GcPreset::Zgc, &["-XX:+UseG1GCFoo".to_string()]),
             None
         );
+    }
+
+    /// Every flag a user could write by hand that picks a collector, in both switch forms.
+    fn conflicting_flags() -> Vec<String> {
+        COLLECTOR_FLAG_NAMES
+            .iter()
+            .flat_map(|name| [format!("-XX:+{name}"), format!("-XX:-{name}")])
+            .collect()
+    }
+
+    #[test]
+    fn a_conflict_is_read_from_the_flag_name_in_either_switch_form() {
+        for name in COLLECTOR_FLAG_NAMES {
+            for arg in [format!("-XX:+{name}"), format!("-XX:-{name}")] {
+                assert_eq!(
+                    gc_conflict(GcPreset::G1, std::slice::from_ref(&arg)),
+                    Some(arg.as_str()),
+                    "{arg}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_disable_form_of_a_collector_flag_conflicts_too() {
+        let args = ["-XX:-UseG1GC".to_string()];
+        assert_eq!(gc_conflict(GcPreset::Zgc, &args), Some("-XX:-UseG1GC"));
+    }
+
+    #[test]
+    fn an_argument_that_is_not_a_collector_switch_is_no_conflict() {
+        for arg in [
+            "-XX:+UseG1GCFoo",
+            "-XX:+UseStringDeduplication",
+            "-Xmx4096M",
+            "-XX:MaxGCPauseMillis=50",
+            "-XX:+UseCompressedOops",
+            "UseG1GC",
+        ] {
+            assert_eq!(
+                gc_conflict(GcPreset::Zgc, &[arg.to_string()]),
+                None,
+                "{arg}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_old_collector_names_conflict_as_well() {
+        for arg in [
+            "-XX:+UseParallelOldGC",
+            "-XX:+UseConcMarkSweepGC",
+            "-XX:+UseEpsilonGC",
+        ] {
+            assert_eq!(
+                gc_conflict(GcPreset::G1, &[arg.to_string()]),
+                Some(arg),
+                "{arg}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_preset_without_a_probed_java_major_is_an_error() {
+        let f = fixture(V1_20_1);
+        let java = PathBuf::from("/usr/bin/java");
+        for major in [0, 7] {
+            let err = build(&gc_inputs(&f, &java, GcPreset::G1, major, Vec::new()), None)
+                .expect_err("no probed major");
+            match err {
+                Error::MissingGcMajor { preset } => assert_eq!(preset, GcPreset::G1),
+                other => panic!("wrong error: {other:?}"),
+            }
+        }
+        // The default preset needs no major, so it still builds.
+        build(
+            &gc_inputs(&f, &java, GcPreset::Default, 0, Vec::new()),
+            None,
+        )
+        .expect("default");
     }
 }
