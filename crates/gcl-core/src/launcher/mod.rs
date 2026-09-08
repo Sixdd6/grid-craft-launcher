@@ -3964,6 +3964,7 @@ mod tests {
             kind,
             is_pack: false,
             downloads: 0,
+            updated: String::new(),
             icon_url: None,
             page_url: String::new(),
             latest_files,

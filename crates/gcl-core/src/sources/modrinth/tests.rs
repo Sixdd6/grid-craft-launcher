@@ -134,6 +134,8 @@ async fn search_sends_facets_for_kind_minecraft_and_loader() {
     assert_eq!(hit.author, "jellysquid3");
     assert_eq!(hit.kind, ContentKind::Mod);
     assert_eq!(hit.downloads, 220_759_648);
+    // `date_modified` as the fixture carries it, RFC 3339, unparsed.
+    assert_eq!(hit.updated, "2026-09-02T16:13:16.493666+00:00");
     assert_eq!(hit.page_url, "https://modrinth.com/mod/sodium");
     assert!(hit.icon_url.is_some());
     assert!(hit.description.starts_with("A high-performance rendering"));
@@ -709,6 +711,7 @@ async fn search_packs_asks_for_the_modpack_project_type() {
     assert_eq!(hit.title, "Fabulously Optimized");
     assert_eq!(hit.author, "robotkoer");
     assert_eq!(hit.downloads, 16_857_076);
+    assert_eq!(hit.updated, "2026-08-30T14:07:56.116361+00:00");
     assert_eq!(
         hit.page_url,
         "https://modrinth.com/modpack/fabulously-optimized"
@@ -838,4 +841,16 @@ async fn changelog_404_is_not_found() {
         matches!(err, Error::NotFound { ref id, .. } if id == "zz"),
         "got {err:?}"
     );
+}
+
+#[tokio::test]
+async fn a_hit_without_a_date_modified_has_an_empty_updated() {
+    let server = MockServer::start().await;
+    let body = r#"{"hits":[{"project_id":"AAA","slug":"a","title":"A",
+        "project_type":"mod","downloads":1}],"total_hits":1,"offset":0}"#;
+    let source = serve(&server, "/search", body).await;
+
+    let page = source.search(&mod_query("a")).await.expect("search");
+
+    assert_eq!(page.hits[0].updated, "");
 }

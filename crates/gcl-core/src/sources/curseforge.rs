@@ -440,6 +440,7 @@ impl Source for CurseForge {
                     kind,
                     is_pack: false,
                     downloads: m.download_count,
+                    updated: m.date_modified,
                     latest_files: latest_file_indexes(&m.latest_files_indexes),
                     icon_url: m.logo.and_then(|l| l.thumbnail_url),
                     slug: m.slug,
@@ -498,6 +499,7 @@ impl Source for CurseForge {
                 kind: ContentKind::Mod,
                 is_pack: true,
                 downloads: m.download_count,
+                updated: m.date_modified,
                 latest_files: latest_file_indexes(&m.latest_files_indexes),
                 icon_url: m.logo.and_then(|l| l.thumbnail_url),
                 slug: m.slug,
@@ -827,6 +829,9 @@ struct RawMod {
     class_id: Option<u32>,
     #[serde(default)]
     download_count: u64,
+    /// RFC 3339. Absent on a mod the API sent no date for.
+    #[serde(default)]
+    date_modified: String,
     #[serde(default)]
     authors: Vec<RawAuthor>,
     #[serde(default)]

@@ -46,6 +46,10 @@ sha1: Option<String>, sha512: Option<String>, fingerprint: Option<u32>, primary 
 `dependencies: Vec<Dependency> { project_id: Option<String>, version_id: Option<String>, kind:
 Required | Optional | Incompatible | Embedded }`.
 
+`SearchHit.updated` is when the project last changed, RFC 3339 exactly as the source wrote it
+(Modrinth `date_modified`, CurseForge `dateModified`), and `""` when the response carried no
+date; nothing parses or normalises it in `gcl-core`.
+
 `SearchHit.icon_url` is the project's icon, `None` when the source serves none. It is a plain
 CDN URL, not a hash-addressed file, so `download::icons` caches it by URL rather than through the
 object store; see the `download-cache` skill. Never point a test fixture's `icon_url` at a real

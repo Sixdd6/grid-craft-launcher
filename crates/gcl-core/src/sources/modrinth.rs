@@ -233,6 +233,7 @@ impl Source for Modrinth {
                     kind,
                     is_pack: false,
                     downloads: hit.downloads,
+                    updated: hit.date_modified,
                     icon_url: hit.icon_url,
                     // Modrinth ships no newest-file index with a search hit; the caller
                     // lists versions instead.
@@ -285,6 +286,7 @@ impl Source for Modrinth {
                 kind: ContentKind::Mod,
                 is_pack: true,
                 downloads: hit.downloads,
+                updated: hit.date_modified,
                 icon_url: hit.icon_url,
                 // Modrinth ships no newest-file index with a search hit.
                 latest_files: Vec::new(),
@@ -498,6 +500,9 @@ struct RawHit {
     project_type: String,
     #[serde(default)]
     downloads: u64,
+    /// RFC 3339. Absent on a hit the API sent no date for.
+    #[serde(default)]
+    date_modified: String,
     #[serde(default)]
     icon_url: Option<String>,
 }

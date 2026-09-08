@@ -220,6 +220,8 @@ async fn search_builds_the_query_and_maps_hits() {
     assert_eq!(hit.author, "jellysquid3");
     assert_eq!(hit.kind, ContentKind::Mod);
     assert_eq!(hit.downloads, 182_345_123);
+    // `dateModified` as the fixture carries it, RFC 3339, unparsed.
+    assert_eq!(hit.updated, "2026-08-15T10:02:11.5Z");
     assert_eq!(
         hit.icon_url.as_deref(),
         Some(
@@ -1017,6 +1019,7 @@ async fn search_packs_sends_the_modpack_class_id_and_keeps_only_packs() {
     assert_eq!(hit.slug, "all-the-mods-9");
     assert_eq!(hit.title, "All the Mods 9");
     assert_eq!(hit.author, "ATMTeam");
+    assert_eq!(hit.updated, "2026-08-15T10:02:11.5Z");
     assert_eq!(
         hit.page_url,
         "https://www.curseforge.com/minecraft/modpacks/all-the-mods-9"
@@ -1153,4 +1156,25 @@ async fn changelog_404_is_not_found() {
         }
         other => panic!("got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn a_hit_without_a_date_modified_has_an_empty_updated() {
+    let server = MockServer::start().await;
+    mount_classes(&server).await;
+    let body = r#"{"data":[{"id":1,"name":"A","slug":"a","classId":6}],
+        "pagination":{"index":0,"totalCount":1}}"#;
+    Mock::given(method("GET"))
+        .and(path("/v1/mods/search"))
+        .and(header("x-api-key", KEY))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .mount(&server)
+        .await;
+
+    let page = source(&server)
+        .search(&SearchQuery::default())
+        .await
+        .expect("search");
+
+    assert_eq!(page.hits[0].updated, "");
 }

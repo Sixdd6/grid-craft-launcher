@@ -94,6 +94,11 @@ pub struct SearchHit {
     pub is_pack: bool,
     /// Total download count.
     pub downloads: u64,
+    /// When the project last changed, RFC 3339 as the source wrote it.
+    ///
+    /// Modrinth sends `date_modified`, CurseForge `dateModified`. Neither string is parsed
+    /// or normalised here; a hit whose source sent no date carries `""`.
+    pub updated: String,
     /// Icon image URL, when the source has one.
     pub icon_url: Option<String>,
     /// Browser link to the project's page at the source.
