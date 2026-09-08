@@ -88,6 +88,132 @@ pub struct InstanceJvm {
     pub java_path: Option<PathBuf>,
     /// Extra JVM arguments appended after the launcher's own.
     pub extra_args: Vec<String>,
+    /// Garbage collector preset. Absent in `instance.toml` means [`GcPreset::Default`].
+    #[serde(default, skip_serializing_if = "GcPreset::is_default")]
+    pub gc: GcPreset,
+}
+
+/// Garbage collector preset for an instance's JVM.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GcPreset {
+    /// No collector flag: the JVM picks its own.
+    #[default]
+    Default,
+    /// Serial collector.
+    Serial,
+    /// Parallel collector.
+    Parallel,
+    /// G1 collector.
+    G1,
+    /// ZGC, non-generational where the JVM offers both modes.
+    Zgc,
+    /// Generational ZGC.
+    ZgcGenerational,
+    /// Shenandoah collector.
+    Shenandoah,
+}
+
+impl GcPreset {
+    /// Every preset, in menu order.
+    pub const fn all() -> &'static [GcPreset] {
+        &[
+            GcPreset::Default,
+            GcPreset::Serial,
+            GcPreset::Parallel,
+            GcPreset::G1,
+            GcPreset::Zgc,
+            GcPreset::ZgcGenerational,
+            GcPreset::Shenandoah,
+        ]
+    }
+
+    /// Whether this is [`GcPreset::Default`], so a default preset writes no key.
+    pub fn is_default(&self) -> bool {
+        matches!(self, GcPreset::Default)
+    }
+
+    /// Display name for a menu.
+    pub fn label(&self) -> &'static str {
+        match self {
+            GcPreset::Default => "Launcher default",
+            GcPreset::Serial => "Serial",
+            GcPreset::Parallel => "Parallel",
+            GcPreset::G1 => "G1",
+            GcPreset::Zgc => "ZGC",
+            GcPreset::ZgcGenerational => "Generational ZGC",
+            GcPreset::Shenandoah => "Shenandoah",
+        }
+    }
+
+    /// One line saying what the preset trades for what.
+    pub fn description(&self) -> &'static str {
+        match self {
+            GcPreset::Default => "Launcher default: no collector flag, the JVM chooses",
+            GcPreset::Serial => "Serial: one thread, lowest overhead, for small heaps",
+            GcPreset::Parallel => "Parallel: highest throughput, longer pauses",
+            GcPreset::G1 => "G1: balanced pauses and throughput, the usual choice",
+            GcPreset::Zgc => "ZGC: low pause times, needs more memory",
+            GcPreset::ZgcGenerational => {
+                "Generational ZGC: low pause times with less CPU on young objects"
+            }
+            GcPreset::Shenandoah => "Shenandoah: low pause times, works on smaller heaps than ZGC",
+        }
+    }
+
+    /// The JVM flags this preset needs on a Java of the given major version.
+    ///
+    /// Java 21 and 22 ship both ZGC modes behind `ZGenerational`; 23 and later are
+    /// generational only, so both ZGC presets pass `-XX:+UseZGC` alone. Below 21 the
+    /// generational mode does not exist and the probe refuses the preset.
+    pub fn flags(&self, major: u32) -> Vec<String> {
+        let flags: &[&str] = match self {
+            GcPreset::Default => &[],
+            GcPreset::Serial => &["-XX:+UseSerialGC"],
+            GcPreset::Parallel => &["-XX:+UseParallelGC"],
+            GcPreset::G1 => &["-XX:+UseG1GC"],
+            GcPreset::Zgc if (21..=22).contains(&major) => &["-XX:+UseZGC", "-XX:-ZGenerational"],
+            GcPreset::Zgc => &["-XX:+UseZGC"],
+            GcPreset::ZgcGenerational if (21..=22).contains(&major) => {
+                &["-XX:+UseZGC", "-XX:+ZGenerational"]
+            }
+            GcPreset::ZgcGenerational => &["-XX:+UseZGC"],
+            GcPreset::Shenandoah => &["-XX:+UseShenandoahGC"],
+        };
+        flags.iter().map(|f| (*f).to_string()).collect()
+    }
+}
+
+impl std::fmt::Display for GcPreset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            GcPreset::Default => "default",
+            GcPreset::Serial => "serial",
+            GcPreset::Parallel => "parallel",
+            GcPreset::G1 => "g1",
+            GcPreset::Zgc => "zgc",
+            GcPreset::ZgcGenerational => "zgc_generational",
+            GcPreset::Shenandoah => "shenandoah",
+        };
+        f.write_str(s)
+    }
+}
+
+/// A string that names no [`GcPreset`].
+#[derive(Debug, thiserror::Error)]
+#[error("unknown garbage collector preset: {0}")]
+pub struct UnknownGcPreset(pub String);
+
+impl std::str::FromStr for GcPreset {
+    type Err = UnknownGcPreset;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        GcPreset::all()
+            .iter()
+            .copied()
+            .find(|preset| preset.to_string() == s)
+            .ok_or_else(|| UnknownGcPreset(s.to_string()))
+    }
 }
 
 /// The default for [`ContentEntry::enabled`]: an entry with no `enabled` key is enabled.
@@ -316,5 +442,97 @@ mod tests {
             toml::from_str::<InstanceConfig>(&text).expect("parse"),
             config
         );
+    }
+
+    #[test]
+    fn a_jvm_table_without_gc_loads_as_default_and_is_not_written_back() {
+        let jvm: InstanceJvm = toml::from_str("min_mib = 2048\nmax_mib = 6144\n").expect("parse");
+        assert_eq!(jvm.gc, GcPreset::Default);
+        let text = toml::to_string(&jvm).expect("serialize");
+        assert!(!text.contains("gc"), "{text}");
+    }
+
+    #[test]
+    fn a_non_default_gc_is_written_and_read_back() {
+        let jvm = InstanceJvm {
+            gc: GcPreset::ZgcGenerational,
+            ..InstanceJvm::default()
+        };
+        let text = toml::to_string(&jvm).expect("serialize");
+        assert!(text.contains("gc = \"zgc_generational\""), "{text}");
+        assert_eq!(toml::from_str::<InstanceJvm>(&text).expect("parse"), jvm);
+    }
+
+    #[test]
+    fn every_gc_token_round_trips_through_toml_and_from_str() {
+        let expected = [
+            "default",
+            "serial",
+            "parallel",
+            "g1",
+            "zgc",
+            "zgc_generational",
+            "shenandoah",
+        ];
+        let tokens: Vec<String> = GcPreset::all().iter().map(|p| p.to_string()).collect();
+        assert_eq!(tokens, expected);
+        for preset in GcPreset::all() {
+            assert_eq!(
+                preset.to_string().parse::<GcPreset>().expect("parse"),
+                *preset
+            );
+            let jvm = InstanceJvm {
+                gc: *preset,
+                ..InstanceJvm::default()
+            };
+            let text = toml::to_string(&jvm).expect("serialize");
+            let back: InstanceJvm = toml::from_str(&text).expect("parse");
+            assert_eq!(back.gc, *preset, "{text}");
+        }
+        assert!("bogus".parse::<GcPreset>().is_err());
+    }
+
+    #[test]
+    fn flags_match_the_preset_and_major_table() {
+        let cases: &[(GcPreset, u32, &[&str])] = &[
+            (GcPreset::Default, 21, &[]),
+            (GcPreset::Serial, 17, &["-XX:+UseSerialGC"]),
+            (GcPreset::Parallel, 17, &["-XX:+UseParallelGC"]),
+            (GcPreset::G1, 8, &["-XX:+UseG1GC"]),
+            (GcPreset::Shenandoah, 17, &["-XX:+UseShenandoahGC"]),
+            (GcPreset::Zgc, 17, &["-XX:+UseZGC"]),
+            (GcPreset::Zgc, 21, &["-XX:+UseZGC", "-XX:-ZGenerational"]),
+            (GcPreset::Zgc, 22, &["-XX:+UseZGC", "-XX:-ZGenerational"]),
+            (GcPreset::Zgc, 23, &["-XX:+UseZGC"]),
+            (GcPreset::Zgc, 25, &["-XX:+UseZGC"]),
+            (GcPreset::ZgcGenerational, 17, &["-XX:+UseZGC"]),
+            (
+                GcPreset::ZgcGenerational,
+                21,
+                &["-XX:+UseZGC", "-XX:+ZGenerational"],
+            ),
+            (
+                GcPreset::ZgcGenerational,
+                22,
+                &["-XX:+UseZGC", "-XX:+ZGenerational"],
+            ),
+            (GcPreset::ZgcGenerational, 23, &["-XX:+UseZGC"]),
+            (GcPreset::ZgcGenerational, 25, &["-XX:+UseZGC"]),
+        ];
+        for (preset, major, expected) in cases {
+            let flags = preset.flags(*major);
+            let got: Vec<&str> = flags.iter().map(String::as_str).collect();
+            assert_eq!(got.as_slice(), *expected, "{preset} on java {major}");
+        }
+    }
+
+    #[test]
+    fn every_preset_has_a_one_line_label_and_description() {
+        for preset in GcPreset::all() {
+            assert!(!preset.label().is_empty(), "{preset}");
+            let description = preset.description();
+            assert!(!description.is_empty(), "{preset}");
+            assert!(!description.contains('\n'), "{preset}");
+        }
     }
 }

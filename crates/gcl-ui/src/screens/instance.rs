@@ -664,6 +664,7 @@ pub fn instance_jvm(min: i32, max: i32, extra: &str, java_path: &str) -> Instanc
             .split_whitespace()
             .map(|arg| arg.to_string())
             .collect(),
+        ..InstanceJvm::default()
     }
 }
 

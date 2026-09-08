@@ -638,9 +638,9 @@ impl Launcher {
         ))
     }
 
-    /// The instance store over this root.
+    /// The instance store over this root, seeded with the config's JVM defaults.
     pub fn instances(&self) -> Instances {
-        Instances::new(self.root.clone())
+        Instances::new(self.root.clone()).with_gc_default(self.read_config().jvm.gc)
     }
 
     /// A download context bound to this root, client, event sink, and cancel token.

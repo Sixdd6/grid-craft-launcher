@@ -111,12 +111,22 @@ impl Instance {
 #[derive(Debug, Clone)]
 pub struct Instances {
     root: Root,
+    gc_default: model::GcPreset,
 }
 
 impl Instances {
     /// Builds an instance store over the given app root.
     pub fn new(root: Root) -> Self {
-        Instances { root }
+        Instances {
+            root,
+            gc_default: model::GcPreset::default(),
+        }
+    }
+
+    /// Sets the garbage collector preset [`Instances::create`] seeds into a new instance.
+    pub fn with_gc_default(mut self, gc: model::GcPreset) -> Self {
+        self.gc_default = gc;
+        self
     }
 
     /// The app root these instances live under.
@@ -151,6 +161,10 @@ impl Instances {
             loader,
             loader_version,
             created: now_rfc3339(),
+            jvm: model::InstanceJvm {
+                gc: self.gc_default,
+                ..model::InstanceJvm::default()
+            },
             ..InstanceConfig::default()
         };
         let instance = Instance {
@@ -520,5 +534,25 @@ mod tests {
     fn get_of_a_missing_slug_is_not_found() {
         let (_dir, instances) = fixture();
         assert!(matches!(instances.get("nope"), Err(Error::NotFound(_))));
+    }
+
+    #[test]
+    fn create_seeds_the_gc_preset_from_the_config_default() {
+        let (_dir, instances) = fixture();
+        let seeded = instances
+            .clone()
+            .with_gc_default(model::GcPreset::Zgc)
+            .create("Zed", "1.20.1", Loader::None, None, &BTreeMap::new())
+            .expect("create");
+        assert_eq!(seeded.config.jvm.gc, model::GcPreset::Zgc);
+        let text = std::fs::read_to_string(seeded.config_path()).expect("read");
+        assert!(text.contains("gc = \"zgc\""), "{text}");
+
+        let plain = instances
+            .create("Plain", "1.20.1", Loader::None, None, &BTreeMap::new())
+            .expect("create");
+        assert_eq!(plain.config.jvm.gc, model::GcPreset::Default);
+        let text = std::fs::read_to_string(plain.config_path()).expect("read");
+        assert!(!text.contains("gc ="), "{text}");
     }
 }

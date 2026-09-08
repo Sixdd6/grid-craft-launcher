@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::instances::model::GcPreset;
+
 /// Errors loading or saving the config file.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -42,6 +44,9 @@ pub struct JvmDefaults {
     pub max_mib: u32,
     /// Path to a specific `java` executable, if not the one on `PATH`.
     pub java_path: Option<PathBuf>,
+    /// Garbage collector preset seeded into a new instance.
+    #[serde(default)]
+    pub gc: GcPreset,
 }
 
 impl Default for JvmDefaults {
@@ -50,6 +55,7 @@ impl Default for JvmDefaults {
             min_mib: 1024,
             max_mib: 4096,
             java_path: None,
+            gc: GcPreset::default(),
         }
     }
 }
@@ -317,5 +323,18 @@ mod tests {
         // A blank file value alone is unset too.
         assert_eq!(config.curseforge_api_key(), None);
         assert_eq!(config.msa_client_id(), None);
+    }
+
+    #[test]
+    fn jvm_gc_defaults_to_launcher_default_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[jvm]\nmax_mib = 8192\n").unwrap();
+        assert_eq!(Config::load(&path).unwrap().jvm.gc, GcPreset::Default);
+
+        let mut config = Config::default();
+        config.jvm.gc = GcPreset::G1;
+        config.save(&path).unwrap();
+        assert_eq!(Config::load(&path).unwrap().jvm.gc, GcPreset::G1);
     }
 }

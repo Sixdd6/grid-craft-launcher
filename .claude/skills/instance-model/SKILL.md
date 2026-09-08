@@ -27,6 +27,7 @@ root = ""                       # optional override
 min_mib = 1024
 max_mib = 4096
 java_path = ""                  # optional
+gc = "default"                  # seeded into every new instance
 [keys]
 curseforge_api_key = ""         # env wins
 msa_client_id = ""              # env wins
@@ -55,6 +56,7 @@ min_mib = 2048                  # optional, else global
 max_mib = 6144
 java_path = ""
 extra_args = ["-XX:+UseG1GC"]
+gc = "zgc"                      # optional, absent means "default"
 
 [settings_overrides]            # options.txt keys written on every launch
 "renderDistance" = "16"
@@ -71,6 +73,18 @@ kind = "mod"                    # mod | resourcepack | shader | datapack | world
 world = "New World"             # optional, the target world for a datapack
 enabled = true
 ```
+
+## Garbage collector preset
+
+`jvm.gc` is a `GcPreset` in `instances::model`: `default`, `serial`, `parallel`, `g1`, `zgc`,
+`zgc_generational`, `shenandoah`. `default` is the value of a missing key and writes no key
+back, so an older `instance.toml` round-trips unchanged. `GcPreset::flags(major)` gives the
+JVM flags: none for `default`, `-XX:+UseSerialGC`, `-XX:+UseParallelGC`, `-XX:+UseG1GC`,
+`-XX:+UseShenandoahGC`, and for ZGC `-XX:+UseZGC` plus `-XX:-ZGenerational` (`zgc`) or
+`-XX:+ZGenerational` (`zgc_generational`) on Java 21 and 22 only; 23 and later pass
+`-XX:+UseZGC` alone. `GcPreset::all`, `label`, and `description` feed the CLI and the JVM tab.
+`config.jvm.gc` seeds a new instance at creation only, through
+`Instances::with_gc_default`, which `Launcher::instances()` sets from the config.
 
 `title` is absent in an `instance.toml` written before the key existed, and in one a modpack
 import wrote: a pack index names no project title. `content::check_updates` backfills it, at

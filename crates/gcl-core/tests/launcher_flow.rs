@@ -1166,6 +1166,7 @@ async fn instance_jvm_is_saved_and_a_min_above_the_max_is_rejected() {
                     max_mib: Some(4096),
                     java_path: Some(std::path::PathBuf::from("/usr/bin/java")),
                     extra_args: vec!["-XX:+UseG1GC".to_string()],
+                    ..InstanceJvm::default()
                 },
             )
             .expect("save the jvm settings");
