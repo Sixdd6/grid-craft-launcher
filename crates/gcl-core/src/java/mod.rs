@@ -1,14 +1,17 @@
 //! Java runtimes: finding the JVMs on this machine and installing Mojang's own.
 //!
 //! [`detect_all`] probes candidates on disk; [`install_runtime`] downloads a Mojang
-//! runtime component into `cache/runtimes/<component>/<platform>`.
+//! runtime component into `cache/runtimes/<component>/<platform>`; [`gc::probe`] asks one JVM
+//! which garbage collectors its build carries.
 
 pub mod detect;
+pub mod gc;
 pub mod runtime;
 
 use std::path::PathBuf;
 
 pub use detect::{detect_all, parse_java_version, pick, pick_exact};
+pub use gc::{GcSupport, ProbeCache, supported_flag_names};
 pub use runtime::{RUNTIME_MANIFEST, component_for_major, install_runtime, platform_key};
 
 /// Errors from probing or installing a Java runtime.
@@ -52,6 +55,16 @@ pub enum Error {
         path: PathBuf,
         /// Why it failed.
         reason: String,
+    },
+    /// The instance asks for a garbage collector this JVM was not built with.
+    #[error("java {major} at {java} does not support the {preset} garbage collector")]
+    UnsupportedPreset {
+        /// The preset the instance asked for.
+        preset: String,
+        /// The java binary that was probed.
+        java: PathBuf,
+        /// Its major version.
+        major: u32,
     },
 }
 

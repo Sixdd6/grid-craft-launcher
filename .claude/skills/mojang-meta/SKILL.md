@@ -64,6 +64,32 @@ otherwise the parent's `logging` is kept, even though the child is otherwise pre
   download only the classifier jar, do not put a base jar on the classpath (1.8.9
   `jinput-platform`, `twitch-platform`).
 
+## Garbage collector probe
+
+`java::gc::probe(java)` runs `<java> -XX:+PrintFlagsFinal -version` once, with a 20 s timeout,
+and returns `GcSupport { major, version, flags }`. The `-version` banner goes to stderr and the
+flag dump to stdout, so the parser reads both streams as one text.
+
+- Major and version come from the banner line's quoted string (`openjdk version "21.0.7"`),
+  through `detect::parse_java_version`.
+- A dump line is whitespace columns: C++ type, flag name, `=`, value, origin tags. Names are
+  right-aligned to the longest name in the file, so read tokens, never fixed columns.
+- Only lines whose first token is `bool` count, and only the names in
+  `java::gc::supported_flag_names()` are kept: `UseSerialGC`, `UseParallelGC`, `UseG1GC`,
+  `UseZGC`, `ZGenerational`, `UseShenandoahGC`. `GcSupport::supports(flag)` asks about one.
+- A flag name being present means that build compiled the collector in. The value only says
+  which collector is active by default, so never read it.
+- Recorded dumps live in `tests/fixtures/java/printflags-{17,21,25}.txt`, trimmed to the banner
+  and the lines mentioning `GC` or `ZGenerational`. They come from Microsoft OpenJDK 17.0.15 and
+  21.0.7 (Mojang's `java-runtime-gamma` and `java-runtime-delta`) and Red Hat OpenJDK 25.0.4.1.
+  17 has no `ZGenerational`; 21 has it; 25 dropped it, because ZGC is generational there.
+
+`java::gc::ProbeCache::get_or_probe(root, java)` answers from an in-memory map, then from
+`cache/runtimes/gc-probe.json`, then by running the JVM. Both are keyed by the binary's
+canonical path and its modification time in nanoseconds, so a runtime replaced in place is
+probed again rather than answered from a stale entry. A missing or unparsable cache file is
+treated as empty. The disk file is rewritten through `paths::write_atomic` and has no eviction.
+
 ## Placeholders
 
 `${auth_player_name} ${auth_uuid} ${auth_access_token} ${user_type} ${clientid} ${auth_xuid}

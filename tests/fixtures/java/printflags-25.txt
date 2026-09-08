@@ -1,0 +1,39 @@
+openjdk version "25.0.4.1" 2026-08-18
+OpenJDK Runtime Environment (Red_Hat-25.0.4.1.1-1) (build 25.0.4.1+1)
+OpenJDK 64-Bit Server VM (Red_Hat-25.0.4.1.1-1) (build 25.0.4.1+1, mixed mode, sharing)
+    uintx AdaptiveSizeMajorGCDecayTimeScale        = 10                                        {product} {default}
+     uint ConcGCThreads                            = 3                                         {product} {ergonomic}
+     bool DisableExplicitGC                        = false                                     {product} {default}
+     bool ExplicitGCInvokesConcurrent              = false                                     {product} {default}
+     uint FullGCHeapDumpLimit                      = 0                                      {manageable} {default}
+    uintx G1MixedGCCountTarget                     = 8                                         {product} {default}
+    uintx G1PeriodicGCInterval                     = 0                                      {manageable} {default}
+     bool G1PeriodicGCInvokesConcurrent            = true                                      {product} {default}
+   double G1PeriodicGCSystemLoadThreshold          = 0.000000                               {manageable} {default}
+     uint GCCardSizeInBytes                        = 512                                       {product} {default}
+     uint GCDrainStackTargetSize                   = 64                                        {product} {default}
+     uint GCHeapFreeLimit                          = 2                                         {product} {default}
+    uintx GCPauseIntervalMillis                    = 201                                       {product} {default}
+     uint GCTimeLimit                              = 98                                        {product} {default}
+     uint GCTimeRatio                              = 12                                        {product} {default}
+     bool HeapDumpAfterFullGC                      = false                                  {manageable} {default}
+     bool HeapDumpBeforeFullGC                     = false                                  {manageable} {default}
+   size_t HeapSizePerGCThread                      = 43620760                                  {product} {default}
+    uintx MaxGCPauseMillis                         = 200                                       {product} {default}
+      int ParGCArrayScanChunk                      = 50                                        {product} {default}
+     uint ParallelGCBufferWastePct                 = 10                                        {product} {default}
+     uint ParallelGCThreads                        = 10                                        {product} {default}
+     bool PrintGC                                  = false                                     {product} {default}
+     bool PrintGCDetails                           = false                                     {product} {default}
+    ccstr ShenandoahGCHeuristics                   = adaptive                                  {product} {default}
+    ccstr ShenandoahGCMode                         = satb                                      {product} {default}
+     bool UseAdaptiveSizeDecayMajorGCCost          = true                                      {product} {default}
+     bool UseAdaptiveSizePolicyWithSystemGC        = false                                     {product} {default}
+     bool UseDynamicNumberOfGCThreads              = true                                      {product} {default}
+     bool UseG1GC                                  = true                                      {product} {ergonomic}
+     bool UseGCOverheadLimit                       = true                                      {product} {default}
+     bool UseMaximumCompactionOnSystemGC           = true                                      {product} {default}
+     bool UseParallelGC                            = false                                     {product} {default}
+     bool UseSerialGC                              = false                                     {product} {default}
+     bool UseShenandoahGC                          = false                                     {product} {default}
+     bool UseZGC                                   = false                                     {product} {default}
