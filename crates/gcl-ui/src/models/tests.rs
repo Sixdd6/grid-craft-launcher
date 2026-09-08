@@ -155,6 +155,7 @@ fn search_row_carries_the_icon_url_with_no_decoded_icon_yet() {
         downloads: 12_345,
         icon_url: Some("https://cdn.modrinth.com/icon.png".into()),
         page_url: "https://modrinth.com/mod/sodium".into(),
+        latest_files: vec![],
     };
     let row = search_row(&hit);
     assert_eq!(row.icon_url.as_str(), "https://cdn.modrinth.com/icon.png");
@@ -294,6 +295,7 @@ fn search_row_formats_the_download_count() {
         downloads: 12_345,
         icon_url: None,
         page_url: "https://modrinth.com/mod/sodium".into(),
+        latest_files: vec![],
     };
     let row = search_row(&hit);
     assert_eq!(row.source.as_str(), "modrinth");
@@ -315,6 +317,7 @@ fn search_row_collapses_newlines_in_the_description() {
         downloads: 12_345,
         icon_url: None,
         page_url: "https://modrinth.com/mod/sodium".into(),
+        latest_files: vec![],
     };
     let row = search_row(&hit);
     assert!(!row.description.contains('\n'));
@@ -339,6 +342,7 @@ fn search_row_collapses_every_kind_of_whitespace_and_trims_the_ends() {
         downloads: 12_345,
         icon_url: None,
         page_url: "https://modrinth.com/mod/sodium".into(),
+        latest_files: vec![],
     };
     let row = search_row(&hit);
     assert_eq!(row.description.as_str(), "A rendering engine for Fabric.");

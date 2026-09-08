@@ -234,6 +234,9 @@ impl Source for Modrinth {
                     is_pack: false,
                     downloads: hit.downloads,
                     icon_url: hit.icon_url,
+                    // Modrinth ships no newest-file index with a search hit; the caller
+                    // lists versions instead.
+                    latest_files: Vec::new(),
                 })
             })
             .collect();
@@ -283,6 +286,8 @@ impl Source for Modrinth {
                 is_pack: true,
                 downloads: hit.downloads,
                 icon_url: hit.icon_url,
+                // Modrinth ships no newest-file index with a search hit.
+                latest_files: Vec::new(),
             })
             .collect();
         Ok(SearchPage {

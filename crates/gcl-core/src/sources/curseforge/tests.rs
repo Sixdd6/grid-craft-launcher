@@ -233,6 +233,117 @@ async fn search_builds_the_query_and_maps_hits() {
 }
 
 #[tokio::test]
+async fn search_maps_latest_files_indexes_onto_the_hit() {
+    let server = MockServer::start().await;
+    mount_classes(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/v1/mods/search"))
+        .and(header("x-api-key", KEY))
+        .respond_with(ResponseTemplate::new(200).set_body_string(SEARCH))
+        .mount(&server)
+        .await;
+
+    let q = SearchQuery {
+        text: "sodium".into(),
+        ..SearchQuery::default()
+    };
+    let page = source(&server).search(&q).await.expect("search");
+
+    // The Sodium hit carries a Fabric entry, a Forge entry, and one with no loader at all.
+    let sodium = &page.hits[0];
+    assert_eq!(
+        sodium.latest_files,
+        vec![
+            LatestFileIndex {
+                game_version: "1.20.1".into(),
+                loader: Some(4),
+                file_id: "4593548".into(),
+            },
+            LatestFileIndex {
+                game_version: "1.20.1".into(),
+                loader: Some(1),
+                file_id: "4593549".into(),
+            },
+            LatestFileIndex {
+                game_version: "1.20.1".into(),
+                loader: None,
+                file_id: "4593550".into(),
+            },
+        ]
+    );
+    // A hit whose `latestFilesIndexes` is empty keeps an empty list, not an error.
+    assert!(page.hits[1].latest_files.is_empty());
+}
+
+#[tokio::test]
+async fn search_packs_maps_latest_files_indexes_onto_the_hit() {
+    let server = MockServer::start().await;
+    mount_classes(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/v1/mods/search"))
+        .and(header("x-api-key", KEY))
+        .respond_with(ResponseTemplate::new(200).set_body_string(SEARCH))
+        .mount(&server)
+        .await;
+
+    let page = source(&server)
+        .search_packs(&SearchQuery::default())
+        .await
+        .expect("search packs");
+
+    assert_eq!(
+        page.hits[0].latest_files,
+        vec![LatestFileIndex {
+            game_version: "1.20.1".into(),
+            loader: Some(1),
+            file_id: "4700001".into(),
+        }]
+    );
+}
+
+#[test]
+fn raw_latest_files_indexes_parse_without_the_optional_fields() {
+    // A real entry carries a filename, a release type, and a game version type id this
+    // launcher ignores; a `modLoader` is missing on a loader-agnostic file.
+    let raw: RawMod = serde_json::from_str(
+        r#"{
+            "id": 1,
+            "name": "Test",
+            "slug": "test",
+            "latestFilesIndexes": [
+                {"gameVersion": "1.21", "fileId": 10, "filename": "a.jar",
+                 "releaseType": 1, "gameVersionTypeId": 75125, "modLoader": 6},
+                {"gameVersion": "1.21", "fileId": 11}
+            ]
+        }"#,
+    )
+    .expect("parse");
+    let mapped = latest_file_indexes(&raw.latest_files_indexes);
+    assert_eq!(
+        mapped,
+        vec![
+            LatestFileIndex {
+                game_version: "1.21".into(),
+                loader: Some(6),
+                file_id: "10".into(),
+            },
+            LatestFileIndex {
+                game_version: "1.21".into(),
+                loader: None,
+                file_id: "11".into(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn raw_mod_without_latest_files_indexes_maps_to_an_empty_list() {
+    let raw: RawMod =
+        serde_json::from_str(r#"{"id": 1, "name": "Test", "slug": "test"}"#).expect("parse");
+    assert!(latest_file_indexes(&raw.latest_files_indexes).is_empty());
+}
+
+#[tokio::test]
 async fn search_without_a_kind_sends_no_class_id() {
     let server = MockServer::start().await;
     mount_classes(&server).await;

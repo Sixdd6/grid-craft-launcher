@@ -50,7 +50,31 @@
       "screenshots": [],
       "mainFileId": 5230381,
       "latestFiles": [],
-      "latestFilesIndexes": [],
+      "latestFilesIndexes": [
+        {
+          "gameVersion": "1.20.1",
+          "fileId": 4593548,
+          "filename": "sodium-fabric-mc1.20.1-0.5.3.jar",
+          "releaseType": 1,
+          "gameVersionTypeId": 75125,
+          "modLoader": 4
+        },
+        {
+          "gameVersion": "1.20.1",
+          "fileId": 4593549,
+          "filename": "sodium-forge-mc1.20.1-0.5.3.jar",
+          "releaseType": 1,
+          "gameVersionTypeId": 75125,
+          "modLoader": 1
+        },
+        {
+          "gameVersion": "1.20.1",
+          "fileId": 4593550,
+          "filename": "sodium-mc1.20.1-0.5.3.jar",
+          "releaseType": 1,
+          "gameVersionTypeId": 75125
+        }
+      ],
       "latestEarlyAccessFilesIndexes": [],
       "dateCreated": "2019-04-30T02:33:52.07Z",
       "dateModified": "2026-08-15T10:02:11.5Z",
@@ -233,7 +257,16 @@
       "screenshots": [],
       "mainFileId": 5230381,
       "latestFiles": [],
-      "latestFilesIndexes": [],
+      "latestFilesIndexes": [
+        {
+          "gameVersion": "1.20.1",
+          "fileId": 4700001,
+          "filename": "ATM9-0.2.60.zip",
+          "releaseType": 1,
+          "gameVersionTypeId": 75125,
+          "modLoader": 1
+        }
+      ],
       "latestEarlyAccessFilesIndexes": [],
       "dateCreated": "2019-04-30T02:33:52.07Z",
       "dateModified": "2026-08-15T10:02:11.5Z",

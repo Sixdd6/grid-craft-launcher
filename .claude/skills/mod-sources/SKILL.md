@@ -125,6 +125,16 @@ with CurseForge only when a key was found; the list is cached on the `Launcher`,
   `downloadUrl` may be null. `CurseForge::mod_files` and `CurseForge::pack_files` both call
   this; `pack_files` skips the loader filter, since a pack states its loader in
   `manifest.json`, not in a file's `gameVersions`.
+- Newest file per target: a search hit's `latestFilesIndexes` maps onto
+  `SearchHit.latest_files: Vec<LatestFileIndex { game_version, loader: Option<u32>, file_id }>`,
+  so a caller can name the newest file for a Minecraft version and loader without a second
+  request. `loader` is the `modLoaderType` id (Forge 1, Fabric 4, Quilt 5, NeoForge 6), `None`
+  on an entry with no `modLoader`. Modrinth has no comparable field, so a Modrinth hit's
+  `latest_files` is always empty and the caller lists versions instead. **VERIFY: the entry
+  shape (`gameVersion`, `modLoader`, `fileId`) is taken from the public docs; no
+  `CURSEFORGE_API_KEY` on this machine, so the `latestFilesIndexes` array in
+  `tests/fixtures/curseforge/search_mods.json` was written by hand and is unconfirmed against a
+  live response.** An entry the index lacks means a fallback to the files call, never an error.
 - Batch: `POST /v1/mods/files { fileIds }` (`CurseForge::files_batch`) and
   `POST /v1/mods { modIds }` (`CurseForge::mods_batch`), both chunked by `PAGE_SIZE`. An id the
   server does not know is dropped, not an error.

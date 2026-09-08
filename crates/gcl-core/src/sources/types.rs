@@ -98,6 +98,25 @@ pub struct SearchHit {
     pub icon_url: Option<String>,
     /// Browser link to the project's page at the source.
     pub page_url: String,
+    /// Newest file per Minecraft version and loader, when the source ships one with the hit.
+    ///
+    /// CurseForge sends `latestFilesIndexes` with every search hit, so a caller can name the
+    /// newest file for a target without a second request. Modrinth has no comparable field,
+    /// so a Modrinth hit always leaves this empty and the caller lists versions instead.
+    pub latest_files: Vec<LatestFileIndex>,
+}
+
+/// One entry of a search hit's newest-file index: a file id for one Minecraft version and loader.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LatestFileIndex {
+    /// Minecraft version this file targets.
+    pub game_version: String,
+    /// Source loader id, `None` when the file names no loader.
+    ///
+    /// CurseForge numbers them: Forge 1, Fabric 4, Quilt 5, NeoForge 6.
+    pub loader: Option<u32>,
+    /// File id at the source, as a version id.
+    pub file_id: String,
 }
 
 /// One page of search results.

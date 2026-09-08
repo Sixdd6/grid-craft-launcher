@@ -11,8 +11,9 @@ pub mod richtext;
 pub mod types;
 
 pub use types::{
-    ContentKind, Dependency, DependencyKind, Project, ReleaseKind, SearchHit, SearchPage,
-    SearchQuery, SourceId, Version, VersionFile, VersionFilter, pack_page_url, page_url,
+    ContentKind, Dependency, DependencyKind, LatestFileIndex, Project, ReleaseKind, SearchHit,
+    SearchPage, SearchQuery, SourceId, Version, VersionFile, VersionFilter, pack_page_url,
+    page_url,
 };
 
 use async_trait::async_trait;

@@ -17,8 +17,9 @@ use crate::http::HttpClient;
 use crate::instances::model::Loader;
 
 use super::{
-    ContentKind, Dependency, DependencyKind, Error, Project, ReleaseKind, SearchHit, SearchPage,
-    SearchQuery, Source, SourceId, Version, VersionFile, VersionFilter, pack_page_url, page_url,
+    ContentKind, Dependency, DependencyKind, Error, LatestFileIndex, Project, ReleaseKind,
+    SearchHit, SearchPage, SearchQuery, Source, SourceId, Version, VersionFile, VersionFilter,
+    pack_page_url, page_url,
 };
 
 /// Production base URL for the CurseForge Core API.
@@ -439,6 +440,7 @@ impl Source for CurseForge {
                     kind,
                     is_pack: false,
                     downloads: m.download_count,
+                    latest_files: latest_file_indexes(&m.latest_files_indexes),
                     icon_url: m.logo.and_then(|l| l.thumbnail_url),
                     slug: m.slug,
                 })
@@ -496,6 +498,7 @@ impl Source for CurseForge {
                 kind: ContentKind::Mod,
                 is_pack: true,
                 downloads: m.download_count,
+                latest_files: latest_file_indexes(&m.latest_files_indexes),
                 icon_url: m.logo.and_then(|l| l.thumbnail_url),
                 slug: m.slug,
             })
@@ -830,6 +833,30 @@ struct RawMod {
     logo: Option<RawLogo>,
     #[serde(default)]
     links: Option<RawLinks>,
+    #[serde(default)]
+    latest_files_indexes: Vec<RawLatestFileIndex>,
+}
+
+/// One entry of a mod's `latestFilesIndexes`: the newest file for one game version and loader.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawLatestFileIndex {
+    game_version: String,
+    /// Forge 1, Fabric 4, Quilt 5, NeoForge 6. Missing on a file that names no loader.
+    #[serde(default)]
+    mod_loader: Option<u8>,
+    file_id: u32,
+}
+
+/// Maps a mod's raw newest-file index onto the shared [`LatestFileIndex`] shape.
+fn latest_file_indexes(raw: &[RawLatestFileIndex]) -> Vec<LatestFileIndex> {
+    raw.iter()
+        .map(|i| LatestFileIndex {
+            game_version: i.game_version.clone(),
+            loader: i.mod_loader.map(u32::from),
+            file_id: i.file_id.to_string(),
+        })
+        .collect()
 }
 
 /// One author of a mod.
