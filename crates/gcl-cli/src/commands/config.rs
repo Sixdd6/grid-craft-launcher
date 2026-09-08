@@ -7,8 +7,10 @@ use anyhow::{Result, bail};
 use clap::Subcommand;
 use gcl_core::Launcher;
 use gcl_core::config::Config;
+use gcl_core::instances::model::GcPreset;
 use serde::Serialize;
 
+use crate::commands::GcPresetArg;
 use crate::output::{Format, print_json};
 
 /// Subcommands under `gcl config`.
@@ -21,7 +23,10 @@ pub enum ConfigCommand {
         /// Directory to use as the app root.
         path: PathBuf,
     },
-    /// Change the default JVM heap bounds.
+    /// Change the default JVM heap bounds and garbage collector preset.
+    ///
+    /// The preset seeds a new instance's own `jvm.gc` when it is created. It is not read
+    /// again at launch: change an existing instance with `gcl instance jvm <slug> --gc`.
     SetJvm {
         /// Minimum heap size in MiB.
         #[arg(long)]
@@ -29,6 +34,9 @@ pub enum ConfigCommand {
         /// Maximum heap size in MiB.
         #[arg(long)]
         max: Option<u32>,
+        /// Garbage collector preset new instances start with.
+        #[arg(long, value_enum)]
+        gc: Option<GcPresetArg>,
     },
 }
 
@@ -48,6 +56,7 @@ struct RedactedConfig {
 struct RedactedJvm {
     min_mib: u32,
     max_mib: u32,
+    gc: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     java_path: Option<String>,
 }
@@ -68,6 +77,7 @@ impl RedactedConfig {
             jvm: RedactedJvm {
                 min_mib: config.jvm.min_mib,
                 max_mib: config.jvm.max_mib,
+                gc: config.jvm.gc.to_string(),
                 java_path: config
                     .jvm
                     .java_path
@@ -120,13 +130,17 @@ pub fn run(launcher: &mut Launcher, format: Format, command: ConfigCommand) -> R
                 }
             }
         }
-        ConfigCommand::SetJvm { min, max } => {
-            if min.is_none() && max.is_none() {
-                bail!("set-jvm needs --min, --max, or both");
+        ConfigCommand::SetJvm { min, max, gc } => {
+            if min.is_none() && max.is_none() && gc.is_none() {
+                bail!("set-jvm needs at least one of --min, --max, or --gc");
             }
-            let (min_mib, max_mib) = {
+            let (min_mib, max_mib, preset) = {
                 let jvm = &launcher.config().jvm;
-                (min.unwrap_or(jvm.min_mib), max.unwrap_or(jvm.max_mib))
+                (
+                    min.unwrap_or(jvm.min_mib),
+                    max.unwrap_or(jvm.max_mib),
+                    gc.map_or(jvm.gc, GcPreset::from),
+                )
             };
             if min_mib > max_mib {
                 bail!("min heap {min_mib} MiB is above max heap {max_mib} MiB");
@@ -134,13 +148,16 @@ pub fn run(launcher: &mut Launcher, format: Format, command: ConfigCommand) -> R
             launcher.update_config(|config| {
                 config.jvm.min_mib = min_mib;
                 config.jvm.max_mib = max_mib;
+                config.jvm.gc = preset;
             })?;
             match format {
-                Format::Json => {
-                    print_json(&serde_json::json!({ "min_mib": min_mib, "max_mib": max_mib }))
-                }
+                Format::Json => print_json(&serde_json::json!({
+                    "min_mib": min_mib,
+                    "max_mib": max_mib,
+                    "gc": preset.to_string(),
+                })),
                 Format::Text => {
-                    println!("jvm min_mib = {min_mib}, max_mib = {max_mib}");
+                    println!("jvm min_mib = {min_mib}, max_mib = {max_mib}, gc = {preset}");
                     Ok(())
                 }
             }
@@ -159,6 +176,16 @@ mod tests {
         let text = toml::to_string_pretty(&RedactedConfig::new(&config)).expect("serialize");
         assert!(text.contains("curseforge_api_key = \"<set>\""), "{text}");
         assert!(!text.contains("super-secret"), "{text}");
+    }
+
+    #[test]
+    fn the_printed_config_names_the_default_gc_preset() {
+        let mut config = Config::default();
+        let text = toml::to_string_pretty(&RedactedConfig::new(&config)).expect("serialize");
+        assert!(text.contains("gc = \"default\""), "{text}");
+        config.jvm.gc = GcPreset::ZgcGenerational;
+        let text = toml::to_string_pretty(&RedactedConfig::new(&config)).expect("serialize");
+        assert!(text.contains("gc = \"zgc_generational\""), "{text}");
     }
 
     #[test]

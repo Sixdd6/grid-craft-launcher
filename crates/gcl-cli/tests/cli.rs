@@ -630,3 +630,183 @@ fn account_remove_of_the_active_account_says_none_is_active() {
         .success()
         .stdout(predicates::str::contains("no active account now"));
 }
+
+// --- Garbage collector presets -------------------------------------------------------
+
+/// A canned `-XX:+PrintFlagsFinal -version` dump: everything but Shenandoah.
+const GC_DUMP: &str = concat!(
+    "openjdk version \"21.0.7\" 2025-04-15 LTS\n",
+    "OpenJDK Runtime Environment Test (build 21.0.7+6-LTS)\n",
+    "     bool UseG1GC        = true   {product} {ergonomic}\n",
+    "     bool UseParallelGC  = false  {product} {default}\n",
+    "     bool UseSerialGC    = false  {product} {default}\n",
+    "     bool UseZGC         = false  {product} {default}\n",
+    "     bool ZGenerational  = false  {product} {default}\n",
+);
+
+/// Writes a stand-in `java` shell script printing [`GC_DUMP`], so no real JVM is needed.
+#[cfg(unix)]
+fn gc_java(dir: &Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let dump = dir.join("printflags.txt");
+    std::fs::write(&dump, GC_DUMP).expect("write the dump");
+    let script = dir.join("gc-java.sh");
+    std::fs::write(&script, format!("#!/bin/sh\ncat {}\n", dump.display()))
+        .expect("write the stand-in java");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    script
+}
+
+/// An instance whose `java_path` is the stand-in java, set through `gcl instance jvm`.
+#[cfg(unix)]
+fn instance_with_gc_java(root: &Path) -> std::path::PathBuf {
+    let java = gc_java(root);
+    gcl(root)
+        .args(["instance", "create", "Test", "--minecraft", "1.20.1"])
+        .assert()
+        .success();
+    gcl(root)
+        .args([
+            "instance",
+            "jvm",
+            "test",
+            "--java-path",
+            &java.display().to_string(),
+        ])
+        .assert()
+        .success();
+    java
+}
+
+#[test]
+fn config_set_jvm_gc_alone_is_saved_and_shown() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    gcl(dir.path())
+        .args(["config", "set-jvm", "--gc", "g1"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("g1"));
+    gcl(dir.path())
+        .args(["config", "show"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("gc = \"g1\""));
+}
+
+#[test]
+fn config_set_jvm_with_no_flag_at_all_still_fails() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    gcl(dir.path())
+        .args(["config", "set-jvm"])
+        .assert()
+        .code(1)
+        .stderr(predicates::str::contains("--gc"));
+}
+
+#[cfg(unix)]
+#[test]
+fn instance_gc_lists_what_the_probed_java_carries() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let java = instance_with_gc_java(dir.path());
+
+    let out = gcl(dir.path())
+        .args(["--json", "instance", "gc", "test"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("stdout is json");
+    assert_eq!(parsed["java_path"], java.display().to_string());
+    assert_eq!(parsed["major"], 21);
+    assert_eq!(parsed["selected"], "default");
+    let tokens: Vec<String> = parsed["presets"]
+        .as_array()
+        .expect("an array")
+        .iter()
+        .map(|row| row["token"].as_str().expect("a token").to_string())
+        .collect();
+    assert!(tokens.contains(&"g1".to_string()), "{tokens:?}");
+    assert!(
+        tokens.contains(&"zgc_generational".to_string()),
+        "{tokens:?}"
+    );
+    assert!(!tokens.contains(&"shenandoah".to_string()), "{tokens:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn instance_jvm_gc_is_saved_and_shown_by_instance_gc() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    instance_with_gc_java(dir.path());
+
+    gcl(dir.path())
+        .args(["instance", "jvm", "test", "--min", "2048", "--gc", "g1"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("g1"));
+
+    let text = std::fs::read_to_string(
+        dir.path()
+            .join("instances")
+            .join("test")
+            .join("instance.toml"),
+    )
+    .expect("instance.toml");
+    assert!(text.contains("gc = \"g1\""), "{text}");
+    assert!(text.contains("min_mib = 2048"), "{text}");
+
+    gcl(dir.path())
+        .args(["instance", "gc", "test"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("selected: g1"));
+}
+
+#[cfg(unix)]
+#[test]
+fn instance_jvm_rejects_a_preset_the_java_lacks_and_writes_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    instance_with_gc_java(dir.path());
+    let toml_path = dir
+        .path()
+        .join("instances")
+        .join("test")
+        .join("instance.toml");
+    let before = std::fs::read_to_string(&toml_path).expect("instance.toml");
+
+    gcl(dir.path())
+        .args([
+            "instance",
+            "jvm",
+            "test",
+            "--min",
+            "2048",
+            "--gc",
+            "shenandoah",
+        ])
+        .assert()
+        .code(1)
+        .stderr(
+            predicates::str::contains("shenandoah").and(predicates::str::contains(
+                "supported: default, serial, parallel, g1",
+            )),
+        );
+
+    let after = std::fs::read_to_string(&toml_path).expect("instance.toml");
+    assert_eq!(before, after, "a refused preset still wrote instance.toml");
+}
+
+#[test]
+fn instance_jvm_rejects_a_gc_token_that_names_no_preset() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    gcl(dir.path())
+        .args(["instance", "create", "Test", "--minecraft", "1.20.1"])
+        .assert()
+        .success();
+    gcl(dir.path())
+        .args(["instance", "jvm", "test", "--gc", "nonsense"])
+        .assert()
+        .code(2)
+        .stderr(predicates::str::contains("zgc_generational"));
+}
