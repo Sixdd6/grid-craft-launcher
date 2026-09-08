@@ -114,6 +114,12 @@ pub struct Mocks {
     /// Make the mock token endpoint answer `authorization_pending` for good, so a sign-in
     /// waits until something cancels it. Only read when `msa` is set.
     pub msa_pending: bool,
+    /// Mount the details endpoints the project screen needs on top of `modrinth`: a second,
+    /// older version of the mod, each version with a file of its own.
+    ///
+    /// Off, the version list holds only the newest version, which is what the content flows
+    /// expect from an add that names no version.
+    pub project: bool,
     /// Add an offline account before the window is built.
     ///
     /// Every flow that launches the game needs one; the accounts flow starts from an empty
@@ -134,6 +140,16 @@ impl Mocks {
     pub fn modrinth() -> Mocks {
         Mocks {
             modrinth: true,
+            player: true,
+            ..Mocks::default()
+        }
+    }
+
+    /// What the project details flow wants: the above, with the second version mounted.
+    pub fn project() -> Mocks {
+        Mocks {
+            modrinth: true,
+            project: true,
             player: true,
             ..Mocks::default()
         }
@@ -176,7 +192,7 @@ impl TestApp {
             mock_vanilla(&server, MC).await;
             mock_fabric(&server).await;
             if mocks.modrinth {
-                mock_modrinth(&server).await;
+                mock_modrinth(&server, mocks.project).await;
             }
             if mocks.msa {
                 mock_msa(&server, mocks.msa_pending).await;
@@ -213,7 +229,11 @@ impl TestApp {
             .with_secret_store(Box::new(MemoryStore::new()))
             // A modpack may only fetch its files from the hosts the mrpack specification
             // names, and the mock server is not one of them.
-            .with_pack_hosts(vec!["127.0.0.1".to_string(), "localhost".to_string()]);
+            .with_pack_hosts(vec!["127.0.0.1".to_string(), "localhost".to_string()])
+            // A project icon may only be fetched from a source's own CDN, and the mock
+            // server is not one of those either. Without this the search rows' icons would
+            // be fetched from the real `cdn.modrinth.com` the fixture names.
+            .with_icon_hosts(vec!["127.0.0.1".to_string(), "localhost".to_string()]);
 
         let java = write_fake_java(dir.path());
         launcher
@@ -855,12 +875,12 @@ async fn mock_fabric(server: &MockServer) {
 /// only a modpack search asks for `project_type:modpack`, which reaches the query string
 /// percent-encoded as [`MODPACK_FACET`]. The matchers are opposites, so the order they are
 /// mounted in cannot decide which one answers.
-async fn mock_modrinth(server: &MockServer) {
+async fn mock_modrinth(server: &MockServer, project: bool) {
     let base = server.uri();
     Mock::given(method("GET"))
         .and(path_matcher("/search"))
         .and(|req: &wiremock::Request| !query_of(req).contains(MODPACK_FACET))
-        .respond_with(ResponseTemplate::new(200).set_body_string(MODRINTH_SEARCH))
+        .respond_with(ResponseTemplate::new(200).set_body_string(mod_search(&base)))
         .mount(server)
         .await;
     Mock::given(method("GET"))
@@ -873,16 +893,18 @@ async fn mock_modrinth(server: &MockServer) {
     serve(
         server,
         &format!("/project/{MOD_PROJECT}"),
-        MODRINTH_PROJECT.as_bytes().to_vec(),
+        mod_project(&base).into_bytes(),
     )
     .await;
     serve(
         server,
         &format!("/project/{MOD_PROJECT}/version"),
-        mod_versions(&base).into_bytes(),
+        mod_versions(&base, project).into_bytes(),
     )
     .await;
     serve(server, MOD_FILE_PATH, MOD_JAR.to_vec()).await;
+    serve(server, OLD_MOD_FILE_PATH, OLD_MOD_JAR.to_vec()).await;
+    serve(server, ICON_PATH, ICON_PNG.to_vec()).await;
 
     let pack = mrpack_bytes(&base, PACK_NAME);
     serve(
@@ -915,6 +937,56 @@ pub const MOD_TITLE: &str = "Sodium";
 
 /// Bytes the mock serves as that mod's jar.
 const MOD_JAR: &[u8] = b"synthetic sodium jar";
+
+/// Bytes the mock serves as the older version's jar.
+const OLD_MOD_JAR: &[u8] = b"synthetic older sodium jar";
+
+/// Path the mock serves those bytes at.
+const OLD_MOD_FILE_PATH: &str = "/files/sodium-old.jar";
+
+/// File name the older version's file carries, which is what lands in `mods/`.
+pub const OLD_MOD_FILE_NAME: &str = "sodium-fabric-0.5.12-beta.2+mc1.20.1.jar";
+
+/// Version number of the newest version of that mod, as the versions tab shows it.
+pub const MOD_VERSION: &str = "mc1.20.1-0.5.13-fabric";
+
+/// Version number of the older one.
+pub const OLD_MOD_VERSION: &str = "mc1.20.1-0.5.12-beta.2-fabric";
+
+/// Path the mock serves the project icon at.
+const ICON_PATH: &str = "/icons/sodium.png";
+
+/// A 2x2 RGBA PNG, the smallest thing the icon decoder can answer with.
+const ICON_PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x08, 0x06, 0x00, 0x00, 0x00, 0x72, 0xb6, 0x0d,
+    0x24, 0x00, 0x00, 0x00, 0x17, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0xf0,
+    0x1f, 0x0c, 0x19, 0x18, 0xfe, 0xff, 0xff, 0xff, 0x9f, 0xe1, 0x3f, 0x00, 0x47, 0xca, 0x08, 0xf8,
+    0xfd, 0x5d, 0xa3, 0xca, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+/// The description the mock serves for that project.
+///
+/// It carries every shape the description tab has to answer for: a heading, a paragraph, a
+/// bullet list, and an `<img>` tag that must not reach a block.
+const MOD_BODY: &str = "\
+# Sodium
+
+A rendering engine that improves frame rates.
+
+<img src=\"https://cdn.modrinth.com/data/AANobbMI/banner.png\" alt=\"banner\">
+
+## Features
+
+- Significantly improved frame rates
+- Much better frame pacing
+";
+
+/// The heading text the description tab must show first.
+pub const MOD_BODY_HEADING: &str = "Sodium";
+
+/// The first bullet the description tab must show.
+pub const MOD_BODY_BULLET: &str = "Significantly improved frame rates";
 
 /// Path the mock serves those bytes at.
 const MOD_FILE_PATH: &str = "/files/sodium.jar";
@@ -957,27 +1029,65 @@ const MODRINTH_VERSIONS: &str =
 /// The recorded version list, pointed at the mock host.
 ///
 /// The recorded file names Modrinth's CDN and the real jar's hash, neither of which a test
-/// can reach, so the one primary file is rewritten to the bytes this mock serves. Everything
-/// else — the version id, the Minecraft versions, the loaders — is the fixture's own.
-fn mod_versions(base: &str) -> String {
+/// can reach, so each version's one primary file is rewritten to bytes this mock serves.
+/// Everything else — the version id, the Minecraft versions, the loaders — is the fixture's
+/// own. With `both` unset only the newest version is served, which is what an add that names
+/// no version installs; the project flow needs the older one as well, to install over.
+fn mod_versions(base: &str, both: bool) -> String {
     let mut versions: serde_json::Value =
         serde_json::from_str(MODRINTH_VERSIONS).expect("read the recorded version list");
-    let first = versions
+    let list = versions
         .as_array_mut()
-        .and_then(|list| {
-            list.truncate(1);
-            list.first_mut()
-        })
-        .expect("the fixture has a version");
-    first["files"] = serde_json::json!([{
-        "hashes": { "sha1": sha1_hex(MOD_JAR) },
-        "url": format!("{base}{MOD_FILE_PATH}"),
-        "filename": MOD_FILE_NAME,
-        "primary": true,
-        "size": MOD_JAR.len(),
-        "file_type": serde_json::Value::Null,
-    }]);
+        .expect("the recorded version list is an array");
+    list.truncate(if both { 2 } else { 1 });
+    assert_eq!(
+        list.len(),
+        if both { 2 } else { 1 },
+        "the recorded version list is shorter than the flows need"
+    );
+    list[0]["files"] = one_file(base, MOD_FILE_PATH, MOD_FILE_NAME, MOD_JAR);
+    if both {
+        list[1]["files"] = one_file(base, OLD_MOD_FILE_PATH, OLD_MOD_FILE_NAME, OLD_MOD_JAR);
+    }
     versions.to_string()
+}
+
+/// One primary file, served by the mock host at `path`, with the sha1 of the bytes it serves.
+fn one_file(base: &str, path: &str, name: &str, bytes: &[u8]) -> serde_json::Value {
+    serde_json::json!([{
+        "hashes": { "sha1": sha1_hex(bytes) },
+        "url": format!("{base}{path}"),
+        "filename": name,
+        "primary": true,
+        "size": bytes.len(),
+        "file_type": serde_json::Value::Null,
+    }])
+}
+
+/// The recorded search page, with every hit's icon pointed at the mock host.
+///
+/// The recording names `cdn.modrinth.com`, which is on the icon allowlist, so a browser flow
+/// left as recorded would fetch real icons over the real internet.
+fn mod_search(base: &str) -> String {
+    let mut found: serde_json::Value =
+        serde_json::from_str(MODRINTH_SEARCH).expect("read the recorded search page");
+    let hits = found["hits"]
+        .as_array_mut()
+        .expect("the recorded search page has hits");
+    for hit in hits.iter_mut() {
+        hit["icon_url"] = serde_json::json!(format!("{base}{ICON_PATH}"));
+    }
+    found.to_string()
+}
+
+/// The recorded project, with its icon pointed at the mock host and a description written
+/// for the flow: a heading, a paragraph, an `<img>` no block may carry, and a bullet list.
+fn mod_project(base: &str) -> String {
+    let mut project: serde_json::Value =
+        serde_json::from_str(MODRINTH_PROJECT).expect("read the recorded project");
+    project["icon_url"] = serde_json::json!(format!("{base}{ICON_PATH}"));
+    project["body"] = serde_json::json!(MOD_BODY);
+    project.to_string()
 }
 
 /// One modpack version whose primary file is the synthetic `.mrpack` the mock serves.
