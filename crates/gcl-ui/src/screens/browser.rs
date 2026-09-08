@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use gcl_core::content::{AddRequest, DependencyConflict};
 use gcl_core::instances::Instance;
 use gcl_core::instances::model::{ContentKind, Loader};
-use gcl_core::launcher::VersionTarget;
+use gcl_core::launcher::{LatestVersion, VersionTarget};
 use gcl_core::sources::{SearchHit, SearchQuery, SourceId};
 use slint::{
     ComponentHandle, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
@@ -657,8 +657,10 @@ fn add(bridge: &Bridge, shared: &Shared, project_id: &str, kind: &str, world: Op
 /// `version` pins the file Update sends: `Some(latest_id)`, straight from the row, so the
 /// newest version resolved for the target is the one that replaces what is there. It is
 /// `None` for a plain Add, which installs whatever `content::add` picks as newest on its
-/// own. On success with a `version` given, the row for `project_id` is refreshed so its
-/// state catches up with the file that just replaced it.
+/// own. Either way, the row for `project_id` is refreshed on success, so its state catches
+/// up with the file that just landed: an Add leaves the instance holding that project just
+/// as much as an Update does, and a row still offering "Add" for a mod that is now
+/// installed sends the next press into a no-op.
 fn install(
     bridge: &Bridge,
     shared: &Shared,
@@ -680,9 +682,9 @@ fn install(
         state.set_status("Pick an instance to add to first".into());
         return;
     }
-    let request = add_request(source, project_id, kind, world, version.clone());
+    let request = add_request(source, project_id, kind, world, version);
 
-    let refresh = version.map(|_| (bridge.clone(), shared.clone(), project_id.to_string()));
+    let refresh = (bridge.clone(), shared.clone(), project_id.to_string());
     state.set_loading(true);
     state.set_status("Installing\u{2026}".into());
     run_reporting(
@@ -698,9 +700,8 @@ fn install(
                 warn(window, &conflict_note(&outcome.conflicts));
             }
             state.set_status(format!("installed {}", outcome.installed.len()).into());
-            if let Some((bridge, shared, project_id)) = refresh {
-                refresh_row(&bridge, &shared, &project_id);
-            }
+            let (bridge, shared, project_id) = refresh;
+            refresh_row(&bridge, &shared, &project_id);
         },
     );
 }
@@ -1099,12 +1100,22 @@ fn resolve_target(
 }
 
 /// Resolves every hit's newest version for the search target, then, when there is a target
-/// instance, whether it is installed there and whether that copy is behind it. Patches the
-/// matching row (by `project_id`, so this also serves [`refresh_row`]'s one-row refresh) in
-/// place once the job answers.
+/// instance, whether it is installed there and whether that copy is behind it. Paints each
+/// row (found by `project_id`, so this also serves [`refresh_row`]'s one-row refresh) as its
+/// own answer arrives, rather than holding the whole page back for the slowest hit.
 ///
-/// Guarded by `generation` the same way `fetch_icons` is guarded by `icon_generation`: a
-/// page that a newer search or a target change has since replaced must not paint over it.
+/// Two threads, because one cannot do both halves. `latest_versions_each` calls back from
+/// inside the launcher's runtime, and [`gcl_core::Launcher::install_state`] blocks on that
+/// same runtime, so calling it from the callback would panic. The callback therefore only
+/// sends the answer down a channel; the painter thread it is read on owns its own
+/// `Arc<Launcher>`, asks for the install state there, and posts one
+/// `upgrade_in_event_loop` per answer. The channel closes when `latest_versions_each`
+/// returns and drops the callback, which is what ends the painter, and the job waits for it
+/// so the "Latest versions" line is written once every row has been painted.
+///
+/// Every posted closure is guarded by `generation`, the same way `fetch_icons` is guarded by
+/// `icon_generation`: a page that a newer search or a target change has since replaced must
+/// not paint over it.
 fn fetch_latest(bridge: &Bridge, shared: &Shared, generation: u64, hits: &[SearchHit]) {
     if hits.is_empty() {
         return;
@@ -1121,67 +1132,144 @@ fn fetch_latest(bridge: &Bridge, shared: &Shared, generation: u64, hits: &[Searc
     let fallback_loader = parse_loader(state.get_loader().as_str()).unwrap_or(Loader::None);
     let hits = hits.to_vec();
 
+    let painter_launcher = Arc::clone(bridge.launcher());
+    let weak = bridge.weak().clone();
     let shared = shared.clone();
+    let painter_slug = target_slug.clone();
     bridge.run(
         "Latest versions",
         move |launcher| {
             let target =
                 resolve_target(launcher, &target_slug, fallback_minecraft, fallback_loader);
-            let latest = launcher.latest_versions(source, &hits, &target)?;
-            let updates = latest
-                .into_iter()
-                .map(|answer| {
-                    let install_state = if target_slug.is_empty() {
-                        None
-                    } else {
-                        answer.version.as_ref().and_then(|version| {
-                            launcher
-                                .install_state(
-                                    &target_slug,
-                                    source,
-                                    &answer.project_id,
-                                    &target,
-                                    version,
-                                )
-                                .ok()
-                        })
-                    };
-                    let fields = latest_row_fields(&answer, install_state.as_ref(), &target);
-                    (answer.project_id, fields)
+            let (answers, painted) = std::sync::mpsc::channel::<LatestVersion>();
+            let painter = {
+                let target = target.clone();
+                std::thread::spawn(move || {
+                    for answer in painted {
+                        paint_answer(
+                            &painter_launcher,
+                            &weak,
+                            &shared,
+                            generation,
+                            source,
+                            &painter_slug,
+                            &target,
+                            answer,
+                        );
+                    }
                 })
-                .collect::<Vec<_>>();
-            Ok(updates)
-        },
-        move |window, updates: Vec<(String, (String, String, String, String))>| {
-            if shared.latest_generation.load(Ordering::SeqCst) != generation {
-                return;
+            };
+            let resolved = launcher.latest_versions_each(source, &hits, &target, move |answer| {
+                // A closed channel means the window went away; the answers are moot.
+                let _ = answers.send(answer);
+            });
+            // The callback, and with it the sending half, is dropped by the call above, so
+            // the painter's loop has ended or is about to.
+            if painter.join().is_err() {
+                tracing::warn!("the latest-version painter thread ended badly");
             }
-            let state = window.global::<BrowserState>();
-            let mut rows: Vec<SearchRow> = state.get_rows().iter().collect();
-            for (project_id, (number, id, installed_number, row_state)) in updates {
-                let Some(row) = rows.iter_mut().find(|row| row.project_id == project_id) else {
-                    continue;
-                };
-                row.latest_number = number.into();
-                row.latest_id = id.into();
-                row.installed_number = installed_number.into();
-                row.state = row_state.into();
-            }
-            state.set_rows(ModelRc::new(VecModel::from(rows)));
+            resolved
         },
+        |_window, ()| {},
     );
+}
+
+/// Asks for one answer's install state and paints it onto its row.
+///
+/// Runs on the painter thread, off both the UI thread and the launcher's runtime. The
+/// install state is only asked for when a target instance is picked and the hit resolved to
+/// a version; with no version there is nothing to compare against, and
+/// [`gcl_core::launcher::InstallState::Unknown`] is what a failed lookup answers, which the
+/// row shows as "could not check" rather than as "checking" forever.
+#[allow(clippy::too_many_arguments)]
+fn paint_answer(
+    launcher: &gcl_core::Launcher,
+    weak: &slint::Weak<AppWindow>,
+    shared: &Shared,
+    generation: u64,
+    source: SourceId,
+    target_slug: &str,
+    target: &VersionTarget,
+    answer: LatestVersion,
+) {
+    let install_state = match (target_slug.is_empty(), answer.version.as_ref()) {
+        (false, Some(version)) => launcher
+            .install_state(target_slug, source, &answer.project_id, target, version)
+            .ok(),
+        _ => None,
+    };
+    let fields = latest_row_fields(&answer, install_state.as_ref(), target);
+    let project_id = answer.project_id;
+    let shared = shared.clone();
+    let _ = weak.upgrade_in_event_loop(move |window| {
+        // A newer search or target change has replaced these rows; this answer is moot.
+        if shared.latest_generation.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        set_row_fields(&window, &project_id, fields);
+    });
+}
+
+/// Writes one row's four latest-version fields in place, leaving every other row alone.
+///
+/// `set_row_data` on the model the screen is already showing, rather than a fresh model
+/// through `set_rows`: a whole new model per answer would redraw and re-lay-out the list
+/// twenty times a page, and the row's own icon, which a second job is filling in at the same
+/// time, would be read from a copy taken before that job's last write.
+fn set_row_fields(
+    window: &AppWindow,
+    project_id: &str,
+    (number, id, installed_number, row_state): (String, String, String, String),
+) {
+    let rows = window.global::<BrowserState>().get_rows();
+    let Some((index, mut row)) = (0..rows.row_count())
+        .filter_map(|index| rows.row_data(index).map(|row| (index, row)))
+        .find(|(_, row)| row.project_id == project_id)
+    else {
+        return;
+    };
+    row.latest_number = number.into();
+    row.latest_id = id.into();
+    row.installed_number = installed_number.into();
+    row.state = row_state.into();
+    rows.set_row_data(index, row);
 }
 
 /// Re-runs the latest-version job for the page already on screen: the hits stay the same,
 /// but what each one's install state compares against does not, so this always bumps
 /// `latest_generation` rather than reusing the one the last search stamped.
+///
+/// Every row goes back to "Checking…" first. What is on screen was answered about the
+/// instance the user has just left — a row reading "Installed: 0.6.0" for an instance that
+/// has none of it is worse than a row saying it does not know yet — and the new target may
+/// run another Minecraft version or another loader, so the latest version itself can change
+/// too, not only the install state.
 fn refresh_latest(bridge: &Bridge, shared: &Shared) {
     let hits = shared.last_hits();
     if hits.is_empty() {
         return;
     }
+    if let Some(window) = bridge.weak().upgrade() {
+        clear_row_states(&window);
+    }
     let generation = shared.latest_generation.fetch_add(1, Ordering::SeqCst) + 1;
     fetch_latest(bridge, shared, generation, &hits);
+}
+
+/// Puts every row's four latest-version fields back to what `models::search_row` starts them
+/// at, so the page reads "Checking…" again until the answers for the new target land.
+fn clear_row_states(window: &AppWindow) {
+    let rows = window.global::<BrowserState>().get_rows();
+    for index in 0..rows.row_count() {
+        let Some(mut row) = rows.row_data(index) else {
+            continue;
+        };
+        row.latest_number = SharedString::new();
+        row.latest_id = SharedString::new();
+        row.installed_number = SharedString::new();
+        row.state = "unknown".into();
+        rows.set_row_data(index, row);
+    }
 }
 
 /// Refreshes one row after Update has installed a new file for it. Runs on the generation

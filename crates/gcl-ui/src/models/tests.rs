@@ -541,3 +541,40 @@ fn latest_row_fields_of_unknown_install_state_reads_unknown_with_no_installed_nu
     assert_eq!(installed, "");
     assert_eq!(state, "unknown");
 }
+
+/// A row starts on the same `"unknown"` state that a failed install-state lookup answers
+/// with, so the latest number is the only thing that tells the two apart —
+/// `browser.slint`'s `row_state_text` reads "Checking…" for the first and "Could not check"
+/// for the second on exactly this difference.
+#[test]
+fn a_fresh_row_is_unknown_with_no_latest_number_unlike_a_failed_lookup() {
+    let hit = SearchHit {
+        source: SourceId::Modrinth,
+        project_id: "AANobbMI".into(),
+        slug: "sodium".into(),
+        title: "Sodium".into(),
+        description: "A rendering engine".into(),
+        author: "jellysquid3".into(),
+        kind: ContentKind::Mod,
+        is_pack: false,
+        downloads: 12_345,
+        icon_url: None,
+        page_url: "https://modrinth.com/mod/sodium".into(),
+        latest_files: vec![],
+    };
+    let row = search_row(&hit);
+    assert_eq!(row.state.as_str(), "unknown");
+    assert_eq!(row.latest_number.as_str(), "");
+
+    let latest = LatestVersion {
+        project_id: "sodium".into(),
+        version: Some(version_fixture("v2", "0.5.9")),
+    };
+    let (number, _, _, state) =
+        latest_row_fields(&latest, Some(&InstallState::Unknown), &a_target());
+    assert_eq!(state, "unknown");
+    assert_eq!(
+        number, "0.5.9",
+        "a failed lookup still knows the latest version"
+    );
+}

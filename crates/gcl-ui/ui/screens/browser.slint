@@ -231,9 +231,15 @@ export component BrowserScreen inherits Rectangle {
     // latest-version job has not answered for this row yet, "No version for …" when nothing
     // at the source fits the target, "Installed: <n>" when the installed copy is the latest
     // one, and the latest line — with a "↑" in front when the installed copy is older.
+    //
+    // A row starts at state "unknown" with no latest number, and that is the one that reads
+    // "Checking…". `InstallState::Unknown` — the install-state lookup itself failed — comes
+    // back as "unknown" too, but with the latest version already resolved, so the number is
+    // what tells the two apart. Without that a row whose lookup failed would say "Checking…"
+    // for as long as it is on screen.
     function row_state_text(state: string, latest_number: string, installed_number: string) -> string {
         if (state == "unknown") {
-            return "Checking…";
+            return latest_number == "" ? "Checking…" : "Could not check";
         }
         if (state == "none") {
             return root.target_label() != ""

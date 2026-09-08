@@ -966,6 +966,7 @@ async fn mock_modrinth(server: &MockServer, project: bool) {
         mod_versions(&base, project).into_bytes(),
     )
     .await;
+    mock_extra_projects(server, &base).await;
     serve(server, MOD_FILE_PATH, MOD_JAR.to_vec()).await;
     serve(server, OLD_MOD_FILE_PATH, OLD_MOD_JAR.to_vec()).await;
     serve(server, ICON_PATH, ICON_PNG.to_vec()).await;
@@ -1194,6 +1195,169 @@ pub const MOD_FILE_NAME: &str = "sodium-fabric-0.5.13+mc1.20.1.jar";
 
 /// That file name without its extension, which is what the content list shows.
 pub const MOD_FILE_STEM: &str = "sodium-fabric-0.5.13+mc1.20.1";
+
+/// The second hit of the recorded search page, which the latest-version flow finds installed
+/// at a version older than the newest one — the row that offers Update.
+pub const OLDER_PROJECT: &str = "PtjYWJkn";
+
+/// Title the mock gives [`OLDER_PROJECT`]'s project document.
+pub const OLDER_TITLE: &str = "Sodium Extra";
+
+/// Version id of [`OLDER_PROJECT`]'s newest version, the one Update installs.
+pub const OLDER_LATEST_ID: &str = "extra-new";
+
+/// Its version number, which the row's state line names.
+pub const OLDER_LATEST_NUMBER: &str = "0.6.0";
+
+/// File name that newest version carries, which is what Update leaves in `mods/`.
+pub const OLDER_LATEST_FILE: &str = "sodium-extra-0.6.0.jar";
+
+/// Version id of the copy the flow installs before it searches, which is behind the newest.
+pub const OLDER_INSTALLED_ID: &str = "extra-old";
+
+/// Its version number, which the row's state line names beside the newest one.
+pub const OLDER_INSTALLED_NUMBER: &str = "0.5.0";
+
+/// File name that older version carries, which Update must remove from `mods/`.
+pub const OLDER_INSTALLED_FILE: &str = "sodium-extra-0.5.0.jar";
+
+/// The third hit of the recorded search page, which the same flow finds installed at the
+/// newest version — the row whose button reads a disabled "Installed".
+pub const CURRENT_PROJECT: &str = "Bh37bMuy";
+
+/// Title the mock gives [`CURRENT_PROJECT`]'s project document.
+pub const CURRENT_TITLE: &str = "Reese's Sodium Options";
+
+/// Version id of its one version, which is both the newest and the installed one.
+pub const CURRENT_VERSION_ID: &str = "reeses-only";
+
+/// That version's number, which the row's state line names as installed.
+pub const CURRENT_VERSION_NUMBER: &str = "1.7.0";
+
+/// The file that version carries.
+pub const CURRENT_FILE: &str = "reeses-sodium-options-1.7.0.jar";
+
+/// The three jars the two extra projects' versions point at, one set of bytes each so a
+/// flow can tell which file is in `mods/` by reading it.
+const OLDER_LATEST_JAR: &[u8] = b"synthetic sodium extra 0.6.0 jar";
+const OLDER_INSTALLED_JAR: &[u8] = b"synthetic sodium extra 0.5.0 jar";
+const CURRENT_JAR: &[u8] = b"synthetic reeses sodium options 1.7.0 jar";
+
+/// One Modrinth project document for a hit the recorded fixtures carry no project for.
+///
+/// The recorded search page has three hits, and every one of them is a row the browser asks
+/// the latest version for. Only the first has a recorded project and version list, so the
+/// other two are built here.
+fn extra_project(id: &str, slug: &str, title: &str) -> String {
+    serde_json::json!({
+        "id": id,
+        "slug": slug,
+        "title": title,
+        "description": "A Sodium addon.",
+        "body": format!("# {title}\n"),
+        "project_type": "mod",
+    })
+    .to_string()
+}
+
+/// One Modrinth version for [`MC`] and Fabric, whose one primary file the mock serves.
+fn extra_version(
+    base: &str,
+    project_id: &str,
+    id: &str,
+    number: &str,
+    published: &str,
+    path: &str,
+    file_name: &str,
+    bytes: &[u8],
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": id,
+        "project_id": project_id,
+        "name": number,
+        "version_number": number,
+        "version_type": "release",
+        "date_published": published,
+        "game_versions": [MC],
+        "loaders": ["fabric"],
+        "dependencies": [],
+        "files": one_file(base, path, file_name, bytes),
+    })
+}
+
+/// Where the mock serves each extra jar.
+const OLDER_LATEST_PATH: &str = "/files/sodium-extra-new.jar";
+const OLDER_INSTALLED_PATH: &str = "/files/sodium-extra-old.jar";
+const CURRENT_PATH: &str = "/files/reeses.jar";
+
+/// Serves the project document, the version list, and the jars of the two hits that stand
+/// for "installed, behind the newest" and "installed, up to date".
+///
+/// [`OLDER_PROJECT`] answers with two versions, newest first, so `install_state` can find
+/// the installed one in the same list and compare its publish date. [`CURRENT_PROJECT`]
+/// answers with one.
+async fn mock_extra_projects(server: &MockServer, base: &str) {
+    serve(
+        server,
+        &format!("/project/{OLDER_PROJECT}"),
+        extra_project(OLDER_PROJECT, "sodium-extra", OLDER_TITLE).into_bytes(),
+    )
+    .await;
+    let older = serde_json::Value::Array(vec![
+        extra_version(
+            base,
+            OLDER_PROJECT,
+            OLDER_LATEST_ID,
+            OLDER_LATEST_NUMBER,
+            "2026-02-01T00:00:00Z",
+            OLDER_LATEST_PATH,
+            OLDER_LATEST_FILE,
+            OLDER_LATEST_JAR,
+        ),
+        extra_version(
+            base,
+            OLDER_PROJECT,
+            OLDER_INSTALLED_ID,
+            OLDER_INSTALLED_NUMBER,
+            "2026-01-01T00:00:00Z",
+            OLDER_INSTALLED_PATH,
+            OLDER_INSTALLED_FILE,
+            OLDER_INSTALLED_JAR,
+        ),
+    ]);
+    serve(
+        server,
+        &format!("/project/{OLDER_PROJECT}/version"),
+        older.to_string().into_bytes(),
+    )
+    .await;
+    serve(server, OLDER_LATEST_PATH, OLDER_LATEST_JAR.to_vec()).await;
+    serve(server, OLDER_INSTALLED_PATH, OLDER_INSTALLED_JAR.to_vec()).await;
+
+    serve(
+        server,
+        &format!("/project/{CURRENT_PROJECT}"),
+        extra_project(CURRENT_PROJECT, "reeses-sodium-options", CURRENT_TITLE).into_bytes(),
+    )
+    .await;
+    let current = serde_json::Value::Array(vec![extra_version(
+        base,
+        CURRENT_PROJECT,
+        CURRENT_VERSION_ID,
+        CURRENT_VERSION_NUMBER,
+        "2026-02-01T00:00:00Z",
+        CURRENT_PATH,
+        CURRENT_FILE,
+        CURRENT_JAR,
+    )]);
+    serve(
+        server,
+        &format!("/project/{CURRENT_PROJECT}/version"),
+        current.to_string().into_bytes(),
+    )
+    .await;
+    serve(server, CURRENT_PATH, CURRENT_JAR.to_vec()).await;
+}
 
 /// Project id of the modpack the browser installs. `search_packs.json` names it first.
 pub const PACK_PROJECT: &str = "1KVo5zza";

@@ -17,7 +17,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
+use gcl_core::content::AddRequest;
 use gcl_core::instances::model::Loader;
+use gcl_core::sources::SourceId;
 use gcl_ui::{App, AppWindow, BrowserState, InstanceState, InstancesState, Screen};
 use slint::{ComponentHandle, Model};
 use support::{Mocks, TestApp};
@@ -37,6 +39,14 @@ const PACK_INSTANCE: &str = "Packed";
 /// The name the modpack installed from a file on disk is given.
 const FILE_INSTANCE: &str = "From File";
 
+/// The instance the latest-version sub-flow measures its rows against. It is its own
+/// instance because it starts with content in it, and every sub-flow before it counts the
+/// rows of [`INSTANCE`]'s content list.
+const LATEST_INSTANCE: &str = "Latest Test";
+
+/// Its directory name.
+const LATEST_SLUG: &str = "latest-test";
+
 #[test]
 fn the_browser_adds_content_and_installs_a_modpack() {
     support::init_backend();
@@ -53,6 +63,21 @@ fn the_browser_adds_content_and_installs_a_modpack() {
             &BTreeMap::new(),
         )
         .expect("create the instance the flows add to");
+    // Setup only: a second instance carrying one mod at an older version and one at the
+    // newest, so the browser has all three install states on screen at once. The versions
+    // are pinned, because "install the older one" is what makes the Update row.
+    app.launcher
+        .instances()
+        .create(
+            LATEST_INSTANCE,
+            support::MC,
+            Loader::Fabric,
+            Some(support::FABRIC.to_string()),
+            &BTreeMap::new(),
+        )
+        .expect("create the instance the latest-version flow measures against");
+    add_pinned(&app, support::OLDER_PROJECT, support::OLDER_INSTALLED_ID);
+    add_pinned(&app, support::CURRENT_PROJECT, support::CURRENT_VERSION_ID);
 
     let driver = Rc::clone(&app);
     support::run(async move {
@@ -62,7 +87,24 @@ fn the_browser_adds_content_and_installs_a_modpack() {
         removing_deletes_the_file(app).await;
         installing_a_modpack_from_the_pack_search(app).await;
         installing_a_modpack_from_a_file(app).await;
+        rows_show_the_latest_version_and_what_is_installed(app).await;
     });
+}
+
+/// Installs one project into [`LATEST_SLUG`] at exactly `version`, before any flow runs.
+fn add_pinned(app: &TestApp, project: &str, version: &str) {
+    app.launcher
+        .add_content(
+            LATEST_SLUG,
+            AddRequest {
+                source: SourceId::Modrinth,
+                project: project.to_string(),
+                version: Some(version.to_string()),
+                kind: None,
+                world: None,
+            },
+        )
+        .unwrap_or_else(|err| panic!("install {project} at {version}: {err}"));
 }
 
 /// The names of the instance rows the list is showing.
@@ -517,4 +559,250 @@ async fn wait_for_new_instance(app: &TestApp, name: &str, slug: &str) {
         QUICK,
     )
     .await;
+}
+
+/// (f) Every row says what the newest version for the target instance is, whether that
+/// instance has it, and whether the copy it has is behind; Update replaces the file; and
+/// changing the target instance re-answers all three for the new one.
+///
+/// The three hits of the recorded search page stand for the three answers: the first is not
+/// installed anywhere, the second is installed at an older version, and the third is
+/// installed at the newest one. The setup at the top of this file pinned those two versions.
+async fn rows_show_the_latest_version_and_what_is_installed(app: &TestApp) {
+    // The rail's browser entry, not the detail screen's Add content: only the rail leaves
+    // the target ComboBox on screen, and this flow changes the target with it.
+    app.click("Rail::rail_browser");
+    wait_for_browser(app).await;
+    select_kind(app, "mod");
+    select_target(app, LATEST_INSTANCE).await;
+
+    app.type_into("SearchBox::search_field", "sodium");
+    support::pump();
+    app.click("BrowserScreen::search_button");
+    app.wait_until(
+        "the search results to arrive",
+        |window| row_titles(window).len() == 3,
+        QUICK,
+    )
+    .await;
+    app.wait_until(
+        "every row to answer what its latest version is",
+        |_| !state_texts(app).iter().any(|text| text == CHECKING),
+        QUICK,
+    )
+    .await;
+
+    let latest = |number: &str| format!("Latest for {} fabric: {number}", support::MC);
+    assert_eq!(
+        state_texts(app),
+        vec![
+            latest(support::MOD_VERSION),
+            format!("↑ {}", latest(support::OLDER_LATEST_NUMBER)),
+            format!("Installed: {}", support::CURRENT_VERSION_NUMBER),
+        ],
+        "one row per install state: nothing installed, an older copy, and the newest copy"
+    );
+    assert_eq!(
+        install_labels(app),
+        vec![
+            format!("Add to {LATEST_INSTANCE}"),
+            "Update".to_string(),
+            "Installed".to_string(),
+        ],
+        "and each row's button offers what that state allows"
+    );
+    assert_eq!(
+        app.el_nth("BrowserScreen::row_install", 2)
+            .accessible_enabled(),
+        Some(false),
+        "the row that is already up to date has nothing to press"
+    );
+
+    updating_replaces_the_older_file(app).await;
+    changing_the_target_re_answers_every_row(app).await;
+    adding_leaves_the_row_reading_installed(app).await;
+}
+
+/// (f4) A plain Add answers the same way an Update does: the row it was pressed on says the
+/// instance now has that mod, without another search.
+async fn adding_leaves_the_row_reading_installed(app: &TestApp) {
+    app.click_nth("BrowserScreen::row_install", 1);
+    app.wait_until(
+        "the add to finish and the row to catch up with it",
+        |window| {
+            window
+                .global::<BrowserState>()
+                .get_rows()
+                .iter()
+                .nth(1)
+                .is_some_and(|row| row.state == "installed")
+        },
+        QUICK,
+    )
+    .await;
+    assert_eq!(
+        state_texts(app)[1],
+        format!("Installed: {}", support::OLDER_LATEST_NUMBER),
+        "the row the Add was pressed on reads as installed"
+    );
+    assert_eq!(
+        install_labels(app)[1],
+        "Installed",
+        "and its button has nothing left to offer"
+    );
+    assert!(
+        app.launcher
+            .root()
+            .instance_dir(SLUG)
+            .join(".minecraft")
+            .join("mods")
+            .join(support::OLDER_LATEST_FILE)
+            .is_file(),
+        "the file really did land in the other instance"
+    );
+}
+
+/// The line every search row shows while its latest version has not been resolved yet.
+const CHECKING: &str = "Checking…";
+
+/// The state line under each search row, in row order.
+fn state_texts(app: &TestApp) -> Vec<String> {
+    app.all("BrowserScreen::row_state_text")
+        .iter()
+        .map(|row| {
+            row.accessible_label()
+                .map(|label| label.to_string())
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// The label on each search row's install button, in row order.
+fn install_labels(app: &TestApp) -> Vec<String> {
+    app.all("BrowserScreen::row_install")
+        .iter()
+        .map(|row| {
+            row.accessible_label()
+                .map(|label| label.to_string())
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// Points the kind ComboBox at one kind by name.
+fn select_kind(app: &TestApp, want: &str) {
+    let kinds = app.window.global::<BrowserState>().get_kind_labels();
+    let index = (0..kinds.row_count())
+        .find(|i| kinds.row_data(*i).is_some_and(|label| label == want))
+        .unwrap_or_else(|| panic!("Modrinth offers the {want} kind"));
+    app.select_combo("BrowserScreen::kind_combo", index);
+}
+
+/// Points the target ComboBox at one instance by name and waits for the screen to follow.
+async fn select_target(app: &TestApp, name: &str) {
+    let targets = app.window.global::<BrowserState>().get_target_labels();
+    let index = (0..targets.row_count())
+        .find(|i| targets.row_data(*i).is_some_and(|label| label == name))
+        .unwrap_or_else(|| panic!("`{name}` is one of the browser's targets"));
+    app.select_combo("BrowserScreen::target_combo", index);
+    app.wait_until(
+        &format!("the browser to add to `{name}`"),
+        |window| window.global::<BrowserState>().get_target_name() == name,
+        QUICK,
+    )
+    .await;
+}
+
+/// (f2) Update installs the newest version over the older one: one file in `mods/`, one
+/// entry in `instance.toml`, and a row that now reads as installed.
+async fn updating_replaces_the_older_file(app: &TestApp) {
+    let mods = app
+        .launcher
+        .root()
+        .instance_dir(LATEST_SLUG)
+        .join(".minecraft")
+        .join("mods");
+    assert!(
+        mods.join(support::OLDER_INSTALLED_FILE).is_file(),
+        "the older file is what the setup installed"
+    );
+
+    app.click_nth("BrowserScreen::row_install", 1);
+    app.wait_until(
+        "the update to finish and the row to catch up with it",
+        |window| {
+            window
+                .global::<BrowserState>()
+                .get_rows()
+                .iter()
+                .nth(1)
+                .is_some_and(|row| row.state == "installed")
+        },
+        QUICK,
+    )
+    .await;
+
+    assert!(
+        mods.join(support::OLDER_LATEST_FILE).is_file(),
+        "the newest version's file is in the mods folder"
+    );
+    assert!(
+        !mods.join(support::OLDER_INSTALLED_FILE).exists(),
+        "and the file it replaced is gone, not left beside it"
+    );
+    let entries: Vec<_> = app
+        .launcher
+        .list_content(LATEST_SLUG)
+        .expect("read the instance's content")
+        .into_iter()
+        .filter(|entry| entry.project_id == support::OLDER_PROJECT)
+        .collect();
+    assert_eq!(entries.len(), 1, "one entry for the project, not two");
+    assert_eq!(
+        entries[0].version_id,
+        support::OLDER_LATEST_ID,
+        "recorded at the version Update pinned"
+    );
+    assert_eq!(
+        state_texts(app)[1],
+        format!("Installed: {}", support::OLDER_LATEST_NUMBER),
+        "and the row says so without another search"
+    );
+    assert_eq!(
+        install_labels(app)[1],
+        "Installed",
+        "so its button has nothing left to offer"
+    );
+}
+
+/// (f3) Picking another instance re-answers every row against that one: the mod just
+/// updated is not in it, so the same row goes back to offering Add.
+async fn changing_the_target_re_answers_every_row(app: &TestApp) {
+    select_target(app, INSTANCE).await;
+    assert_eq!(
+        state_texts(app)[1],
+        CHECKING,
+        "the answers on screen were about the instance the user just left, so the rows go \
+         back to checking rather than showing another instance's install state"
+    );
+    app.wait_until(
+        "the rows to be re-checked against the new target",
+        |_| !state_texts(app).iter().any(|text| text == CHECKING),
+        QUICK,
+    )
+    .await;
+    assert_eq!(
+        state_texts(app)[1],
+        format!(
+            "Latest for {} fabric: {}",
+            support::MC,
+            support::OLDER_LATEST_NUMBER
+        ),
+        "the instance that has none of it hears only what the newest version is"
+    );
+    assert_eq!(
+        install_labels(app)[1],
+        format!("Add to {INSTANCE}"),
+        "and the button offers to add it there"
+    );
 }
