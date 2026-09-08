@@ -17,6 +17,9 @@ export component Dialog inherits Rectangle {
     in property <bool> confirm-enabled: true;
     // Paints the affirming button in the danger color, for a destructive action.
     in property <bool> danger: false;
+    // Widens the panel for a body with real prose to wrap, such as a changelog: a version's
+    // release notes clipped at 520px turn every wrapped block into a column of short lines.
+    in property <bool> wide: false;
     // Set this when the body starts with a text field the user should be typing in.
     //
     // Slint gives no way to reach into `@children` and focus the first field from here, so the
@@ -60,7 +63,7 @@ export component Dialog inherits Rectangle {
     }
 
     Rectangle {
-        width: min(root.width - 4 * Theme.pad, Theme.dialog-width);
+        width: min(root.width - 4 * Theme.pad, root.wide ? Theme.dialog-width-wide : Theme.dialog-width);
         height: panel.preferred-height;
         background: Theme.surface;
         border-radius: Theme.radius;

@@ -516,9 +516,10 @@ export component AppWindow inherits Window {
         width: root.width;
         height: root.height;
         open: ProjectState.notes_open;
-        title: "" + ProjectState.notes_title + " notes";
+        title: ProjectState.notes_title + " notes";
         blocks: ProjectState.notes_blocks;
         loading: ProjectState.notes_loading;
+        status: ProjectState.notes_status;
         close => {
             ProjectState.close_notes();
         }

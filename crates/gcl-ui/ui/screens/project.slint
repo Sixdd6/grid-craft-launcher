@@ -63,12 +63,16 @@ export global ProjectState {
 
     // Whether the Notes modal is open.
     in-out property <bool> notes_open: false;
-    // The modal's title, already formatted as "<number> notes".
+    // The version number the modal was opened for. `app.slint` appends " notes" to build the
+    // dialog's title.
     in-out property <string> notes_title: "";
     // The changelog for the version the modal was opened for, same block shape as `blocks`.
     in-out property <[Block]> notes_blocks: [];
     // True while that changelog is being fetched.
     in-out property <bool> notes_loading: false;
+    // One line about a changelog fetch that failed, shown in the modal in place of "No
+    // notes". Empty otherwise.
+    in-out property <string> notes_status: "";
 
     // Opens a project's details. Carries the source, the project id, the instance a version
     // installs into (empty when none was picked), the screen `back()` returns to, and the
@@ -321,28 +325,31 @@ export component ProjectScreen inherits Rectangle {
                         }
                     }
 
-                    HorizontalLayout {
+                    VerticalLayout {
                         alignment: center;
                         horizontal-stretch: 0;
-                        spacing: Theme.gap;
 
-                        version_notes_button := Button {
-                            text: "Notes";
-                            access_label: "Notes " + row.number;
-                            kind: "secondary";
-                            clicked => {
-                                ProjectState.open_notes(row.id, row.number);
+                        HorizontalLayout {
+                            spacing: Theme.gap;
+
+                            version_notes_button := Button {
+                                text: "Notes";
+                                access_label: "Notes " + row.number;
+                                kind: "secondary";
+                                clicked => {
+                                    ProjectState.open_notes(row.id, row.number);
+                                }
                             }
-                        }
 
-                        version_install_button := Button {
-                            text: row.installed ? "Installed" : "Install";
-                            access_label: row.access_label;
-                            kind: "primary";
-                            enabled: !row.installed && root.has_target && !ProjectState.loading
-                                && row.compatible;
-                            clicked => {
-                                ProjectState.install(row.id);
+                            version_install_button := Button {
+                                text: row.installed ? "Installed" : "Install";
+                                access_label: row.access_label;
+                                kind: "primary";
+                                enabled: !row.installed && root.has_target && !ProjectState.loading
+                                    && row.compatible;
+                                clicked => {
+                                    ProjectState.install(row.id);
+                                }
                             }
                         }
                     }
@@ -468,9 +475,10 @@ export component PreviewProjectScreen inherits ProjectScreen {
         width: root.width;
         height: root.height;
         open: ProjectState.notes_open;
-        title: "" + ProjectState.notes_title + " notes";
+        title: ProjectState.notes_title + " notes";
         blocks: ProjectState.notes_blocks;
         loading: ProjectState.notes_loading;
+        status: ProjectState.notes_status;
         close => {
             ProjectState.close_notes();
         }

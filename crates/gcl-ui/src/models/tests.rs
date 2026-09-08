@@ -240,6 +240,30 @@ fn crc32(kind: &[u8], data: &[u8]) -> u32 {
 }
 
 #[test]
+fn decode_description_image_downscales_a_wide_banner_to_the_1600px_cap() {
+    // 3000x100: well under the 4096 decode cap, but past the 1600px downscale cap on its
+    // long side. A real 3000px-wide PNG compresses to almost nothing when every pixel is the
+    // same color, so this is cheap to build and encode inline.
+    let image = image::RgbaImage::from_pixel(3000, 100, image::Rgba([200, 50, 10, 255]));
+    let mut bytes = Vec::new();
+    image::DynamicImage::ImageRgba8(image)
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap_or_else(|err| panic!("encode: {err}"));
+
+    let (width, height, pixels) =
+        decode_description_image(&bytes).unwrap_or_else(|err| panic!("decode: {err}"));
+    assert_eq!(width, 1600, "the long side is shrunk to the cap");
+    assert_eq!(
+        height, 53,
+        "the short side keeps the same 30:1 aspect ratio, rounded"
+    );
+    assert_eq!(pixels.len(), (1600 * 53 * 4) as usize);
+}
+
+#[test]
 fn search_row_formats_the_download_count() {
     let hit = SearchHit {
         source: SourceId::Modrinth,
@@ -282,6 +306,25 @@ fn search_row_collapses_newlines_in_the_description() {
         row.description.as_str(),
         "A rendering engine for Fabric and Quilt. Fast."
     );
+}
+
+#[test]
+fn search_row_collapses_every_kind_of_whitespace_and_trims_the_ends() {
+    let hit = SearchHit {
+        source: SourceId::Modrinth,
+        project_id: "AANobbMI".into(),
+        slug: "sodium".into(),
+        title: "Sodium".into(),
+        description: "  \tA rendering\tengine\u{a0}\u{a0}for  Fabric.  \n".into(),
+        author: "jellysquid3".into(),
+        kind: ContentKind::Mod,
+        is_pack: false,
+        downloads: 12_345,
+        icon_url: None,
+        page_url: "https://modrinth.com/mod/sodium".into(),
+    };
+    let row = search_row(&hit);
+    assert_eq!(row.description.as_str(), "A rendering engine for Fabric.");
 }
 
 #[test]

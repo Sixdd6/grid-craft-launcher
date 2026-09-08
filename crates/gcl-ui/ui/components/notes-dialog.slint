@@ -18,6 +18,8 @@ export component NotesDialog inherits Rectangle {
     in property <[Block]> blocks: [];
     // True while the changelog is being fetched.
     in property <bool> loading: false;
+    // One line about a fetch that failed, shown in place of "No notes". Empty otherwise.
+    in property <string> status: "";
 
     // The user closed the modal, by its Close button, Escape, or a click outside the panel.
     callback close();
@@ -28,6 +30,10 @@ export component NotesDialog inherits Rectangle {
         open: root.open;
         title: root.title;
         close-text: "Close";
+        // A changelog is prose: the default panel width turns every wrapped paragraph into a
+        // column of short lines. This is real text to read, so it gets the room a settings
+        // form does not need.
+        wide: true;
         close => {
             root.close();
         }
@@ -36,7 +42,7 @@ export component NotesDialog inherits Rectangle {
         // panel instead of growing it past the screen, and a two-line one does not leave the
         // Close button stranded at the bottom of the window, where it lands outside the
         // screen's own scroll viewport and no pointer can reach it.
-        ScrollView {
+        notes_scroll := ScrollView {
             height: min(body.preferred-height, 16 * Theme.row-height);
 
             body := VerticalLayout {
@@ -50,11 +56,25 @@ export component NotesDialog inherits Rectangle {
                     font-size: Theme.font-size-small;
                 }
 
-                if !root.loading && root.blocks.length == 0: EmptyState {
+                if !root.loading && root.status != "": Text {
+                    text: root.status;
+                    color: Theme.danger;
+                    font-size: Theme.font-size-small;
+                    wrap: word-wrap;
+                }
+
+                if !root.loading && root.status == "" && root.blocks.length == 0: EmptyState {
                     title: "No notes";
                 }
 
-                if !root.loading: BlockList {
+                // Bound to the scroll view's own visible width, not left to stretch on its
+                // own: a `ScrollView`'s viewport otherwise sizes to its content's natural
+                // width, which for a column of wrapping `Text` is unbounded, so nothing ever
+                // wraps and the panel clips its right edge instead. Binding to `body.width`
+                // instead would be circular — `body`'s own width comes from this child's
+                // preferred width in the first place.
+                if !root.loading && root.status == "": BlockList {
+                    width: notes_scroll.visible-width - 2 * Theme.pad;
                     blocks: root.blocks;
                 }
             }

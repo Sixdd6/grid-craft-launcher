@@ -65,6 +65,8 @@ fn the_details_screen_installs_a_chosen_version() {
         installing_the_newer_version_replaces_the_file(app).await;
         back_returns_to_the_instance_screen(app).await;
         escape_does_what_back_does(app).await;
+        opening_notes_again_before_a_slow_fetch_lands_keeps_the_new_one(app).await;
+        opening_a_project_again_before_a_slow_load_lands_keeps_the_new_one(app).await;
     });
 }
 
@@ -488,6 +490,16 @@ async fn a_changelog_the_source_refuses_shows_the_error(app: &TestApp) {
         notes_blocks(&app.window).is_empty(),
         "a failed fetch leaves the modal with no blocks rather than the last version's"
     );
+    assert!(
+        app.window
+            .global::<ProjectState>()
+            .get_notes_status()
+            .to_string()
+            .starts_with("Could not load notes:"),
+        "the modal shows why, in place of the blank \"No notes\" state a fetch that never \
+         ran would show: {:?}",
+        app.window.global::<ProjectState>().get_notes_status()
+    );
 
     // Two dialogs are up at once, so each closing button is picked by the word it prints.
     // The error dialog must be the one on top: its Dismiss button is only reachable by a
@@ -669,6 +681,116 @@ async fn back_returns_to_the_instance_screen(app: &TestApp) {
         QUICK,
     )
     .await;
+}
+
+/// (i) Opening a version's notes while an earlier, slower fetch for a different version is
+/// still in flight must not let the slow one win once it lands: `open_notes`'s done closure
+/// checks its own generation before painting anything, per the `slint-ui` skill's rule that a
+/// project (or a modal) the user has since navigated away from never gets a stale paint.
+///
+/// Called directly on `ProjectState`, not through the Notes button on a displayed row: the two
+/// versions this race needs are mocked under ids of their own, not the two the versions tab
+/// already shows.
+async fn opening_notes_again_before_a_slow_fetch_lands_keeps_the_new_one(app: &TestApp) {
+    let state = app.window.global::<ProjectState>();
+    state.invoke_open_notes(support::RACE_SLOW_VERSION_ID.into(), "slow".into());
+    support::pump();
+    state.invoke_open_notes(support::RACE_FAST_VERSION_ID.into(), "fast".into());
+
+    app.wait_until(
+        "the fast changelog to land",
+        |window| {
+            let state = window.global::<ProjectState>();
+            state.get_notes_open()
+                && !state.get_notes_loading()
+                && state.get_notes_title() == "fast"
+        },
+        QUICK,
+    )
+    .await;
+    assert!(
+        notes_blocks(&app.window)
+            .iter()
+            .any(|(kind, text)| kind.starts_with("heading") && text == support::RACE_FAST_HEADING),
+        "the fast changelog's own heading is on screen: {:?}",
+        notes_blocks(&app.window)
+    );
+
+    // The slow fetch, started first, is still due to land and post its own result. If
+    // `open_notes`'s done closure painted whatever arrived last instead of checking its own
+    // generation, this wait is where the slow changelog would overwrite the fast one.
+    support::yield_to_loop(Duration::from_millis(500)).await;
+    assert_eq!(
+        app.window
+            .global::<ProjectState>()
+            .get_notes_title()
+            .to_string(),
+        "fast",
+        "the slow open's stale result must not overwrite the title of the one that replaced it"
+    );
+    assert!(
+        notes_blocks(&app.window)
+            .iter()
+            .any(|(kind, text)| kind.starts_with("heading") && text == support::RACE_FAST_HEADING),
+        "and not its blocks either: {:?}",
+        notes_blocks(&app.window)
+    );
+
+    app.window.global::<ProjectState>().invoke_close_notes();
+    app.wait_until(
+        "the notes modal to close",
+        |window| !window.global::<ProjectState>().get_notes_open(),
+        QUICK,
+    )
+    .await;
+}
+
+/// (j) Opening a project while an earlier, slower open for a different project is still in
+/// flight must not let the slow one win once it lands: `open`'s done closure (`run_reporting`)
+/// checks its own generation before painting anything, the same guard `open_notes` carries.
+///
+/// Called directly on `ProjectState.open`, not through a browser row: the two projects this
+/// race needs are mocked under ids of their own.
+async fn opening_a_project_again_before_a_slow_load_lands_keeps_the_new_one(app: &TestApp) {
+    let state = app.window.global::<ProjectState>();
+    state.invoke_open(
+        "modrinth".into(),
+        support::RACE_SLOW_PROJECT.into(),
+        SLUG.into(),
+        Screen::Browser,
+        "".into(),
+        "".into(),
+    );
+    support::pump();
+    state.invoke_open(
+        "modrinth".into(),
+        support::RACE_FAST_PROJECT.into(),
+        SLUG.into(),
+        Screen::Browser,
+        "".into(),
+        "".into(),
+    );
+
+    app.wait_until(
+        "the fast project to load",
+        |window| {
+            let state = window.global::<ProjectState>();
+            state.get_title() == support::RACE_FAST_PROJECT_TITLE && !state.get_loading()
+        },
+        QUICK,
+    )
+    .await;
+
+    // The slow open, started first, is still due to land. If `open`'s done closure painted
+    // whatever arrived last instead of checking its own generation, this wait is where the
+    // slow project would overwrite the fast one's title.
+    support::yield_to_loop(Duration::from_millis(500)).await;
+    assert_eq!(
+        app.window.global::<ProjectState>().get_title().to_string(),
+        support::RACE_FAST_PROJECT_TITLE,
+        "the slow open's stale result must not overwrite the title of the project that \
+         replaced it"
+    );
 }
 
 /// (h) Escape on the details screen goes Back, same as the button.

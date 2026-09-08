@@ -7,9 +7,9 @@ import { Block } from "../types.slint";
 // image, or a quote renders the same way in either place.
 //
 // Pure layout, per the `slint-ui` skill: it holds no fetch state of its own. An `image` block's
-// `image`/`image_state` fields already carry whatever `screens/project.rs`'s per-open
-// `url -> ImageState` side map knows, merged into the `Block` list before it reaches here (see
-// `types.slint`'s doc comment on `Block` for that split).
+// `image`/`image_state` fields are filled in place by `screens/project.rs` once that image is
+// fetched and decoded (see `types.slint`'s doc comment on `Block`), so this component only ever
+// reads what is already on the block.
 export component BlockList inherits VerticalLayout {
     in property <[Block]> blocks: [];
     spacing: Theme.gap;
@@ -62,25 +62,28 @@ export component BlockList inherits VerticalLayout {
             property <int> table_columns: max(block.columns, 1);
             property <int> table_rows: block.columns > 0 ? block.cells.length / block.columns : 0;
             // A plain `Rectangle` has no preferred size of its own: unlike a layout, it does
-            // not grow to fit a child that sets its own height, so the tile's height is set
-            // here explicitly and the `ScrollView` below fills it. Leaving this unset once
-            // left the tile (and everything the `for` loop placed after it) at zero height,
-            // stacking every later block on top of the table instead of below it.
-            height: (table_pane.table_rows * (Theme.font-size + Theme.gap)) + 2 * Theme.pad;
+            // not grow to fit a child that sets its own height, so the tile's height tracks
+            // the row layout's own preferred height instead of a row count times a guessed
+            // line height — a cell whose text wraps onto two lines grows the tile with it.
+            height: table_row_layout.preferred-height + 2 * Theme.pad;
 
             // Wrapped in its own `ScrollView` rather than the Description tab's outer one, so
-            // a table wider than the screen scrolls on its own tile instead of widening the
-            // whole page.
+            // a table wider than the screen scrolls sideways on its own tile instead of
+            // widening the whole page. No vertical scrollbar: the tile is already sized to
+            // its content, so there is never anything to scroll down to.
             ScrollView {
                 height: 100%;
+                vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+                horizontal-scrollbar-policy: ScrollBarPolicy.as-needed;
 
-                HorizontalLayout {
+                table_row_layout := HorizontalLayout {
                     padding: Theme.pad;
                     spacing: Theme.pad;
 
                     for col in table_pane.table_columns: column := VerticalLayout {
                         spacing: Theme.gap / 2;
-                        width: Theme.label-width;
+                        min-width: Theme.label-width;
+                        max-width: 3 * Theme.label-width;
 
                         for row in table_pane.table_rows: cell := Text {
                             text: block.cells[row * table_pane.table_columns + col];
@@ -112,15 +115,23 @@ export component BlockList inherits VerticalLayout {
             }
 
             if block.image_state == "failed": Text {
-                text: "[Image: " + block.text + "]";
+                text: block.text == "" ? "[Image]" : "[Image: " + block.text + "]";
                 color: Theme.text-muted;
                 font-size: Theme.font-size-small;
                 wrap: word-wrap;
             }
 
-            if block.image_state == "ready": Image {
+            // Sized from the decoded image's own aspect ratio, so a wide banner stays a
+            // banner instead of being squeezed into a fixed-height box: full width, and a
+            // height that ratio gives, capped so a tall image cannot push the rest of the
+            // column off screen.
+            if block.image_state == "ready": image_tile := Image {
                 source: block.image;
-                height: Theme.icon-size * 4;
+                width: 100%;
+                height: min(
+                    self.width * ((block.image.height * 1.0) / max(block.image.width, 1)),
+                    Theme.icon-size * 8
+                );
                 image-fit: contain;
                 horizontal-alignment: left;
             }
@@ -133,15 +144,29 @@ export component BlockList inherits VerticalLayout {
             }
         }
 
+        // A fixed-width glyph column plus a wrapping text column, rather than one `Text` with
+        // the bullet glued to its front: with only one `Text`, a wrapped second line starts
+        // back at the margin, under the glyph rather than under the item's own text.
         if block.kind == "bullet": HorizontalLayout {
             padding-left: block.depth * 2 * Theme.gap;
+            spacing: Theme.gap / 2;
 
             Text {
-                text: "• " + block.text;
+                text: "•";
+                color: Theme.text;
+                font-size: Theme.font-size;
+                font-weight: Theme.font-weight-regular;
+                horizontal-stretch: 0;
+                width: Theme.font-size;
+            }
+
+            Text {
+                text: block.text;
                 color: Theme.text;
                 wrap: word-wrap;
                 font-size: Theme.font-size;
                 font-weight: Theme.font-weight-regular;
+                horizontal-stretch: 1;
             }
         }
 

@@ -86,16 +86,16 @@ pub fn search_row(h: &SearchHit) -> SearchRow {
     }
 }
 
-/// Replaces every `\n` and `\r` with a space, then squeezes any run of repeated spaces down to
-/// one, so a description with embedded line breaks becomes a single line a `Text`'s own
-/// `word-wrap` reflows instead of showing as literal blank lines.
+/// Replaces every run of whitespace — `\n`, `\r`, `\t`, and any other `char::is_whitespace`,
+/// not only a space — with a single space, and trims the result, so a description with
+/// embedded line breaks or tabs becomes a single line a `Text`'s own `word-wrap` reflows
+/// instead of showing as literal blank lines or runs of visible gaps.
 fn collapse_whitespace(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut last_was_space = false;
     for ch in text.chars() {
-        let ch = if ch == '\n' || ch == '\r' { ' ' } else { ch };
-        if ch == ' ' {
-            if !last_was_space {
+        if ch.is_whitespace() {
+            if !last_was_space && !out.is_empty() {
                 out.push(' ');
             }
             last_was_space = true;
@@ -103,6 +103,9 @@ fn collapse_whitespace(text: &str) -> String {
             out.push(ch);
             last_was_space = false;
         }
+    }
+    if out.ends_with(' ') {
+        out.pop();
     }
     out
 }
@@ -120,14 +123,22 @@ pub fn decode_icon(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     Ok((width, height, rgba.into_raw()))
 }
 
+/// The long side a decoded description image is shrunk to, in pixels. A changelog banner or a
+/// screenshot renders in a column a few hundred pixels wide; anything bigger only costs memory
+/// and upload-sized pixel buffers `slint::Image::from_rgba8` has to copy onto the GPU.
+const MAX_DESCRIPTION_IMAGE_SIDE: u32 = 1600;
+
 /// Decodes a fetched description image's bytes into raw RGBA8 pixels and its dimensions, under
-/// a 4096x4096 pixel decode cap.
+/// a 4096x4096 pixel decode cap, then downscales it so its long side is at most
+/// [`MAX_DESCRIPTION_IMAGE_SIDE`].
 ///
 /// Unlike [`decode_icon`], a description image comes from any `https://` host (no CDN
 /// allowlist, per `download::images::ImageCache`), so the cap here guards against a
 /// pathologically large image using this decode step to exhaust memory, the same reason the
 /// core-side [`gcl_core`] design doc gives for capping the fetch itself at 5 MiB. `image`'s
 /// [`image::Limits`] rejects an oversized image before it is fully decoded rather than after.
+/// The downscale runs after that check, on the already-decoded image: `DynamicImage::thumbnail`
+/// only ever shrinks, so an image already under the cap is returned as is.
 pub fn decode_description_image(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(4096);
@@ -138,6 +149,15 @@ pub fn decode_description_image(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), Str
         .map_err(|err| err.to_string())?;
     reader.limits(limits);
     let img = reader.decode().map_err(|err| err.to_string())?;
+    // `DynamicImage::thumbnail` always resizes to fit the given bounds, scaling up as
+    // readily as down, so an image already under the cap is left alone rather than
+    // needlessly resampled or, worse, enlarged.
+    let img =
+        if img.width() > MAX_DESCRIPTION_IMAGE_SIDE || img.height() > MAX_DESCRIPTION_IMAGE_SIDE {
+            img.thumbnail(MAX_DESCRIPTION_IMAGE_SIDE, MAX_DESCRIPTION_IMAGE_SIDE)
+        } else {
+            img
+        };
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
     Ok((width, height, rgba.into_raw()))

@@ -118,10 +118,13 @@ fn prepare_images_marks_every_image_loading_under_the_cap() {
         image_block("https://a.invalid/1.png"),
         image_block("https://a.invalid/2.png"),
     ];
-    let urls = prepare_images(&mut blocks, 5);
+    let pairs = prepare_images(&mut blocks, 5);
     assert_eq!(
-        urls,
-        vec!["https://a.invalid/1.png", "https://a.invalid/2.png"]
+        pairs,
+        vec![
+            (0, "https://a.invalid/1.png".to_string()),
+            (1, "https://a.invalid/2.png".to_string())
+        ]
     );
     assert!(blocks.iter().all(|b| b.image_state == "loading"));
 }
@@ -133,8 +136,8 @@ fn prepare_images_marks_anything_past_the_cap_failed_forever() {
         image_block("https://a.invalid/2.png"),
         image_block("https://a.invalid/3.png"),
     ];
-    let urls = prepare_images(&mut blocks, 2);
-    assert_eq!(urls.len(), 2);
+    let pairs = prepare_images(&mut blocks, 2);
+    assert_eq!(pairs.len(), 2);
     assert_eq!(blocks[0].image_state, "loading");
     assert_eq!(blocks[1].image_state, "loading");
     assert_eq!(blocks[2].image_state, "failed");
@@ -146,8 +149,8 @@ fn prepare_images_ignores_non_image_blocks() {
         block_row(&CoreBlock::Paragraph("p".to_string())),
         image_block("https://a.invalid/1.png"),
     ];
-    let urls = prepare_images(&mut blocks, 5);
-    assert_eq!(urls, vec!["https://a.invalid/1.png"]);
+    let pairs = prepare_images(&mut blocks, 5);
+    assert_eq!(pairs, vec![(1, "https://a.invalid/1.png".to_string())]);
     assert_eq!(blocks[0].image_state, "");
 }
 

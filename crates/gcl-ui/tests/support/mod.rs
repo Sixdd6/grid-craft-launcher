@@ -936,6 +936,68 @@ async fn mock_modrinth(server: &MockServer, project: bool) {
             .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
             .mount(server)
             .await;
+
+        // Two more single-version endpoints for the notes-modal generation-guard flow: the
+        // "slow" one answers after a delay, so a flow can open it and then open the "fast"
+        // one before the slow job posts its result. If `open_notes`'s done closure painted
+        // whatever landed last rather than checking its own generation, the slow job would
+        // win and overwrite the fast one's title and blocks after the fact.
+        Mock::given(method("GET"))
+            .and(path_matcher(format!("/version/{RACE_SLOW_VERSION_ID}")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(version_with_changelog(
+                        &base,
+                        RACE_SLOW_VERSION_ID,
+                        RACE_SLOW_HEADING,
+                    ))
+                    .set_delay(RACE_DELAY),
+            )
+            .mount(server)
+            .await;
+        serve(
+            server,
+            &format!("/version/{RACE_FAST_VERSION_ID}"),
+            version_with_changelog(&base, RACE_FAST_VERSION_ID, RACE_FAST_HEADING).into_bytes(),
+        )
+        .await;
+
+        // Two more whole projects for the details-screen generation-guard flow, the same
+        // shape: a "slow" one that answers after a delay and a "fast" one that answers right
+        // away, so a flow can open the slow one, open the fast one before it lands, and check
+        // the slow job's done closure dropped its stale result instead of overwriting the
+        // fast project's title and blocks.
+        Mock::given(method("GET"))
+            .and(path_matcher(format!("/project/{RACE_SLOW_PROJECT}")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(race_project(
+                        &base,
+                        RACE_SLOW_PROJECT,
+                        RACE_SLOW_PROJECT_TITLE,
+                    ))
+                    .set_delay(RACE_DELAY),
+            )
+            .mount(server)
+            .await;
+        serve(
+            server,
+            &format!("/project/{RACE_SLOW_PROJECT}/version"),
+            b"[]".to_vec(),
+        )
+        .await;
+        serve(
+            server,
+            &format!("/project/{RACE_FAST_PROJECT}"),
+            race_project(&base, RACE_FAST_PROJECT, RACE_FAST_PROJECT_TITLE).into_bytes(),
+        )
+        .await;
+        serve(
+            server,
+            &format!("/project/{RACE_FAST_PROJECT}/version"),
+            b"[]".to_vec(),
+        )
+        .await;
     }
 
     let pack = mrpack_bytes(&base, PACK_NAME);
@@ -1159,6 +1221,65 @@ fn mod_version_with_changelog(base: &str) -> String {
     version["changelog"] = serde_json::json!(MOD_CHANGELOG);
     version.to_string()
 }
+
+/// One recorded version, under a caller-chosen id, with a changelog carrying `heading` — used
+/// by the notes-modal generation-guard flow, which needs two distinct changelogs to tell apart.
+fn version_with_changelog(base: &str, id: &str, heading: &str) -> String {
+    let mut versions: serde_json::Value =
+        serde_json::from_str(MODRINTH_VERSIONS).expect("read the recorded version list");
+    let list = versions
+        .as_array_mut()
+        .expect("the recorded version list is an array");
+    let mut version = list[0].take();
+    version["id"] = serde_json::json!(id);
+    version["files"] = one_file(base, MOD_FILE_PATH, MOD_FILE_NAME, MOD_JAR);
+    version["changelog"] = serde_json::json!(format!("## {heading}\n\n- {heading} bullet\n"));
+    version.to_string()
+}
+
+/// How long the "slow" half of a generation-guard race is delayed. Long enough that the flow's
+/// second, fast call is certain to land first; short enough that the flow does not visibly
+/// wait — `QUICK`'s 30-second timeout comfortably covers it either way.
+const RACE_DELAY: Duration = Duration::from_millis(300);
+
+/// Version id the notes-modal race flow opens first, whose fetch is held back by [`RACE_DELAY`].
+pub const RACE_SLOW_VERSION_ID: &str = "race-slow-notes";
+
+/// Version id the same flow opens second, whose fetch answers immediately.
+pub const RACE_FAST_VERSION_ID: &str = "race-fast-notes";
+
+/// The heading [`RACE_SLOW_VERSION_ID`]'s changelog carries, which must never reach the screen.
+pub const RACE_SLOW_HEADING: &str = "Race Slow";
+
+/// The heading [`RACE_FAST_VERSION_ID`]'s changelog carries, which must win the race.
+pub const RACE_FAST_HEADING: &str = "Race Fast";
+
+/// The recorded project, under a caller-chosen id and title, with a one-line description
+/// naming that title. Used by the details-screen generation-guard flow, which opens two
+/// distinct projects and needs their titles to tell apart.
+fn race_project(base: &str, id: &str, title: &str) -> String {
+    let mut project: serde_json::Value =
+        serde_json::from_str(MODRINTH_PROJECT).expect("read the recorded project");
+    project["id"] = serde_json::json!(id);
+    project["slug"] = serde_json::json!(id);
+    project["title"] = serde_json::json!(title);
+    project["icon_url"] = serde_json::json!(format!("{base}{ICON_PATH}"));
+    project["body"] = serde_json::json!(format!("# {title}\n"));
+    project.to_string()
+}
+
+/// Project id the details-screen race flow opens first, whose fetch is held back by
+/// [`RACE_DELAY`].
+pub const RACE_SLOW_PROJECT: &str = "race-slow-project";
+
+/// Project id the same flow opens second, whose fetch answers immediately.
+pub const RACE_FAST_PROJECT: &str = "race-fast-project";
+
+/// [`RACE_SLOW_PROJECT`]'s title, which must never reach the screen.
+pub const RACE_SLOW_PROJECT_TITLE: &str = "Race Slow Project";
+
+/// [`RACE_FAST_PROJECT`]'s title, which must win the race.
+pub const RACE_FAST_PROJECT_TITLE: &str = "Race Fast Project";
 
 /// One primary file, served by the mock host at `path`, with the sha1 of the bytes it serves.
 fn one_file(base: &str, path: &str, name: &str, bytes: &[u8]) -> serde_json::Value {

@@ -154,9 +154,8 @@ export struct PendingRow {
 // - `image`: `text` is the alt text, shown under the image or in its place on failure. `url`
 //   is the image's source, `image` is its decoded pixels once fetched, and `image_state` is
 //   `""` until `screens/project.rs` starts the fetch, then `loading`, `ready`, or `failed`.
-//   `BlockList` has no fetch state of its own: `screens/project.rs` keeps a per-open
-//   `url -> ImageState` side map and rebuilds the blocks it hands to `BlockList` from the
-//   core blocks plus that map, so this struct is the only place the state lives on screen.
+//   `screens/project.rs` writes `image`/`image_state` onto this block's own row in place once
+//   the fetch lands, so this struct is the only place the state lives on screen.
 export struct Block {
     kind: string,
     text: string,

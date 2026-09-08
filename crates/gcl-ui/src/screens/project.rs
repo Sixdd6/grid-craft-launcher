@@ -42,13 +42,6 @@ impl ImageTarget {
             ImageTarget::Notes => state.get_notes_blocks(),
         }
     }
-
-    fn set_blocks(self, state: &ProjectState<'_>, blocks: ModelRc<Block>) {
-        match self {
-            ImageTarget::Description => state.set_blocks(blocks),
-            ImageTarget::Notes => state.set_notes_blocks(blocks),
-        }
-    }
 }
 
 /// What an `open` or `open_notes` call threads through to its image-fetch job.
@@ -459,6 +452,12 @@ fn run_reporting(
     job: impl FnOnce(&gcl_core::Launcher) -> Result<Opened, gcl_core::Error> + Send + 'static,
 ) {
     bridge.run_with_error(label, job, move |window, result| {
+        // A project opened after this call started bumped `image_generation` past what this
+        // job was stamped with; painting its result now would put a stale project's title and
+        // blocks over the one the user has since opened.
+        if image_generation.load(Ordering::SeqCst) != generation {
+            return;
+        }
         let state = window.global::<ProjectState>();
         state.set_loading(false);
         match result {
@@ -495,10 +494,10 @@ fn run_versions_reporting(
     });
 }
 
-/// Fills every property `open` promised, from a successful full load. Returns the urls of the
-/// images the caller's image-fetch job should fetch, in block order, already capped at
-/// [`MAX_IMAGES`] and marked "loading" on the blocks that were just written.
-fn apply(window: &AppWindow, opened: Opened, preserve_status: bool) -> Vec<String> {
+/// Fills every property `open` promised, from a successful full load. Returns the block index
+/// and url of every image the caller's image-fetch job should fetch, in block order, already
+/// capped at [`MAX_IMAGES`] and marked "loading" on the blocks that were just written.
+fn apply(window: &AppWindow, opened: Opened, preserve_status: bool) -> Vec<(usize, String)> {
     let state = window.global::<ProjectState>();
     let project = opened.details.project;
     let kind = project.kind;
@@ -510,7 +509,7 @@ fn apply(window: &AppWindow, opened: Opened, preserve_status: bool) -> Vec<Strin
     state.set_page_url(project.page_url.as_str().into());
 
     let mut blocks: Vec<Block> = opened.details.blocks.iter().map(block_row).collect();
-    let urls = prepare_images(&mut blocks, MAX_IMAGES);
+    let pairs = prepare_images(&mut blocks, MAX_IMAGES);
     state.set_blocks(ModelRc::new(VecModel::from(blocks)));
 
     let rows = build_version_rows(
@@ -528,7 +527,7 @@ fn apply(window: &AppWindow, opened: Opened, preserve_status: bool) -> Vec<Strin
             state.set_status(format!("{} version(s)", opened.versions.len()).into());
         }
     }
-    urls
+    pairs
 }
 
 /// Touches only `versions` and `status`, from a successful versions-only reload. `kind` comes
@@ -571,6 +570,7 @@ fn open_notes(bridge: &Bridge, shared: &Shared, version_id: String, number: Stri
 
     state.set_notes_title(number.as_str().into());
     state.set_notes_blocks(ModelRc::new(VecModel::from(Vec::<Block>::new())));
+    state.set_notes_status("".into());
     state.set_notes_loading(true);
     state.set_notes_open(true);
 
@@ -584,23 +584,33 @@ fn open_notes(bridge: &Bridge, shared: &Shared, version_id: String, number: Stri
         "Version notes",
         move |launcher| launcher.version_notes(source_id, &project_id, &version_id),
         move |window, result| {
+            // A version whose Notes button was pressed after this one, or a modal since
+            // closed, bumped `notes_generation` past this job's stamp; painting now would
+            // put a stale changelog's title and blocks over the one open now.
+            if notes_generation.load(Ordering::SeqCst) != generation {
+                return;
+            }
             let state = window.global::<ProjectState>();
             state.set_notes_loading(false);
             match result {
                 Ok(core_blocks) => {
                     let mut blocks: Vec<Block> = core_blocks.iter().map(block_row).collect();
-                    let urls = prepare_images(&mut blocks, MAX_IMAGES);
+                    let pairs = prepare_images(&mut blocks, MAX_IMAGES);
                     state.set_notes_blocks(ModelRc::new(VecModel::from(blocks)));
                     fetch_description_images(
                         &bridge_for_images,
                         ImageTarget::Notes,
                         notes_generation,
                         generation,
-                        urls,
+                        pairs,
                     );
                 }
-                Err(_) => {
+                Err(err) => {
                     state.set_notes_blocks(ModelRc::new(VecModel::from(Vec::<Block>::new())));
+                    state.set_notes_status(
+                        format!("Could not load notes: {}", crate::bridge::error_chain(&err))
+                            .into(),
+                    );
                 }
             }
         },
@@ -608,38 +618,46 @@ fn open_notes(bridge: &Bridge, shared: &Shared, version_id: String, number: Stri
 }
 
 /// Closes the Notes modal. Bumps its generation counter too, so a changelog fetch still in
-/// flight for the version it was showing paints nothing after this.
+/// flight for the version it was showing paints nothing after this, and clears the blocks so
+/// the next version opened never shows a frame of the one before it.
 fn close_notes(bridge: &Bridge, shared: &Shared) {
     shared.notes_generation.fetch_add(1, Ordering::SeqCst);
     if let Some(window) = bridge.weak().upgrade() {
-        window.global::<ProjectState>().set_notes_open(false);
+        let state = window.global::<ProjectState>();
+        state.set_notes_open(false);
+        state.set_notes_blocks(ModelRc::new(VecModel::from(Vec::<Block>::new())));
+        state.set_notes_status("".into());
     }
 }
 
 /// Marks every image block's initial load state: "loading" for the first `cap` blocks with a
 /// non-empty `url`, in the order they appear, and "failed" for any past that cap — the
 /// permanent `[Image: alt]` degrade the description-rendering spec accepts for a pathological
-/// description rather than a bug to chase further. Returns the "loading" blocks' urls, in that
-/// same order, for the fetch job to work through.
-fn prepare_images(blocks: &mut [Block], cap: usize) -> Vec<String> {
-    let mut urls = Vec::new();
-    for block in blocks.iter_mut() {
+/// description rather than a bug to chase further. Returns each "loading" block's index and
+/// url, in that same order, for the fetch job to work through.
+fn prepare_images(blocks: &mut [Block], cap: usize) -> Vec<(usize, String)> {
+    let mut pairs = Vec::new();
+    for (index, block) in blocks.iter_mut().enumerate() {
         if block.kind.as_str() != "image" || block.url.is_empty() {
             continue;
         }
-        if urls.len() < cap {
+        if pairs.len() < cap {
             block.image_state = "loading".into();
-            urls.push(block.url.to_string());
+            pairs.push((index, block.url.to_string()));
         } else {
             block.image_state = "failed".into();
         }
     }
-    urls
+    pairs
 }
 
 /// Fetches and decodes up to [`MAX_IMAGES`] description images sequentially in one job,
 /// painting each one onto `target`'s block list as it arrives rather than waiting for the
 /// whole batch — the first image a user sees does not wait on the last.
+///
+/// `pairs` is deduped by url before anything is fetched, so a changelog quoting the same
+/// picture twice downloads and decodes it once; every block index that shared the url is
+/// still updated, from the one decode.
 ///
 /// This does not use [`Bridge::run`]'s own `done` callback, which only fires once after the
 /// whole job returns: instead the job posts one `upgrade_in_event_loop` closure per image,
@@ -652,16 +670,31 @@ fn fetch_description_images(
     target: ImageTarget,
     counter: Arc<AtomicU64>,
     generation: u64,
-    urls: Vec<String>,
+    pairs: Vec<(usize, String)>,
 ) {
-    if urls.is_empty() {
+    if pairs.is_empty() {
         return;
     }
+    // Group by url, keeping first-seen order, so the fetch loop below visits each url once
+    // and knows every index to update once it lands.
+    let mut order: Vec<String> = Vec::new();
+    let mut indices_by_url: std::collections::HashMap<String, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (index, url) in pairs {
+        indices_by_url
+            .entry(url.clone())
+            .or_insert_with(|| {
+                order.push(url.clone());
+                Vec::new()
+            })
+            .push(index);
+    }
+
     let weak = bridge.weak().clone();
     bridge.run(
         "Description images",
         move |launcher| {
-            for url in urls {
+            for url in order {
                 if counter.load(Ordering::SeqCst) != generation {
                     break;
                 }
@@ -672,13 +705,13 @@ fn fetch_description_images(
                     .and_then(|bytes| decode_description_image(&bytes).ok())
                     .map(DecodedImage::from);
                 let counter = Arc::clone(&counter);
-                let url = url.clone();
+                let indices = indices_by_url.get(&url).cloned().unwrap_or_default();
                 let _ = weak.upgrade_in_event_loop(move |window| {
                     if counter.load(Ordering::SeqCst) != generation {
                         return;
                     }
                     let state = window.global::<ProjectState>();
-                    apply_image(&state, target, &url, decoded);
+                    apply_image(&state, target, &indices, decoded);
                 });
             }
             Ok(())
@@ -687,38 +720,37 @@ fn fetch_description_images(
     );
 }
 
-/// Writes one decoded image into every block that shares its `url`, in the block list `target`
-/// names. More than one block can carry the same url (a changelog quoting the same picture
-/// twice); every match gets the same pixels, or the same "failed" state on a fetch or decode
-/// that came back empty.
+/// Writes one decoded image onto every block index in `indices`, updating each row in place
+/// with [`Model::set_row_data`] rather than rebuilding the whole list. The `slint::Image` is
+/// built once from the decoded pixels and cloned per row — cheap, since it is a handle onto
+/// shared pixel storage — rather than re-copied for every index that shares this url.
 fn apply_image(
     state: &ProjectState<'_>,
     target: ImageTarget,
-    url: &str,
+    indices: &[usize],
     decoded: Option<DecodedImage>,
 ) {
-    let mut blocks: Vec<Block> = target.blocks(state).iter().collect();
-    let mut changed = false;
-    for block in blocks.iter_mut() {
-        if block.kind.as_str() != "image" || block.url.as_str() != url {
+    let model = target.blocks(state);
+    let image = decoded.as_ref().map(|image| {
+        let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
+            &image.pixels,
+            image.width,
+            image.height,
+        );
+        slint::Image::from_rgba8(buffer)
+    });
+    for &index in indices {
+        let Some(mut block) = model.row_data(index) else {
             continue;
-        }
-        changed = true;
-        match &decoded {
+        };
+        match &image {
             Some(image) => {
-                let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
-                    &image.pixels,
-                    image.width,
-                    image.height,
-                );
-                block.image = slint::Image::from_rgba8(buffer);
+                block.image = image.clone();
                 block.image_state = "ready".into();
             }
             None => block.image_state = "failed".into(),
         }
-    }
-    if changed {
-        target.set_blocks(state, ModelRc::new(VecModel::from(blocks)));
+        model.set_row_data(index, block);
     }
 }
 
@@ -765,10 +797,10 @@ fn build_version_rows(
 /// `""`, `[]`, an empty `image` — per the doc comment on `Block` in `types.slint`. A table's
 /// header and rows flatten into one row-major `cells` array, header included as row 0, with
 /// `columns` saying how to slice it back apart; `BlockList` computes the row count itself. An
-/// image block's `url` is filled here so `screens/project.rs`'s image-fetch job (Task 4) knows
-/// what to fetch, but `image`/`image_state` are left empty: nothing has been fetched yet at the
-/// point this pure conversion runs, and the per-open `url -> ImageState` side map merges the
-/// fetched result in afterward, on the UI thread.
+/// image block's `url` is filled here so the image-fetch job below knows what to fetch, but
+/// `image`/`image_state` are left empty: nothing has been fetched yet at the point this pure
+/// conversion runs. `prepare_images` marks each one "loading" right after, and `apply_image`
+/// writes the fetched pixels onto that same block's row once the fetch lands.
 pub fn block_row(block: &CoreBlock) -> Block {
     match block {
         CoreBlock::Heading(level, text) => Block {
