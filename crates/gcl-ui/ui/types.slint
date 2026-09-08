@@ -34,6 +34,10 @@ export struct SearchRow {
     author: string,
     kind: string,
     downloads: string,
+    // The project's last-updated date, as `YYYY-MM-DD`, or empty when the source did not
+    // report one. `src/models/mod.rs`'s `search_row` shortens the RFC 3339 stamp
+    // `SearchHit.updated` carries.
+    updated: string,
     page_url: string,
     // The project's icon URL at the source, empty when it has none. `src/screens/browser.rs`
     // fetches and decodes it off the UI thread and fills `icon` once it lands; `icon.width ==

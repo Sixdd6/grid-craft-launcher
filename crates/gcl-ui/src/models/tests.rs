@@ -14,7 +14,7 @@ use gcl_core::sources::{ReleaseKind, SearchHit, SourceId, Version};
 use super::{
     account_row, content_row, decode_description_image, decode_icon, format_bytes,
     format_downloads, gc_rows, instance_row, latest_row_fields, loader_version_row, search_row,
-    setting_rows, short_time, version_row,
+    setting_rows, short_date, short_time, version_row,
 };
 
 /// A version fixture with a chosen number and id, everything else filled in with a value the
@@ -80,6 +80,22 @@ fn short_time_trims_an_rfc3339_stamp() {
 fn short_time_returns_unparsable_input_unchanged() {
     assert_eq!(short_time("never"), "never");
     assert_eq!(short_time(""), "");
+}
+
+#[test]
+fn short_date_trims_an_rfc3339_stamp_to_the_calendar_date() {
+    assert_eq!(short_date("2026-09-06T12:34:56Z"), "2026-09-06");
+    assert_eq!(short_date("2026-01-02T03:04:05+00:00"), "2026-01-02");
+}
+
+#[test]
+fn short_date_of_empty_input_stays_empty() {
+    assert_eq!(short_date(""), "");
+}
+
+#[test]
+fn short_date_of_input_shorter_than_a_date_is_returned_as_is() {
+    assert_eq!(short_date("2026"), "2026");
 }
 
 #[test]
@@ -327,6 +343,48 @@ fn search_row_formats_the_download_count() {
     assert_eq!(row.source.as_str(), "modrinth");
     assert_eq!(row.downloads.as_str(), "12.3K");
     assert_eq!(row.kind.as_str(), "mod");
+}
+
+#[test]
+fn search_row_shortens_the_updated_date() {
+    let hit = SearchHit {
+        source: SourceId::Modrinth,
+        project_id: "AANobbMI".into(),
+        slug: "sodium".into(),
+        title: "Sodium".into(),
+        description: "A rendering engine".into(),
+        author: "jellysquid3".into(),
+        kind: ContentKind::Mod,
+        is_pack: false,
+        downloads: 12_345,
+        updated: "2026-09-06T12:34:56Z".into(),
+        icon_url: None,
+        page_url: "https://modrinth.com/mod/sodium".into(),
+        latest_files: vec![],
+    };
+    let row = search_row(&hit);
+    assert_eq!(row.updated.as_str(), "2026-09-06");
+}
+
+#[test]
+fn search_row_of_no_updated_date_stays_empty() {
+    let hit = SearchHit {
+        source: SourceId::Modrinth,
+        project_id: "AANobbMI".into(),
+        slug: "sodium".into(),
+        title: "Sodium".into(),
+        description: "A rendering engine".into(),
+        author: "jellysquid3".into(),
+        kind: ContentKind::Mod,
+        is_pack: false,
+        downloads: 12_345,
+        updated: String::new(),
+        icon_url: None,
+        page_url: "https://modrinth.com/mod/sodium".into(),
+        latest_files: vec![],
+    };
+    let row = search_row(&hit);
+    assert_eq!(row.updated.as_str(), "");
 }
 
 #[test]

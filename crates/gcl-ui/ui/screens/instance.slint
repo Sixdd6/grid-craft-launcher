@@ -252,6 +252,7 @@ export component InstanceScreen inherits Rectangle {
                         title: row.name;
                         height: 2 * Theme.font-size + Theme.gap + Theme.pad;
                         selected: i == root.selected;
+                        alt: mod(i, 2) == 1;
                         clicked => {
                             root.selected = i;
                         }

@@ -149,19 +149,21 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::install_pack_button` | `Button` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_path_field` | `LineEdit` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::install_file_button` | `Button` |
+| `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_results_header` | `Rectangle` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_row` | `ListRow` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_layout` | `VerticalLayout` |
+| `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_action` | `VerticalLayout` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_install_button` | `Button` |
+| `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::results_header` | `Rectangle` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::keys` | `FocusScope` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::row_open` | `ListRow` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::row_icon` | `Image` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::row_layout` | `VerticalLayout` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::row_title` | `Rectangle` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::title_text` | `Text` |
-| `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::title_touch` | `TouchArea` |
-| `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::badge` | `Text` |
-| `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::row_state_text` | `Text` |
+| `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::row_action` | `VerticalLayout` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::row_install` | `Button` |
+| `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::row_state_text` | `Text` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::prev_button` | `Button` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::next_button` | `Button` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::back_button` | `Button` |
@@ -234,4 +236,4 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::default_add_button` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::verify_button` | `Button` |
 
-Total: 153 named elements.
+Total: 159 named elements.

@@ -81,6 +81,7 @@ pub fn search_row(h: &SearchHit) -> SearchRow {
         author: h.author.as_str().into(),
         kind: h.kind.to_string().into(),
         downloads: format_downloads(h.downloads).into(),
+        updated: short_date(&h.updated).into(),
         page_url: h.page_url.as_str().into(),
         icon_url: h.icon_url.as_deref().unwrap_or_default().into(),
         icon: Default::default(),
@@ -320,6 +321,18 @@ pub fn short_time(rfc3339: &str) -> String {
         Ok(t) => t.format(&format).unwrap_or_else(|_| rfc3339.to_string()),
         Err(_) => rfc3339.to_string(),
     }
+}
+
+/// The `YYYY-MM-DD` prefix of an RFC 3339 timestamp, for a search row's Last updated column.
+///
+/// The first 10 characters of a well-formed RFC 3339 stamp are always exactly that date, so
+/// this needs no parser. Empty input stays empty, and anything shorter than 10 characters is
+/// returned as is rather than panicking on a slice out of bounds.
+pub fn short_date(rfc3339: &str) -> String {
+    if rfc3339.len() <= 10 {
+        return rfc3339.to_string();
+    }
+    rfc3339[..10].to_string()
 }
 
 /// Builds the JVM tab's GC combo rows, one per supported preset, in the order given.

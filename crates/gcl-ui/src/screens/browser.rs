@@ -1391,10 +1391,15 @@ fn fetch_icons(bridge: &Bridge, shared: &Shared, generation: u64, hits: &[Search
             if shared.icon_generation.load(Ordering::SeqCst) != generation {
                 return;
             }
-            let state = window.global::<BrowserState>();
-            let mut rows: Vec<SearchRow> = state.get_rows().iter().collect();
+            // `set_row_data` on the model already on screen, one row at a time, rather than
+            // a fresh model through `set_rows`: a whole new model here would redraw and
+            // re-lay-out the whole page for every icon batch, and any row a concurrent
+            // latest-version answer (`set_row_fields`) has already patched would be
+            // overwritten by a copy of the rows taken before that write landed.
+            let rows = window.global::<BrowserState>().get_rows();
             for decoded in decoded {
-                let (Some(row), Some(icon)) = (rows.get_mut(decoded.index), decoded.icon) else {
+                let (Some(mut row), Some(icon)) = (rows.row_data(decoded.index), decoded.icon)
+                else {
                     continue;
                 };
                 let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
@@ -1403,8 +1408,8 @@ fn fetch_icons(bridge: &Bridge, shared: &Shared, generation: u64, hits: &[Search
                     icon.height,
                 );
                 row.icon = slint::Image::from_rgba8(buffer);
+                rows.set_row_data(decoded.index, row);
             }
-            state.set_rows(ModelRc::new(VecModel::from(rows)));
         },
     );
 }

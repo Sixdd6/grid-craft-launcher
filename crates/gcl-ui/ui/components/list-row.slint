@@ -3,6 +3,9 @@ import { Theme } from "../theme.slint";
 // One dense row in a list. Hover and selection are drawn here, content comes from children.
 export component ListRow inherits Rectangle {
     in property <bool> selected: false;
+    // Odd-row tint for a dense list that alternates backgrounds. The caller decides which
+    // rows are odd (`mod(i, 2) == 1`); selection and hover still win over it.
+    in property <bool> alt: false;
     // What a screen reader says the row is. Set it to the row's primary text.
     in property <string> title;
     callback clicked();
@@ -11,7 +14,9 @@ export component ListRow inherits Rectangle {
     border-radius: Theme.radius;
     background: root.selected
         ? Theme.accent.with-alpha(0.18)
-        : (row_touch.has-hover ? Theme.surface-hover : Colors.transparent);
+        : (row_touch.has-hover
+            ? Theme.surface-hover
+            : (root.alt ? Theme.surface-alt : Colors.transparent));
 
     accessible-role: button;
     accessible-label: root.title;

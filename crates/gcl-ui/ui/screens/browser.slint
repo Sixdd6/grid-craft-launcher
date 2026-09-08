@@ -507,7 +507,53 @@ export component BrowserScreen inherits Rectangle {
             }
         }
 
-        // Modpack results: one row per pack, each installed as its own new instance.
+        // Modpack results: one row per pack, each installed as its own new instance. The
+        // header names the same five columns the content rows use, so a pack list reads the
+        // same way a content list does.
+        if root.modpack_mode && BrowserState.pack_rows.length > 0: pack_results_header := Rectangle {
+            HorizontalLayout {
+                padding-left: Theme.pad;
+                padding-right: Theme.pad;
+                spacing: Theme.gap;
+
+                Rectangle { width: Theme.icon-size; horizontal-stretch: 0; }
+
+                Text {
+                    text: "Name";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    horizontal-stretch: 1;
+                }
+
+                Text {
+                    text: "Author";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    width: Theme.col-author;
+                    horizontal-stretch: 0;
+                }
+
+                Text {
+                    text: "Downloads";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    width: Theme.col-downloads;
+                    horizontal-alignment: right;
+                    horizontal-stretch: 0;
+                }
+
+                Text {
+                    text: "Last updated";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    width: Theme.col-date;
+                    horizontal-stretch: 0;
+                }
+
+                Rectangle { width: Theme.col-action; horizontal-stretch: 0; }
+            }
+        }
+
         if root.modpack_mode && BrowserState.pack_rows.length > 0: ListView {
             vertical-stretch: 1;
             width: 100%;
@@ -516,7 +562,27 @@ export component BrowserScreen inherits Rectangle {
                 title: row.title;
                 // Content-driven, same as `row_open` above: `pack_layout`'s preferred height
                 // already reflects however many lines the wrapped title takes.
-                height: pack_layout.preferred-height;
+                height: max(pack_layout.preferred-height, pack_action.preferred-height);
+                alt: mod(i, 2) == 1;
+
+                Rectangle {
+                    y: Theme.gap;
+                    width: Theme.icon-size;
+                    height: Theme.icon-size;
+                    horizontal-stretch: 0;
+                    background: Theme.surface-raised;
+                    border-radius: Theme.radius;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    clip: true;
+
+                    if row.icon.width > 0: Image {
+                        source: row.icon;
+                        width: 100%;
+                        height: 100%;
+                        image-fit: cover;
+                    }
+                }
 
                 pack_layout := VerticalLayout {
                     padding-top: Theme.gap;
@@ -524,34 +590,11 @@ export component BrowserScreen inherits Rectangle {
                     spacing: Theme.gap / 2;
                     horizontal-stretch: 1;
 
-                    HorizontalLayout {
-                        spacing: Theme.gap;
-
-                        Text {
-                            text: row.title;
-                            color: Theme.text;
-                            font-size: Theme.font-size;
-                            horizontal-stretch: 1;
-                            wrap: word-wrap;
-                        }
-
-                        Text {
-                            text: "by " + row.author;
-                            color: Theme.text-muted;
-                            font-size: Theme.font-size-small;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                            overflow: elide;
-                        }
-
-                        Text {
-                            text: row.downloads + " downloads";
-                            color: Theme.text-muted;
-                            font-size: Theme.font-size-small;
-                            vertical-alignment: center;
-                            horizontal-alignment: right;
-                            horizontal-stretch: 0;
-                        }
+                    Text {
+                        text: row.title;
+                        color: Theme.text;
+                        font-size: Theme.font-size;
+                        wrap: word-wrap;
                     }
 
                     Text {
@@ -562,9 +605,39 @@ export component BrowserScreen inherits Rectangle {
                     }
                 }
 
-                VerticalLayout {
+                Text {
+                    text: row.author;
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
+                    width: Theme.col-author;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: row.downloads;
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
+                    horizontal-stretch: 0;
+                    width: Theme.col-downloads;
+                }
+
+                Text {
+                    text: row.updated;
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
+                    width: Theme.col-date;
+                }
+
+                pack_action := VerticalLayout {
                     alignment: center;
                     horizontal-stretch: 0;
+                    width: Theme.col-action;
 
                     pack_install_button := Button {
                         text: "Install";
@@ -598,6 +671,53 @@ export component BrowserScreen inherits Rectangle {
             vertical-stretch: 1;
             title: "Nothing to show yet";
             message: "Type what you are looking for and press Search.";
+        }
+
+        // Column labels above the results: Name | Author | Downloads | Last updated | the
+        // button column. Hidden while there are no rows to line up under it.
+        if !root.modpack_mode && !BrowserState.loading && BrowserState.rows.length > 0:
+            results_header := Rectangle {
+            HorizontalLayout {
+                padding-left: Theme.pad;
+                padding-right: Theme.pad;
+                spacing: Theme.gap;
+
+                Rectangle { width: Theme.icon-size; horizontal-stretch: 0; }
+
+                Text {
+                    text: "Name";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    horizontal-stretch: 1;
+                }
+
+                Text {
+                    text: "Author";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    width: Theme.col-author;
+                    horizontal-stretch: 0;
+                }
+
+                Text {
+                    text: "Downloads";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    width: Theme.col-downloads;
+                    horizontal-alignment: right;
+                    horizontal-stretch: 0;
+                }
+
+                Text {
+                    text: "Last updated";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-size-small;
+                    width: Theme.col-date;
+                    horizontal-stretch: 0;
+                }
+
+                Rectangle { width: Theme.col-action; horizontal-stretch: 0; }
+            }
         }
 
         // Arrow keys move the selection, Enter adds the chosen row the same way its button
@@ -640,11 +760,14 @@ export component BrowserScreen inherits Rectangle {
                     title: row.title;
                     // Content-driven: a wrapped multi-line title (see `row_title` below) is
                     // not clipped to a fixed three-line height. `row_layout` is the inner
-                    // `VerticalLayout` that carries the title/badge/author line and the
-                    // description; its `preferred-height` already reflects however many lines
-                    // the wrapped title takes.
-                    height: row_layout.preferred-height;
+                    // `VerticalLayout` that carries the title and the description; its
+                    // `preferred-height` already reflects however many lines the wrapped
+                    // title takes. `row_action`'s own two-line height (button plus the state
+                    // line under it) can be the taller one on a short title, so the row takes
+                    // whichever is bigger.
+                    height: max(row_layout.preferred-height, row_action.preferred-height);
                     selected: i == root.selected;
+                    alt: mod(i, 2) == 1;
                     clicked => {
                         // Clicking anywhere on the row but a button opens the details, the
                         // same as clicking the title itself. Clicking a row is also how the
@@ -680,99 +803,38 @@ export component BrowserScreen inherits Rectangle {
                         }
                     }
 
+                    // The Name column: icon (above), title, then a muted one-line
+                    // description under it. Author, Downloads and Last updated get their
+                    // own columns next to this one, so the title line carries nothing else.
                     row_layout := VerticalLayout {
                         padding-top: Theme.gap;
                         padding-bottom: Theme.gap;
                         spacing: Theme.gap / 2;
                         horizontal-stretch: 1;
 
-                        // Title line: name (clickable, opens details), kind badge, author,
-                        // and the download count.
-                        HorizontalLayout {
-                            spacing: Theme.gap;
+                        // Not interactive: it carries the `row_title` id and an
+                        // accessible-label for a screen reader, but no hover cue, no
+                        // underline and no pointer cursor. Clicking anywhere on the row —
+                        // including here — opens details through the row's own `clicked`
+                        // above, via `ListRow`'s `TouchArea` underneath this Rectangle.
+                        row_title := Rectangle {
+                            height: title_text.preferred-height;
 
-                            row_title := Rectangle {
-                                // Flexible, not clamped to `Theme.label-width`: the title
-                                // wraps fully (see `title_text` below) rather than eliding,
-                                // so it needs real layout width to wrap within, not just its
-                                // own natural (unwrapped) preferred width.
-                                horizontal-stretch: 1;
-                                height: title_text.preferred-height;
-
-                                accessible-role: button;
-                                accessible-label: row.title;
-                                accessible-action-default => {
-                                    keys.focus();
-                                    root.selected = i;
-                                    root.open_project(row.source, row.project_id, row.downloads, row.author);
-                                }
-
-                                title_text := Text {
-                                    text: row.title;
-                                    color: title_touch.has-hover ? Theme.accent : Theme.text;
-                                    font-size: Theme.font-size;
-                                    horizontal-alignment: left;
-                                    width: 100%;
-                                    wrap: word-wrap;
-                                }
-
-                                // A thin underline is the hover cue; the row's own
-                                // background already shows on hover, so this is what marks
-                                // the title itself as the clickable part. Always mounted and
-                                // toggled by `visible`, not wrapped in an `if`: a hover cue
-                                // that mounts and unmounts an element on every pointer move
-                                // is what triggers a Slint interpreter crash (issue #6426).
-                                Rectangle {
-                                    visible: title_touch.has-hover;
-                                    y: parent.height - 1px;
-                                    height: 1px;
-                                    width: parent.width;
-                                    background: Theme.accent;
-                                }
-
-                                title_touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        keys.focus();
-                                        root.selected = i;
-                                        root.open_project(row.source, row.project_id, row.downloads, row.author);
-                                    }
-                                }
+                            accessible-role: button;
+                            accessible-label: row.title;
+                            accessible-action-default => {
+                                keys.focus();
+                                root.selected = i;
+                                root.open_project(row.source, row.project_id, row.downloads, row.author);
                             }
 
-                            Rectangle {
-                                horizontal-stretch: 0;
-                                width: badge.preferred-width + Theme.gap;
-                                background: Theme.surface-raised;
-                                border-radius: Theme.radius;
-                                border-width: 1px;
-                                border-color: Theme.border;
-
-                                badge := Text {
-                                    text: row.kind;
-                                    color: Theme.text-muted;
-                                    font-size: Theme.font-size-small;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            Text {
-                                text: "by " + row.author;
-                                color: Theme.text-muted;
-                                font-size: Theme.font-size-small;
-                                vertical-alignment: center;
-                                horizontal-stretch: 1;
-                                overflow: elide;
-                            }
-
-                            Text {
-                                text: row.downloads + " downloads";
-                                color: Theme.text-muted;
-                                font-size: Theme.font-size-small;
-                                vertical-alignment: center;
-                                horizontal-alignment: right;
-                                horizontal-stretch: 0;
+                            title_text := Text {
+                                text: row.title;
+                                color: Theme.text;
+                                font-size: Theme.font-size;
+                                horizontal-alignment: left;
+                                width: 100%;
+                                wrap: word-wrap;
                             }
                         }
 
@@ -782,21 +844,45 @@ export component BrowserScreen inherits Rectangle {
                             font-size: Theme.font-size-small;
                             overflow: elide;
                         }
-
-                        // The row's newest version for the search target, whether it is
-                        // installed, and whether that copy is behind it. See
-                        // `row_state_text` above for what each `row.state` reads as.
-                        row_state_text := Text {
-                            text: root.row_state_text(row.state, row.latest_number, row.installed_number);
-                            color: Theme.text-muted;
-                            font-size: Theme.font-size-small;
-                            overflow: elide;
-                        }
                     }
 
-                    VerticalLayout {
-                        alignment: center;
+                    Text {
+                        text: row.author;
+                        color: Theme.text-muted;
+                        font-size: Theme.font-size-small;
+                        vertical-alignment: center;
                         horizontal-stretch: 0;
+                        width: Theme.col-author;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: row.downloads;
+                        color: Theme.text-muted;
+                        font-size: Theme.font-size-small;
+                        vertical-alignment: center;
+                        horizontal-alignment: right;
+                        horizontal-stretch: 0;
+                        width: Theme.col-downloads;
+                    }
+
+                    Text {
+                        text: row.updated;
+                        color: Theme.text-muted;
+                        font-size: Theme.font-size-small;
+                        vertical-alignment: center;
+                        horizontal-stretch: 0;
+                        width: Theme.col-date;
+                    }
+
+                    // The button, and under it the row's newest version for the search
+                    // target, whether it is installed, and whether that copy is behind it.
+                    // See `row_state_text` above for what each `row.state` reads as.
+                    row_action := VerticalLayout {
+                        alignment: center;
+                        spacing: Theme.gap / 4;
+                        horizontal-stretch: 0;
+                        width: Theme.col-action;
 
                         row_install := Button {
                             text: row.kind == "modpack"
@@ -824,6 +910,14 @@ export component BrowserScreen inherits Rectangle {
                                 root.selected = i;
                                 root.row_primary_action(row.project_id, row.kind, row.title, row.state, row.latest_id);
                             }
+                        }
+
+                        row_state_text := Text {
+                            text: root.row_state_text(row.state, row.latest_number, row.installed_number);
+                            color: Theme.text-muted;
+                            font-size: Theme.font-size-small;
+                            horizontal-alignment: center;
+                            overflow: elide;
                         }
                     }
                 }
@@ -908,6 +1002,7 @@ export component PreviewBrowserScreen inherits BrowserScreen {
                 author: "jellysquid3",
                 kind: "mod",
                 downloads: "45.2M",
+                updated: "2026-08-30",
                 page_url: "https://modrinth.com/mod/sodium",
                 state: "unknown",
             },
@@ -920,6 +1015,7 @@ export component PreviewBrowserScreen inherits BrowserScreen {
                 author: "jellysquid3",
                 kind: "mod",
                 downloads: "31.8M",
+                updated: "2026-07-14",
                 page_url: "https://modrinth.com/mod/lithium",
                 state: "none",
             },
@@ -932,6 +1028,7 @@ export component PreviewBrowserScreen inherits BrowserScreen {
                 author: "FabricMC",
                 kind: "mod",
                 downloads: "120.4M",
+                updated: "2026-09-01",
                 page_url: "https://modrinth.com/mod/fabric-api",
                 latest_number: "0.102.0",
                 latest_id: "v-fabric-api-latest",
@@ -946,6 +1043,7 @@ export component PreviewBrowserScreen inherits BrowserScreen {
                 author: "Prospector",
                 kind: "mod",
                 downloads: "60.1M",
+                updated: "2026-06-22",
                 page_url: "https://modrinth.com/mod/modmenu",
                 latest_number: "11.0.3",
                 latest_id: "v-modmenu-latest",
@@ -961,6 +1059,7 @@ export component PreviewBrowserScreen inherits BrowserScreen {
                 author: "shedaniel",
                 kind: "mod",
                 downloads: "50.7M",
+                updated: "2026-05-11",
                 page_url: "https://modrinth.com/mod/cloth-config",
                 latest_number: "14.0.126",
                 latest_id: "v-cloth-config-latest",

@@ -6,6 +6,9 @@ export global Theme {
     out property <color> surface: #1b1e23;
     out property <color> surface-raised: #23272e;
     out property <color> surface-hover: #2b3038;
+    // The odd-row tint in a dense list, one step off `surface`: subtle enough that a row's
+    // own hover and selection colors still read clearly over it.
+    out property <color> surface-alt: #1f2228;
     out property <color> border: #2e333b;
 
     // Text.
@@ -46,6 +49,15 @@ export global Theme {
     out property <length> accent-stripe: 3px;
     // Side of a project icon tile in a search row. The details header shows no icon.
     out property <length> icon-size: 48px;
+    // Width of a search row's Author column.
+    out property <length> col-author: 140px;
+    // Width of a search row's Downloads column, right-aligned.
+    out property <length> col-downloads: 100px;
+    // Width of a search row's Last updated column.
+    out property <length> col-date: 110px;
+    // Width of a search row's button column: the primary button, plus the state line
+    // beneath it.
+    out property <length> col-action: 170px;
 
     // Type scale.
     out property <length> font-size: 14px;
