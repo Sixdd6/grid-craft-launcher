@@ -321,6 +321,12 @@ choice_commit := Timer {
 rearm anything — that bug shipped once and made the timer fire 500 ms after the *first* change
 instead of the last. Always end with `restart()`.
 
+**Not every `ComboBox` needs this.** The instance JVM tab's `gc_combo` saves straight through
+`set_instance_gc` on its `selected` callback, no `Timer` and no Save button — one selection is
+one write, unlike the min/max heap fields next to it, which only save when their own Save button
+is pressed. Debounce a control that reports intermediate steps on the way to a value; a
+`ComboBox` that reports the chosen value once has nothing to debounce.
+
 ## Logging
 
 `logging::init(root)` returns a `LogGuard` that `main` holds to the end: dropping it stops the

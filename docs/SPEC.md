@@ -305,6 +305,47 @@ The description-rendering plan closed on 2026-09-08 on the same machine. What it
 | `just verify-api modrinth` | PASS | `PASS search sodium (5 hits)`, `PASS project sodium (AANobbMI)`, `PASS versions sodium 1.20.1 fabric (13)`. `debug verify-source modrinth` exercises no `changelog` call, so the single-version release-notes field stays verified only against `tests/fixtures/modrinth/`, not a live response. |
 | `just verify-api curseforge` | SKIP | no `CURSEFORGE_API_KEY`; both the description and the changelog envelopes stay unverified |
 
+### Plan 11 status (2026-09-08)
+
+The garbage collector preset plan closed on 2026-09-08 on the same machine. Design doc:
+`docs/superpowers/specs/2026-09-08-gc-presets-design.md`. What it added (R5, R10.3, R11.1, R12.1,
+R13.1):
+
+- An instance can pick a garbage collector: Default, Serial, Parallel, G1, ZGC, ZGC
+  (generational), or Shenandoah. `instances::model::GcPreset` holds the token, and
+  `InstanceJvm.gc` stores it (`instance.toml`'s `[jvm]` table gains an optional `gc` key; absent
+  means Default). `config.jvm.gc` seeds the preset a new instance is created with.
+- The picker offers only collectors the instance's own Java actually has. `java::gc::probe` runs
+  that JVM once with `-XX:+PrintFlagsFinal -version`, and `ProbeCache` remembers the answer in
+  memory and in `cache/runtimes/gc-probe.json`, keyed by the binary's path and modification
+  time, with one probe in flight per key. `Launcher::gc_support(slug)` installs the runtime
+  first when none is present, then probes it.
+  `instances::model::supported_presets(major, flags)` turns the probe's flag names into the
+  preset list a picker shows.
+  A plain ZGC selection on Java 23 and later saves and launches as the generational preset,
+  since both expand to the same flag there; the picker shows one ZGC row from 23 on, not two.
+- Launch inserts `GcPreset::flags(major)` after `-Xms`/`-Xmx` and refuses to start when a
+  hand-written `-XX:` collector flag in the extra JVM arguments names a different collector than
+  the preset (`launch::Error::GcConflict`), or when a non-Default preset meets a Java major below
+  8 (`launch::Error::MissingGcMajor`). `Launcher::set_instance_gc(slug, preset)` runs the same
+  probe-and-check before it saves, so a rejected preset never reaches `instance.toml`.
+  `Launcher::set_instance_jvm` (the heap Save button's call) keeps the saved preset untouched;
+  only `set_instance_gc` changes it.
+  `Default` skips the probe at launch and at save: there is no flag to check.
+- CLI: `gcl config set-jvm --gc <preset>` seeds new instances; `gcl instance jvm <slug> --gc
+  <preset>` changes an existing instance's preset alongside min, max, and extra args, rolling
+  back the whole command on a refusal; `gcl instance gc <slug>` prints the probed Java and the
+  presets it supports, flagging a saved preset the current Java has lost.
+- GUI: the JVM tab's `gc_combo` shows the probed Java's label (or "Preparing Java…" while a
+  runtime installs) and saves on selection, with no Save button — unlike the heap fields, which
+  save only when their own Save button is pressed. An amber line reads "Unavailable: <preset>"
+  when the saved preset is not one the current Java supports.
+
+| Command | Result | Key line |
+|---|---|---|
+| `just check` | PASS (at a942281) | `Summary [7.878s] 1048 tests run: 1048 passed, 0 skipped` |
+| `just lint-claude` | PASS | `PASS: claude files have frontmatter` |
+
 ### Verification record
 
 Every command below ran on 2026-09-06 on Linux (Fedora/Nobara, kernel 7.2.3), against the live

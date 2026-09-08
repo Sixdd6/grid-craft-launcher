@@ -251,6 +251,14 @@ Rerun it once before treating a failure as a real regression.
 `assert_cmd::Command::cargo_bin("gcl")` with `.env("GCL_ROOT", dir.path())`. Assert exit code and
 key output lines. Use `--json` and parse with serde_json for structure.
 
+`crates/gcl-cli/tests/cli.rs`'s `gc_java` writes the same kind of stand-in `sh` script as
+`ProbeCache`'s own tests (see `java::gc::probe`'s doc comment for the `-XX:+PrintFlagsFinal`
+dump shape), pointing an instance's `java_path` at a script that `cat`s a canned dump instead of
+spawning a real JVM. `gcl instance jvm --gc`/`gcl instance gc` tests drive that instance; GC
+coverage on the GUI side stops at the unit level — `screens::instance::tests` asserts
+`instance_jvm` threads a saved `GcPreset` through a heap save — there is no `flow_instances`
+sub-flow for it yet.
+
 ## e2e
 
 `just e2e` runs `scripts/e2e.sh`: temp root, create instance, install the loader, add a mod

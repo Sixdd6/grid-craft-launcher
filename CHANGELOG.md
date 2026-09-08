@@ -5,6 +5,13 @@ All notable changes to GRID Craft Launcher are documented here. Format follows
 
 ## Unreleased
 
+- JVM settings: an instance can pick a garbage collector preset — Default, Serial, Parallel, G1,
+  ZGC, ZGC (generational), or Shenandoah. The picker offers only collectors the instance's own
+  Java supports, found by probing that JVM once and caching the answer. Launch applies the
+  matching flags and refuses to start rather than hand Java a collector it does not have, or a
+  hand-written `-XX:` flag that fights the preset. `gcl config set-jvm --gc`, `gcl instance jvm
+  --gc`, and `gcl instance gc` on the CLI; a `gc_combo` on the GUI's JVM tab that saves on
+  selection.
 - Browser and instance detail: a mod, resource pack, shader, or data pack now has a details
   screen. It shows the project's description — the source's markdown or HTML turned into
   headings, paragraphs, bullets, code blocks, tables, rules, quotes, and images — and a Versions
