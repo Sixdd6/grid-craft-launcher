@@ -785,3 +785,57 @@ async fn description_404_is_not_found() {
         other => panic!("got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn changelog_returns_the_string_stored_on_the_version() {
+    let one: serde_json::Value = serde_json::from_str(
+        VERSION_WITH_DEPS
+            .trim_start_matches('[')
+            .trim_end_matches(']'),
+    )
+    .expect("one version");
+    let mut with_notes = one.clone();
+    with_notes["changelog"] = serde_json::json!("## Fixed\n\n- a crash on load\n");
+    let server = MockServer::start().await;
+    let source = serve(&server, "/version/abc", &with_notes.to_string()).await;
+
+    let notes = source.changelog("XYZ", "abc").await.expect("changelog");
+    assert!(notes.starts_with("## Fixed"), "got {notes:?}");
+    assert!(notes.contains("a crash on load"));
+
+    // The same GET answers `version`, so the field lands on the mapped struct too.
+    let version = source.version("abc").await.expect("version");
+    assert_eq!(version.changelog.as_deref(), Some(notes.as_str()));
+}
+
+#[tokio::test]
+async fn changelog_of_a_version_without_one_is_empty() {
+    let one = VERSION_WITH_DEPS
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+    let server = MockServer::start().await;
+    let source = serve(&server, "/version/abc", one).await;
+
+    assert_eq!(source.changelog("XYZ", "abc").await.expect("changelog"), "");
+    assert_eq!(
+        source.version("abc").await.expect("version").changelog,
+        None
+    );
+}
+
+#[tokio::test]
+async fn changelog_404_is_not_found() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/version/zz"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    let source = Modrinth::with_base_url(client(), server.uri());
+
+    let err = source.changelog("XYZ", "zz").await.expect_err("404 fails");
+    assert!(
+        matches!(err, Error::NotFound { ref id, .. } if id == "zz"),
+        "got {err:?}"
+    );
+}

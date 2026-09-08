@@ -125,6 +125,15 @@ pub trait Source: Send + Sync {
     /// The caller converts with [`richtext::from_markdown`] or
     /// [`richtext::from_html`]. There is no default body: every source answers this.
     async fn description(&self, project_id: &str) -> Result<String, Error>;
+    /// Fetches one version's release notes, in the source's own markup.
+    ///
+    /// Modrinth answers markdown (the version's `changelog`, from `GET /version/{id}`),
+    /// CurseForge HTML (`GET /v1/mods/{id}/files/{fileId}/changelog`). The caller converts
+    /// with [`richtext::from_markdown`] or [`richtext::from_html`], the same way
+    /// [`Source::description`] is handled; [`crate::Launcher::version_notes`] does both.
+    /// A version with no notes answers an empty string, not an error. There is no default
+    /// body: every source answers this.
+    async fn changelog(&self, project_id: &str, version_id: &str) -> Result<String, Error>;
     /// Lists a project's versions, optionally filtered.
     async fn versions(&self, project_id: &str, f: &VersionFilter) -> Result<Vec<Version>, Error>;
     /// Fetches one version by id.

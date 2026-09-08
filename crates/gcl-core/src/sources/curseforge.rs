@@ -551,6 +551,28 @@ impl Source for CurseForge {
     }
 
     #[tracing::instrument(skip(self))]
+    async fn changelog(&self, project_id: &str, version_id: &str) -> Result<String, Error> {
+        let mod_id = project_id.parse::<u32>().map_err(|_| Error::NotFound {
+            source_id: ID,
+            id: project_id.to_string(),
+        })?;
+        let file_id = version_id.parse::<u32>().map_err(|_| Error::NotFound {
+            source_id: ID,
+            id: version_id.to_string(),
+        })?;
+        // VERIFY: the envelope is assumed to be `{"data": "<html>"}`, like every other
+        // CurseForge endpoint this client parses. No `CURSEFORGE_API_KEY` was
+        // available to record a real response, so the fixture is synthetic; see
+        // `tests/fixtures/curseforge/README.md` and the `mod-sources` skill.
+        let url = format!("{}/v1/mods/{mod_id}/files/{file_id}/changelog", self.base);
+        let body: Envelope<String> = self
+            .get(&url)
+            .await
+            .map_err(|e| map_err(e, "changelog", Some(version_id)))?;
+        Ok(body.data)
+    }
+
+    #[tracing::instrument(skip(self))]
     async fn versions(&self, project_id: &str, f: &VersionFilter) -> Result<Vec<Version>, Error> {
         let id = project_id.parse::<u32>().map_err(|_| Error::NotFound {
             source_id: ID,
@@ -727,6 +749,9 @@ fn map_file(f: RawFile) -> Result<Version, Error> {
         game_versions,
         loaders,
         published: f.file_date,
+        // CurseForge keeps a file's notes behind its own endpoint, never on the file:
+        // `Source::changelog` fetches them.
+        changelog: None,
         files: vec![VersionFile {
             url,
             file_name: f.file_name,

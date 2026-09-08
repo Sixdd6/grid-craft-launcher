@@ -98,6 +98,16 @@ impl Source for FakeSource {
         Ok(format!("# {}\n\n{}\n", project.title, project.description))
     }
 
+    /// Stands in for release notes: the version's number as one markdown heading.
+    async fn changelog(
+        &self,
+        _project_id: &str,
+        version_id: &str,
+    ) -> Result<String, crate::sources::Error> {
+        let version = self.version(version_id).await?;
+        Ok(format!("## {}\n", version.number))
+    }
+
     async fn versions(
         &self,
         project_id: &str,
@@ -164,6 +174,7 @@ fn version(project_id: &str, id: &str, number: &str) -> Version {
         game_versions: vec!["1.20.1".to_string()],
         loaders: vec!["fabric".to_string()],
         published: "2026-01-01T00:00:00Z".to_string(),
+        changelog: None,
         files: Vec::new(),
         dependencies: Vec::new(),
     }
@@ -974,6 +985,14 @@ impl Source for MutatingSource {
 
     async fn description(&self, project_id: &str) -> Result<String, crate::sources::Error> {
         self.inner.description(project_id).await
+    }
+
+    async fn changelog(
+        &self,
+        project_id: &str,
+        version_id: &str,
+    ) -> Result<String, crate::sources::Error> {
+        self.inner.changelog(project_id, version_id).await
     }
 
     async fn versions(

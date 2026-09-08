@@ -211,6 +211,14 @@ pub struct Version {
     pub files: Vec<VersionFile>,
     /// Dependencies of this version.
     pub dependencies: Vec<Dependency>,
+    /// Release notes for this version, in the source's own markup, when the source sent
+    /// them with the version itself.
+    ///
+    /// Modrinth carries them in `changelog`, but only when the request asked for them:
+    /// the version *list* sends `include_changelog=false`, so a listed version leaves this
+    /// `None` and [`crate::sources::Source::changelog`] fetches them. CurseForge never
+    /// sends them with a file, so they are always `None` there.
+    pub changelog: Option<String>,
 }
 
 /// Filter applied when listing a project's versions.

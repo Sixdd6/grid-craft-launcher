@@ -18,6 +18,7 @@ pub trait Source: Send + Sync {
     async fn search_packs(&self, q: &SearchQuery) -> Result<SearchPage, Error>;  // modpacks; default: UnsupportedPacks
     async fn project(&self, id_or_slug: &str) -> Result<Project, Error>;
     async fn description(&self, project_id: &str) -> Result<String, Error>;  // no default body
+    async fn changelog(&self, project_id: &str, version_id: &str) -> Result<String, Error>;  // no default body
     async fn versions(&self, project_id: &str, f: &VersionFilter) -> Result<Vec<Version>, Error>;
     async fn version(&self, version_id: &str) -> Result<Version, Error>;
     async fn resolve_by_hash(&self, sha1: &[String]) -> Result<Vec<Version>, Error>;
@@ -75,6 +76,12 @@ with CurseForge only when a key was found; the list is cached on the `Launcher`,
 - Description: no endpoint of its own. `Source::description` re-fetches `GET /project/{id}` and
   returns its `body` (markdown), which `sources::richtext::from_markdown` turns into blocks. A
   project with no body answers an empty string, not an error.
+- Release notes: `Source::changelog` GETs `/version/{version_id}` and returns its `changelog`
+  (markdown), which `include_changelog=false` on the *list* endpoint does not filter.
+  `Modrinth::version_raw` is the shared inherent helper behind both `version` and `changelog`,
+  so one call is one GET. `Version.changelog: Option<String>` carries the same field whenever a
+  response sent it; a listed version leaves it `None`. A version with no notes answers an empty
+  string, not an error.
 - Files have both `sha1` and `sha512`; the object store only checks sha1.
 - **`world` is not a Modrinth project type.** `KINDS` in `modrinth.rs` lists `Mod`,
   `ResourcePack`, `Shader`, `DataPack` only; `ContentKind::World` is left out and `search`
@@ -107,6 +114,12 @@ with CurseForge only when a key was found; the list is cached on the `Launcher`,
   No `CURSEFORGE_API_KEY` on this machine, so `tests/fixtures/curseforge/get_mod_description.json`
   is synthetic and the shape is unconfirmed against a live response. A non-numeric project id is
   `Error::NotFound`, as with `versions`.
+- Release notes: `GET /v1/mods/{modId}/files/{fileId}/changelog`, HTML, parsed from the same
+  `Envelope<String>` `description` uses. **VERIFY: the envelope is assumed to be
+  `{"data": "<html string>"}`** — no `CURSEFORGE_API_KEY` on this machine, so
+  `tests/fixtures/curseforge/get_file_changelog.json` is synthetic and unconfirmed against a
+  live response. A non-numeric mod id or file id is `Error::NotFound`. `Version.changelog` is
+  always `None` here: CurseForge never sends notes with a file.
 - Loader ids (`modLoaderType`): Forge 1, Fabric 4, Quilt 5, NeoForge 6.
 - Files: `GET /v1/mods/{id}/files?gameVersion=&modLoaderType=&pageSize=50&index=0`.
   `downloadUrl` may be null. `CurseForge::mod_files` and `CurseForge::pack_files` both call

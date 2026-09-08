@@ -23,6 +23,8 @@ const FINGERPRINTS: &str =
 
 const DESCRIPTION: &str =
     include_str!("../../../../../tests/fixtures/curseforge/get_mod_description.json");
+const CHANGELOG: &str =
+    include_str!("../../../../../tests/fixtures/curseforge/get_file_changelog.json");
 
 const KEY: &str = "test-api-key";
 
@@ -977,6 +979,66 @@ async fn description_404_is_not_found() {
         Error::NotFound { source_id, id } => {
             assert_eq!(source_id, SourceId::CurseForge);
             assert_eq!(id, "1");
+        }
+        other => panic!("got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn changelog_returns_the_html_from_the_data_envelope() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/mods/394468/files/5000/changelog"))
+        .and(header("x-api-key", KEY))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CHANGELOG))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let html = source(&server)
+        .changelog("394468", "5000")
+        .await
+        .expect("changelog");
+
+    assert!(html.starts_with("<h2>1.20.1-0.5.3</h2>"), "got {html:?}");
+    assert!(html.contains("<li>Fixed a crash on load</li>"));
+}
+
+#[tokio::test]
+async fn changelog_of_a_non_numeric_id_is_not_found() {
+    let server = MockServer::start().await;
+
+    for (project, version, wanted) in [("sodium", "5000", "sodium"), ("394468", "latest", "latest")]
+    {
+        match source(&server)
+            .changelog(project, version)
+            .await
+            .expect_err("a non-numeric id fails")
+        {
+            Error::NotFound { source_id, id } => {
+                assert_eq!(source_id, SourceId::CurseForge);
+                assert_eq!(id, wanted);
+            }
+            other => panic!("got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn changelog_404_is_not_found() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/mods/1/files/2/changelog"))
+        .and(header("x-api-key", KEY))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    match source(&server).changelog("1", "2").await.expect_err("404") {
+        Error::NotFound { source_id, id } => {
+            assert_eq!(source_id, SourceId::CurseForge);
+            assert_eq!(id, "2");
         }
         other => panic!("got {other:?}"),
     }

@@ -110,6 +110,19 @@ impl Modrinth {
         Ok((project, raw.body))
     }
 
+    /// Fetches one version by id, unmapped.
+    ///
+    /// Both [`Source::version`] and [`Source::changelog`] answer from this one `GET
+    /// /version/{id}`, so neither duplicates the request or its error mapping.
+    #[tracing::instrument(skip(self))]
+    async fn version_raw(&self, version_id: &str) -> Result<RawVersion, Error> {
+        let url = format!("{}/version/{}", self.base, encode(version_id));
+        self.http
+            .get_json(&url)
+            .await
+            .map_err(|e| map_err(e, "version", Some(version_id)))
+    }
+
     /// GETs `{base}/project/{project_id}/version` with the given filters and maps the body.
     async fn fetch_versions(
         &self,
@@ -298,13 +311,19 @@ impl Source for Modrinth {
 
     #[tracing::instrument(skip(self))]
     async fn version(&self, version_id: &str) -> Result<Version, Error> {
-        let url = format!("{}/version/{}", self.base, encode(version_id));
-        let raw: RawVersion = self
-            .http
-            .get_json(&url)
-            .await
-            .map_err(|e| map_err(e, "version", Some(version_id)))?;
-        map_version(raw)
+        map_version(self.version_raw(version_id).await?)
+    }
+
+    /// The version list sends `include_changelog=false`, so the notes come from the
+    /// single-version endpoint instead, which that flag does not filter.
+    #[tracing::instrument(skip(self))]
+    async fn changelog(&self, project_id: &str, version_id: &str) -> Result<String, Error> {
+        let _ = project_id;
+        Ok(self
+            .version_raw(version_id)
+            .await?
+            .changelog
+            .unwrap_or_default())
     }
 
     #[tracing::instrument(skip(self))]
@@ -447,6 +466,7 @@ fn map_version(raw: RawVersion) -> Result<Version, Error> {
         game_versions: raw.game_versions,
         loaders: raw.loaders,
         published: raw.date_published,
+        changelog: raw.changelog,
         files,
         dependencies,
     })
@@ -510,6 +530,10 @@ struct RawVersion {
     files: Vec<RawFile>,
     #[serde(default)]
     dependencies: Vec<RawDependency>,
+    /// Release notes. The list endpoint is asked not to send these, and a version may
+    /// carry `null`, so it is optional on both paths.
+    #[serde(default)]
+    changelog: Option<String>,
 }
 
 /// One file attached to a version.

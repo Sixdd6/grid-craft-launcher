@@ -37,6 +37,7 @@ fn candidate(entry: ContentEntry) -> UpdateCandidate {
         game_versions: vec!["1.20.1".to_string()],
         loaders: vec!["fabric".to_string()],
         published: "2026-01-01T00:00:00Z".to_string(),
+        changelog: None,
         files: Vec::new(),
         dependencies: Vec::new(),
     };

@@ -123,6 +123,11 @@ impl Root {
         self.cache_dir().join("icons")
     }
 
+    /// Directory holding cached description images, keyed by the sha1 of their URL.
+    pub fn images_dir(&self) -> PathBuf {
+        self.cache_dir().join("images")
+    }
+
     /// Directory holding content-addressed objects, keyed by sha1.
     pub fn objects_dir(&self) -> PathBuf {
         self.cache_dir().join("objects")

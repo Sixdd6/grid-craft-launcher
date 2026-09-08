@@ -5,6 +5,8 @@
 
 pub mod hash;
 pub mod icons;
+pub mod images;
+pub mod media;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

@@ -552,6 +552,108 @@ async fn project_details_costs_one_project_request() {
     assert_eq!(hits, 1, "the project is fetched once, body and all");
 }
 
+/// A launcher over a fresh root with CurseForge pointed at `uri`, keyed, everything else dead.
+fn curseforge_launcher(dir: &tempfile::TempDir, uri: String) -> Launcher {
+    // The key is read once, when the launcher opens, so it goes into `config.toml` first.
+    let config = gcl_core::config::Config {
+        keys: gcl_core::config::Keys {
+            curseforge_api_key: Some("test-key".to_string()),
+            msa_client_id: None,
+        },
+        ..gcl_core::config::Config::default()
+    };
+    config
+        .save(&dir.path().join("config.toml"))
+        .expect("save config");
+    let endpoints = Endpoints {
+        mojang: "http://mojang.invalid".to_string(),
+        modrinth: "http://modrinth.invalid".to_string(),
+        curseforge: uri,
+        loaders: LoaderEndpoints {
+            fabric: "http://fabric.invalid".to_string(),
+            ..LoaderEndpoints::default()
+        },
+        msa: common::dead_msa_endpoints(),
+    };
+    let (launcher, _rx) =
+        Launcher::open_with_endpoints(dir.path().to_path_buf(), endpoints).expect("build launcher");
+    launcher
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn version_notes_render_modrinth_markdown() {
+    let server = MockServer::start().await;
+    let versions: Vec<serde_json::Value> =
+        serde_json::from_str(MODRINTH_VERSIONS).expect("versions fixture");
+    let mut version = versions.into_iter().next().expect("one version");
+    version["changelog"] = serde_json::json!("## Fixed\n\n- a crash on load\n");
+    let version_id = version["id"].as_str().expect("version id").to_string();
+    serve(
+        &server,
+        &format!("/version/{version_id}"),
+        version.to_string().into_bytes(),
+    )
+    .await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let uri = server.uri();
+
+    tokio::task::spawn_blocking(move || {
+        let launcher = modrinth_launcher(&dir, uri);
+        let blocks = launcher
+            .version_notes(SourceId::Modrinth, SODIUM_ID, &version_id)
+            .expect("notes");
+
+        // A markdown heading: the HTML converter would have left the `##` in a paragraph.
+        assert!(
+            blocks
+                .iter()
+                .any(|b| matches!(b, Block::Heading(2, text) if text == "Fixed")),
+            "{blocks:?}"
+        );
+        assert!(
+            blocks.iter().any(|b| b.text() == "a crash on load"),
+            "{blocks:?}"
+        );
+        dir
+    })
+    .await
+    .expect("blocking task");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn version_notes_render_curseforge_html() {
+    let server = MockServer::start().await;
+    serve(
+        &server,
+        "/v1/mods/394468/files/5000/changelog",
+        br#"{"data": "<h2>0.5.3</h2>\n<ul><li>Fixed a crash on load</li></ul>"}"#.to_vec(),
+    )
+    .await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let uri = server.uri();
+
+    tokio::task::spawn_blocking(move || {
+        let launcher = curseforge_launcher(&dir, uri);
+        let blocks = launcher
+            .version_notes(SourceId::CurseForge, "394468", "5000")
+            .expect("notes");
+
+        assert!(
+            blocks
+                .iter()
+                .any(|b| matches!(b, Block::Heading(2, text) if text == "0.5.3")),
+            "{blocks:?}"
+        );
+        assert!(
+            blocks.iter().any(|b| b.text() == "Fixed a crash on load"),
+            "{blocks:?}"
+        );
+        dir
+    })
+    .await
+    .expect("blocking task");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn sources_hold_curseforge_only_when_a_key_is_configured() {
     let dir = tempfile::tempdir().expect("tempdir");

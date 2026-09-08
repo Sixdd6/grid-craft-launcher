@@ -27,6 +27,7 @@ use crate::auth::{Account, AccountKind, token_expires_soon};
 use crate::config::Config;
 use crate::content::{AddOutcome, AddRequest, ContentCtx, ManualDownload, UpdateCandidate};
 use crate::download::icons::IconCache;
+use crate::download::images::ImageCache;
 use crate::download::{DownloadCtx, cleanup_partials};
 use crate::events::{Event, EventSink};
 use crate::http::HttpClient;
@@ -308,6 +309,11 @@ pub struct Launcher {
     icon_hosts: Vec<String>,
     /// The project-icon cache behind [`Launcher::fetch_icon`].
     icons: IconCache,
+    /// Hosts a description image may be plain HTTP at. There is no host allowlist for
+    /// images, so this is the scheme seam only. Empty everywhere but in a test.
+    image_hosts: Vec<String>,
+    /// The description-image cache behind [`Launcher::fetch_image`].
+    images: ImageCache,
     /// The refresh-token store, opened on first use by [`Launcher::secrets`].
     secrets: OnceLock<Box<dyn SecretStore>>,
     /// The games this launcher started that have not exited, by instance slug.
@@ -389,6 +395,8 @@ impl Launcher {
             pack_hosts: Vec::new(),
             icon_hosts: Vec::new(),
             icons: IconCache::new(),
+            image_hosts: Vec::new(),
+            images: ImageCache::new(),
             secrets: OnceLock::new(),
             running: Arc::new(Mutex::new(HashMap::new())),
         };
@@ -1271,6 +1279,27 @@ impl Launcher {
         Ok(self.block_on(async move { source.versions(project_id, filter).await })?)
     }
 
+    /// One version's release notes, as the same blocks a description renders as. Blocks.
+    ///
+    /// The notes are markdown at Modrinth and HTML at CurseForge, so this dispatches on
+    /// the source id the way [`Launcher::project_details`] does. A version with no notes
+    /// answers an empty list, not an error.
+    pub fn version_notes(
+        &self,
+        source: SourceId,
+        project_id: &str,
+        version_id: &str,
+    ) -> Result<Vec<richtext::Block>, crate::Error> {
+        let source = self.source(source)?;
+        Ok(self.block_on(async move {
+            let text = source.changelog(project_id, version_id).await?;
+            Ok::<_, crate::sources::Error>(match source.id() {
+                SourceId::Modrinth => richtext::from_markdown(&text),
+                SourceId::CurseForge => richtext::from_html(&text),
+            })
+        })?)
+    }
+
     /// Slugs of the games this launcher started that have not exited, in name order.
     pub fn running_slugs(&self) -> Vec<String> {
         let mut slugs: Vec<String> = self
@@ -1947,6 +1976,35 @@ impl Launcher {
         let root = self.root.clone();
         let hosts = self.icon_hosts.clone();
         Ok(self.block_on(async move { self.icons.fetch(&http, &root, url, &hosts).await })?)
+    }
+
+    /// Test seam: lets a description image be fetched over plain HTTP from `hosts`.
+    ///
+    /// A description image may come from any `https://` host, so unlike
+    /// [`Launcher::with_icon_hosts`] this adds no host to an allowlist — there is none.
+    /// It only excuses the scheme, so a wiremock server can serve an image. It defaults
+    /// to empty, so a shipped launcher fetches description images over HTTPS and nothing
+    /// else.
+    #[must_use]
+    pub fn with_image_hosts(mut self, hosts: Vec<String>) -> Self {
+        self.image_hosts = hosts;
+        self
+    }
+
+    /// Downloads a description image into `cache/images/` and returns its path. Blocks.
+    ///
+    /// The cache key is the URL: the file is `cache/images/<sha1(url)>.<ext>`, with
+    /// `<ext>` a label read off the URL's path (`img` when it names none). A file already
+    /// there is returned without a request, and two threads asking for one URL at the same
+    /// time make one request between them. A body over
+    /// [`crate::download::images::MAX_BYTES`] (5 MiB) is refused, as is a URL that is not
+    /// `https://`. **Any https host is allowed**: a description names whatever image host
+    /// its author chose, so the icon allowlist does not apply here.
+    pub fn fetch_image(&self, url: &str) -> Result<PathBuf, crate::Error> {
+        let http = self.http.clone();
+        let root = self.root.clone();
+        let hosts = self.image_hosts.clone();
+        Ok(self.block_on(async move { self.images.fetch(&http, &root, url, &hosts).await })?)
     }
 }
 
@@ -2900,6 +2958,64 @@ mod tests {
                 &err,
                 crate::Error::Download(crate::download::Error::DisallowedHost { host, .. })
                     if host == "evil.example"
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn fetch_image_stores_under_cache_images_from_a_host_no_icon_allowlist_covers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+        let (server, url) = launcher.block_on(async {
+            let server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/shot.png"))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(200).set_body_bytes(b"image bytes".to_vec()),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let url = format!("{}/shot.png", server.uri());
+            (server, url)
+        });
+        // Only the image seam is set: the icon cache still refuses this host, which is
+        // what proves the image path applies no host allowlist of its own.
+        let launcher = launcher.with_image_hosts(vec!["127.0.0.1".to_string()]);
+
+        let path = launcher.fetch_image(&url).expect("image fetched");
+        assert_eq!(
+            path,
+            launcher
+                .root()
+                .images_dir()
+                .join(crate::download::images::cache_file_name(&url))
+        );
+        assert_eq!(std::fs::read(&path).expect("read image"), b"image bytes");
+        assert!(
+            launcher.fetch_icon(&url).is_err(),
+            "the icon allowlist still refuses this host"
+        );
+
+        // The second call is answered from disk, so the mock still sees one request.
+        assert_eq!(launcher.fetch_image(&url).expect("cached image"), path);
+        let seen = launcher.block_on(async { server.received_requests().await.map(|r| r.len()) });
+        assert_eq!(seen, Some(1));
+    }
+
+    #[test]
+    fn fetch_image_refuses_a_url_that_is_not_https() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+        let err = launcher
+            .fetch_image("http://images.example/shot.png")
+            .expect_err("the scheme is not https");
+        assert!(
+            matches!(
+                &err,
+                crate::Error::Download(crate::download::Error::DisallowedHost { host, .. })
+                    if host == "images.example"
             ),
             "{err:?}"
         );

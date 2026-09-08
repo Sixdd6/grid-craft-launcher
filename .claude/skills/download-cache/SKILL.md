@@ -39,6 +39,26 @@ per URL at a time; a second caller waits and then finds the file.
 sweeps `*.part` files. The directory grows with the number of distinct icon URLs a user
 browses. A cap or an age sweep is still to be written.
 
+## Description images (`download::images`)
+
+`ImageCache::fetch` is the icon cache's twin for the images a project description points at:
+same URL key (`cache/images/<sha1(url)>.<ext>`), same single request per URL, same
+after-the-transfer size check. Two things differ, on purpose:
+
+- **No host allowlist.** A description names whatever image host its author chose, so any
+  `https://` URL is fetched. The scheme is the only host rule, and `extra_hosts`
+  (`Launcher::with_image_hosts`, empty in a shipped launcher) excuses it for a wiremock host in
+  a test — there is no list to extend. This is a deliberate widening over icons, approved in
+  `docs/superpowers/specs/2026-09-08-description-rendering-design.md`.
+- **A 5 MiB cap** (`images::MAX_BYTES`), not 2 MiB.
+
+Both caches are one type underneath: `download::media::MediaCache` with a
+`Policy { allowed_hosts: Option<Vec<String>>, max_bytes, dir }` — `None` allowlist means any
+host, and `dir` is the `Root` accessor the file lands under (`icons_dir` or `images_dir`).
+`icons.rs` and `images.rs` are the two policies over it; the streaming, staging, capping, and
+single-flight code lives in `media.rs` once. `cache/images` has no eviction, the same gap
+`cache/icons` carries.
+
 ## Queue
 
 `download_all(specs, sink, cancel)` runs up to `config.parallel_downloads` (default 8) at once
