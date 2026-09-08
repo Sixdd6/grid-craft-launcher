@@ -5,6 +5,11 @@ All notable changes to GRID Craft Launcher are documented here. Format follows
 
 ## Unreleased
 
+- Browser: a search row now shows the newest version for the target instance's Minecraft
+  version and loader, whether it is already installed, and whether the installed copy is
+  older, marked with an `↑`. The row's button reads Add, Update, or a disabled Installed.
+  Update installs the newest version over the old one. A vanilla target shows no latest for a
+  mod, since a vanilla instance runs no mods.
 - JVM settings: an instance can pick a garbage collector preset — Default, Serial, Parallel, G1,
   ZGC, ZGC (generational), or Shenandoah. The picker offers only collectors the instance's own
   Java supports, found by probing that JVM once and caching the answer. Launch applies the

@@ -381,3 +381,35 @@ NeoForge runs at `content add`. That was test data, not launcher code: Modrinth 
 for `fabric` and `quilt` only, at 1.20.1 and 1.20.2 alike, so `content::compatible_loaders`
 correctly found no candidate. The NeoForge-loads-Forge fallback applies at 1.20.1 only, and the
 NeoForge run uses 1.20.2. `scripts/e2e.sh` now takes `GCL_E2E_MOD` to override the default.
+
+### Plan 12 status (2026-09-08)
+
+Design doc: `docs/superpowers/specs/2026-09-08-browser-latest-design.md`. Each browser search
+row now shows the newest version for the search target's Minecraft version and loader, whether
+the mod is installed there, and whether the installed copy is older, with an Add/Update/Installed
+button.
+
+- `SearchHit.latest_files: Vec<LatestFileIndex>` maps CurseForge's `latestFilesIndexes`, so a
+  CurseForge hit can name its newest file for a given Minecraft version and loader without a
+  second request. Modrinth has no such field; `latest_files` stays empty there. **VERIFY: the
+  index entry shape is taken from the public docs, unconfirmed against a live response (no
+  `CURSEFORGE_API_KEY` on this machine).**
+- `content::pick_latest` picks the newest version release-first, without an install target, so
+  a browser row can answer "latest" the same way `content::add` would install it.
+- `Launcher::latest_versions`/`latest_versions_each(source, hits, target)` resolve up to four
+  hits at once, cache each project's version list in memory for the launcher's lifetime, and
+  take the CurseForge index fast path when it names a match. A vanilla target
+  (`VersionTarget { loader: Loader::None, .. }`) answers no latest for a mod: a vanilla instance
+  runs no mods.
+- `Launcher::install_state(slug, source, project_id, target, latest)` answers `NotInstalled`,
+  `Installed`, or `Older`, comparing publish times from the same cached list; a pack-imported
+  entry is matched by `content::entry_holding_file`. Equal publish times read as `Installed`.
+- Browser rows: a state line under the title, an `↑` marker when older, and `row_install`
+  reading Add / Update / a muted disabled Installed. A per-page job resolves this after search,
+  guarded by `latest_generation` beside `icon_generation`, and re-runs on a target change.
+
+Commits: `e922447` (CurseForge index parsing), `41fbf9c` (`pick_latest`), `28e04b1` (resolver
+and comparator), `371e542` (browser UI), `a79eaae` (vanilla-target and incremental-answer fix).
+`just lint-claude` PASS. `just check` was not re-run for this docs task; Task 5's flow test and
+the fixes in `a79eaae` already exercised the feature end to end. CurseForge's `latestFilesIndexes`
+shape stays VERIFY without a key.

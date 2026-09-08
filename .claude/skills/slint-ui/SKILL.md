@@ -156,7 +156,9 @@ time, capped at 20 per open. Two things can make a stale result show up: the use
 different project while a fetch is still running, or opens a different version's Notes modal
 while its changelog is still loading. `project.rs` guards both with a generation counter, the
 same pattern `browser.rs` already uses for search-row icons (`icon_generation`, bumped in
-`load_hits`, checked in `fetch_icons`):
+`load_hits`, checked in `fetch_icons`) and for each row's latest version and install state
+(`latest_generation`, bumped in `search()` beside `icon_generation` and again on a target
+change, checked in `fetch_latest`):
 
 ```rust
 // project.rs: one AtomicU64 per thing that can go stale, held in Shared
