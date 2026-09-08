@@ -572,6 +572,7 @@ async fn install_file(
         project_id: project.id.clone(),
         version_id: version.id.clone(),
         file_name: file.file_name.clone(),
+        title: Some(project.title.clone()),
         sha1: Some(sha1),
         fingerprint,
         kind,
@@ -667,22 +668,30 @@ pub(crate) async fn place(
     Ok(placed.entry)
 }
 
-/// Lists the installed entries that have a newer compatible version at their source.
+/// Lists the installed entries that have a newer compatible version at their source, and
+/// backfills a missing [`ContentEntry::title`] along the way.
 ///
 /// An entry whose source is not configured, or whose source answers with an error, is
 /// skipped with an [`Event::Warning`]: one dead source must not hide the updates the
 /// others found. An entry whose `source` names no known source — `file`, written by a
 /// `.mrpack` import — is skipped silently: it has no project to check.
+///
+/// The instance is borrowed mutably for the backfill: an entry written before the `title`
+/// key existed gets its project title here. `instance.toml` is saved once at the end, and
+/// only when a title actually changed. A source that cannot answer the project lookup only
+/// costs that one backfill, with a warning.
 #[tracing::instrument(skip(ctx), fields(slug = %instance.slug))]
 pub async fn check_updates(
     ctx: &ContentCtx<'_>,
-    instance: &Instance,
+    instance: &mut Instance,
 ) -> Result<Vec<UpdateCandidate>, Error> {
-    let minecraft = &instance.config.minecraft;
+    let minecraft = instance.config.minecraft.clone();
     let loader = instance.config.loader;
     let mut candidates = Vec::new();
+    let mut backfilled = false;
 
-    for entry in &instance.config.content {
+    for index in 0..instance.config.content.len() {
+        let mut entry = instance.config.content[index].clone();
         // A source that does not parse is skipped without a word. `file` is the one
         // that happens in practice: a `.mrpack` file records no project at either
         // source, so there is nothing to ask for a newer version.
@@ -696,10 +705,20 @@ pub async fn check_updates(
                 continue;
             }
         };
+        if entry.title.is_none() {
+            match source.project(&entry.project_id).await {
+                Ok(project) => {
+                    entry.title = Some(project.title.clone());
+                    instance.config.content[index].title = Some(project.title);
+                    backfilled = true;
+                }
+                Err(err) => warn(ctx, &entry.file_name, &err.to_string()),
+            }
+        }
         let filter = VersionFilter {
             minecraft: Some(minecraft.clone()),
             loaders: if entry.kind == ContentKind::Mod {
-                compatible_loaders(loader, minecraft)
+                compatible_loaders(loader, &minecraft)
                     .into_iter()
                     .map(str::to_string)
                     .collect()
@@ -714,15 +733,15 @@ pub async fn check_updates(
                 continue;
             }
         };
-        let Some(newest) = pick_version(&versions, entry.kind, minecraft, loader, None) else {
+        let Some(newest) = pick_version(&versions, entry.kind, &minecraft, loader, None) else {
             continue;
         };
         if newest.id != entry.version_id {
-            candidates.push(UpdateCandidate {
-                entry: entry.clone(),
-                new: newest,
-            });
+            candidates.push(UpdateCandidate { entry, new: newest });
         }
+    }
+    if backfilled {
+        instance.save()?;
     }
     Ok(candidates)
 }
@@ -798,6 +817,8 @@ pub async fn import_manual(
         project_id: pending.project_id.clone(),
         version_id: pending.version_id.clone(),
         file_name: pending.file_name.clone(),
+        // No project lookup here: `check_updates` backfills the title later.
+        title: None,
         sha1: Some(sha1),
         fingerprint: match pending.source {
             SourceId::CurseForge => Some(fingerprint),

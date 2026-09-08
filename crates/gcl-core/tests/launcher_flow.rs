@@ -10,7 +10,8 @@ use gcl_core::download::hash::sha1_hex;
 use gcl_core::instances::model::{InstanceJvm, Loader};
 use gcl_core::launcher::{Endpoints, LaunchOutcome};
 use gcl_core::loaders::LoaderEndpoints;
-use gcl_core::sources::SourceId;
+use gcl_core::sources::richtext::Block;
+use gcl_core::sources::{SourceId, VersionFilter};
 use gcl_core::{Launcher, auth};
 use wiremock::MockServer;
 
@@ -332,6 +333,8 @@ async fn launching_with_an_unknown_account_is_not_found() {
 const MODRINTH_PROJECT: &str = include_str!("../../../tests/fixtures/modrinth/project_sodium.json");
 const MODRINTH_VERSIONS: &str =
     include_str!("../../../tests/fixtures/modrinth/versions_sodium_1.20.1_fabric.json");
+const MODRINTH_DESCRIPTION: &str =
+    include_str!("../../../tests/fixtures/modrinth/project_description.json");
 
 /// Project id the Sodium fixture carries.
 const SODIUM_ID: &str = "AANobbMI";
@@ -450,6 +453,64 @@ async fn add_content_installs_a_modrinth_mod_and_the_list_reflects_it() {
                 .is_empty(),
             "nothing needed a hand download"
         );
+        dir
+    })
+    .await
+    .expect("blocking task");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn project_details_and_versions_come_from_the_source() {
+    let server = MockServer::start().await;
+    let versions: serde_json::Value =
+        serde_json::from_str(MODRINTH_VERSIONS).expect("versions fixture");
+    serve(
+        &server,
+        "/project/AAaaBBbb",
+        MODRINTH_DESCRIPTION.as_bytes().to_vec(),
+    )
+    .await;
+    serve(
+        &server,
+        "/project/AAaaBBbb/version",
+        versions.to_string().into_bytes(),
+    )
+    .await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let uri = server.uri();
+
+    tokio::task::spawn_blocking(move || {
+        let launcher = modrinth_launcher(&dir, uri);
+        let details = launcher
+            .project_details(SourceId::Modrinth, "AAaaBBbb")
+            .expect("details");
+        assert_eq!(details.project.title, "Example Mod");
+        assert_eq!(
+            details.blocks.first(),
+            Some(&Block::Heading(1, "Example Mod".to_string())),
+            "{:?}",
+            details.blocks
+        );
+        assert!(
+            details
+                .blocks
+                .iter()
+                .any(|b| matches!(b, Block::Code(text) if text.contains("enabled = true"))),
+            "{:?}",
+            details.blocks
+        );
+
+        let listed = launcher
+            .project_versions(
+                SourceId::Modrinth,
+                "AAaaBBbb",
+                &VersionFilter {
+                    minecraft: Some(MC.to_string()),
+                    loaders: vec!["fabric".to_string()],
+                },
+            )
+            .expect("versions");
+        assert!(!listed.is_empty(), "the fixture lists at least one version");
         dir
     })
     .await

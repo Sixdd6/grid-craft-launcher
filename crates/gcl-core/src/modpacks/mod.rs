@@ -420,6 +420,8 @@ async fn install_mrpack_files(
                 project_id,
                 version_id,
                 file_name,
+                // The pack index carries no project title; `check_updates` backfills it.
+                title: None,
                 sha1: Some(sha1),
                 fingerprint: None,
                 kind,
@@ -582,6 +584,8 @@ async fn install_curseforge_files(
             project_id: version.project_id.clone(),
             version_id: version.id.clone(),
             file_name: file.file_name.clone(),
+            // The pack manifest carries no project title; `check_updates` backfills it.
+            title: None,
             sha1: Some(sha1),
             fingerprint: file.fingerprint,
             kind,

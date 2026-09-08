@@ -743,7 +743,7 @@ async fn check_updates_finds_a_newer_version_and_applies_it() {
     ];
 
     let candidates = with_ctx!(h, |ctx| {
-        check_updates(&ctx, &instance).await.expect("check")
+        check_updates(&ctx, &mut instance).await.expect("check")
     });
     assert_eq!(candidates.len(), 1, "{candidates:?}");
     assert_eq!(candidates[0].entry.project_id, "alpha");
@@ -762,6 +762,173 @@ async fn check_updates_finds_a_newer_version_and_applies_it() {
 }
 
 #[tokio::test]
+async fn title_stored_on_install() {
+    let server = MockServer::start().await;
+    let (_dir, root, mut instance) = fixture();
+    let h = Harness::new(root, vec![two_mod_source(&server).await]);
+    with_ctx!(h, |ctx| {
+        add(&ctx, &mut instance, request("alpha"))
+            .await
+            .expect("add")
+    });
+
+    let entry = instance
+        .config
+        .content
+        .iter()
+        .find(|e| e.project_id == "alpha")
+        .expect("alpha is installed");
+    assert_eq!(entry.title.as_deref(), Some("alpha"));
+}
+
+#[tokio::test]
+async fn title_backfilled_on_check_updates() {
+    let server = MockServer::start().await;
+    let (_dir, root, mut instance) = fixture();
+    let h = Harness::new(root, vec![two_mod_source(&server).await]);
+    with_ctx!(h, |ctx| {
+        add(&ctx, &mut instance, request("alpha"))
+            .await
+            .expect("add")
+    });
+
+    // Stand in for an `instance.toml` written before the `title` key existed.
+    for entry in &mut instance.config.content {
+        entry.title = None;
+    }
+    instance.save().expect("save");
+
+    with_ctx!(h, |ctx| {
+        check_updates(&ctx, &mut instance).await.expect("check")
+    });
+
+    assert!(
+        instance.config.content.iter().all(|e| e.title.is_some()),
+        "{:?}",
+        instance.config.content
+    );
+    let reloaded = Instances::new(h.root.clone())
+        .get(&instance.slug)
+        .expect("reload");
+    assert_eq!(
+        reloaded
+            .config
+            .content
+            .iter()
+            .find(|e| e.project_id == "alpha")
+            .and_then(|e| e.title.clone()),
+        Some("alpha".to_string()),
+        "the backfilled title is on disk"
+    );
+}
+
+#[tokio::test]
+async fn check_updates_does_not_save_when_nothing_changed() {
+    let server = MockServer::start().await;
+    let (_dir, root, mut instance) = fixture();
+    let h = Harness::new(root, vec![two_mod_source(&server).await]);
+    with_ctx!(h, |ctx| {
+        add(&ctx, &mut instance, request("alpha"))
+            .await
+            .expect("add")
+    });
+
+    // A marker only a rewrite of `instance.toml` would drop.
+    let path = instance.config_path();
+    let marked = format!(
+        "# marker\n{}",
+        std::fs::read_to_string(&path).expect("read")
+    );
+    std::fs::write(&path, &marked).expect("write");
+
+    let candidates = with_ctx!(h, |ctx| {
+        check_updates(&ctx, &mut instance).await.expect("check")
+    });
+    assert!(candidates.is_empty(), "{candidates:?}");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read"),
+        marked,
+        "every title was already there, so nothing was written"
+    );
+}
+
+#[tokio::test]
+async fn pinning_a_version_replaces_the_old_file() {
+    let server = MockServer::start().await;
+    let (_dir, root, mut instance) = fixture();
+    let newer_bytes = b"alpha jar v2".as_slice();
+    Mock::given(method("GET"))
+        .and(path("/alpha2.jar"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(newer_bytes.to_vec()))
+        .mount(&server)
+        .await;
+    let alpha_bytes = b"alpha jar bytes".as_slice();
+    Mock::given(method("GET"))
+        .and(path("/alpha.jar"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(alpha_bytes.to_vec()))
+        .mount(&server)
+        .await;
+
+    let mut av1 = version("alpha", "av1", "1.0");
+    av1.files = vec![file(
+        Some(format!("{}/alpha.jar", server.uri())),
+        "alpha-1.jar",
+        alpha_bytes,
+    )];
+    let mut av2 = version("alpha", "av2", "2.0");
+    av2.published = "2026-06-01T00:00:00Z".to_string();
+    av2.files = vec![file(
+        Some(format!("{}/alpha2.jar", server.uri())),
+        "alpha-2.jar",
+        newer_bytes,
+    )];
+    let h = Harness::new(
+        root,
+        vec![
+            FakeSource::new(SourceId::Modrinth)
+                .with(project("alpha", ContentKind::Mod), vec![av1, av2])
+                .boxed(),
+        ],
+    );
+
+    with_ctx!(h, |ctx| {
+        add(
+            &ctx,
+            &mut instance,
+            AddRequest {
+                version: Some("av1".to_string()),
+                ..request("alpha")
+            },
+        )
+        .await
+        .expect("add the older version")
+    });
+    let mods = instance.game_dir().join("mods");
+    assert!(mods.join("alpha-1.jar").is_file());
+
+    with_ctx!(h, |ctx| {
+        add(
+            &ctx,
+            &mut instance,
+            AddRequest {
+                version: Some("av2".to_string()),
+                ..request("alpha")
+            },
+        )
+        .await
+        .expect("pin the newer version")
+    });
+
+    assert!(mods.join("alpha-2.jar").is_file());
+    assert!(
+        !mods.join("alpha-1.jar").exists(),
+        "the pinned version replaced the old file"
+    );
+    assert_eq!(instance.config.content.len(), 1);
+    assert_eq!(instance.config.content[0].version_id, "av2");
+}
+
+#[tokio::test]
 async fn check_updates_skips_an_entry_whose_source_is_missing() {
     let (_dir, root, mut instance) = fixture();
     instance.config.content.push(ContentEntry {
@@ -774,7 +941,7 @@ async fn check_updates_skips_an_entry_whose_source_is_missing() {
     });
     let h = Harness::new(root, Vec::new());
     let candidates = with_ctx!(h, |ctx| {
-        check_updates(&ctx, &instance).await.expect("check")
+        check_updates(&ctx, &mut instance).await.expect("check")
     });
     assert!(candidates.is_empty());
 }
@@ -1031,6 +1198,7 @@ fn place_pack_file(instance: &mut Instance, root: &Root, file_name: &str, bytes:
             project_id: sha1_hex(bytes),
             version_id: sha1_hex(bytes),
             file_name: file_name.to_string(),
+            title: None,
             sha1: Some(sha1_hex(bytes)),
             fingerprint: None,
             kind: ContentKind::Mod,

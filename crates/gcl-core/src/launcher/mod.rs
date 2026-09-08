@@ -47,7 +47,10 @@ use crate::mojang::{InstallPlan, Mojang, PISTON_META, VersionManifest, install_v
 use crate::paths::Root;
 use crate::sources::curseforge::CurseForge;
 use crate::sources::modrinth::Modrinth;
-use crate::sources::{BoxSource, SearchPage, SearchQuery, SourceId};
+use crate::sources::richtext::{self, Block};
+use crate::sources::{
+    BoxSource, Project, SearchPage, SearchQuery, SourceId, Version, VersionFilter,
+};
 
 /// Test-only override for the Mojang metadata base URL, read by [`Launcher::mojang`].
 pub const MOJANG_BASE_URL_ENV: &str = "GCL_MOJANG_BASE_URL";
@@ -272,6 +275,15 @@ pub struct InstanceSummary {
     pub pending_manual: Vec<ManualDownload>,
     /// The `java` a launch would run: the instance's own, else the configured one.
     pub java: Option<PathBuf>,
+}
+
+/// A project and the blocks its description renders as, from [`Launcher::project_details`].
+#[derive(Debug, Clone)]
+pub struct ProjectDetails {
+    /// The project itself: title, kind, page URL.
+    pub project: Project,
+    /// Its description, one block per heading, paragraph, bullet, or code run.
+    pub blocks: Vec<Block>,
 }
 
 /// Owns the runtime and every shared handle the rest of the launcher needs.
@@ -1208,6 +1220,47 @@ impl Launcher {
         Ok(self.block_on(async { source.search_packs(q).await })?)
     }
 
+    /// A project and its description, ready for a details screen. Blocks.
+    ///
+    /// Two requests at the source: the project itself and its description text, which is
+    /// markdown at Modrinth and HTML at CurseForge. Both become the same
+    /// [`richtext::Block`] list, so a screen renders one shape whatever the source.
+    pub fn project_details(
+        &self,
+        source: SourceId,
+        project_id: &str,
+    ) -> Result<ProjectDetails, crate::Error> {
+        let source = self.source(source)?;
+        let id = source.id();
+        Ok(self.block_on(async move {
+            let project = source.project(project_id).await?;
+            let text = source.description(project_id).await?;
+            let blocks = match id {
+                SourceId::Modrinth => richtext::from_markdown(&text),
+                SourceId::CurseForge => richtext::from_html(&text),
+            };
+            Ok::<_, crate::sources::Error>(ProjectDetails { project, blocks })
+        })?)
+    }
+
+    /// Lists a project's versions at its source, newest first as the source orders them.
+    /// Blocks.
+    ///
+    /// The rows are plain [`Version`]s: which one an instance already has installed is not
+    /// computed here. A caller that shows an "installed" marker pairs these with
+    /// [`Launcher::list_content`] and matches on `(source, project_id)` and `version_id` —
+    /// `gcl-ui` does exactly that when it builds the Versions tab, so this method stays
+    /// instance-free.
+    pub fn project_versions(
+        &self,
+        source: SourceId,
+        project_id: &str,
+        filter: &VersionFilter,
+    ) -> Result<Vec<Version>, crate::Error> {
+        let source = self.source(source)?;
+        Ok(self.block_on(async move { source.versions(project_id, filter).await })?)
+    }
+
     /// Slugs of the games this launcher started that have not exited, in name order.
     pub fn running_slugs(&self) -> Vec<String> {
         let mut slugs: Vec<String> = self
@@ -1328,13 +1381,16 @@ impl Launcher {
     }
 
     /// Lists the installed content that has a newer compatible version at its source. Blocks.
+    ///
+    /// This also backfills a missing [`ContentEntry::title`] into `instance.toml`; see
+    /// [`crate::content::check_updates`].
     #[tracing::instrument(skip(self))]
     pub fn check_updates(&self, slug: &str) -> Result<Vec<UpdateCandidate>, crate::Error> {
-        let instance = self.instances().get(slug)?;
+        let mut instance = self.instances().get(slug)?;
         let dl = self.download_ctx();
         let sources = self.sources();
         let ctx = self.content_ctx(&dl, &sources);
-        Ok(self.block_on(crate::content::check_updates(&ctx, &instance))?)
+        Ok(self.block_on(crate::content::check_updates(&ctx, &mut instance))?)
     }
 
     /// Installs every candidate [`Launcher::check_updates`] returned. Blocks.

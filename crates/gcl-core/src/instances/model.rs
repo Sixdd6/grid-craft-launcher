@@ -112,6 +112,10 @@ pub struct ContentEntry {
     pub version_id: String,
     /// File name inside the instance folder.
     pub file_name: String,
+    /// Project title at the source, for display. Absent in an `instance.toml` written
+    /// before this key existed; `content::check_updates` backfills it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Lowercase hex sha1 of the file, when the source publishes one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha1: Option<String>,
@@ -136,6 +140,7 @@ impl Default for ContentEntry {
             project_id: String::new(),
             version_id: String::new(),
             file_name: String::new(),
+            title: None,
             sha1: None,
             fingerprint: None,
             kind: ContentKind::default(),
@@ -222,6 +227,21 @@ mod tests {
         .expect("parse");
         assert!(entry.enabled);
         assert!(ContentEntry::default().enabled);
+    }
+
+    #[test]
+    fn content_entry_title_defaults_to_none_for_old_toml() {
+        // An `instance.toml` written before the `title` key existed still parses.
+        let entry: ContentEntry = toml::from_str(
+            "source = \"modrinth\"\nproject_id = \"p\"\nversion_id = \"v\"\n\
+             file_name = \"sodium.jar\"\nkind = \"mod\"\n",
+        )
+        .expect("parse");
+        assert_eq!(entry.title, None);
+        assert_eq!(ContentEntry::default().title, None);
+        // A `None` title writes no key at all.
+        let toml = toml::to_string(&entry).expect("serialize");
+        assert!(!toml.contains("title"), "{toml}");
     }
 
     #[test]
