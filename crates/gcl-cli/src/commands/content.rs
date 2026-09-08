@@ -89,6 +89,9 @@ pub enum ContentCommand {
         project_id: String,
     },
     /// List the installed content that has a newer compatible version.
+    ///
+    /// Without --apply this installs nothing, but it does write instance.toml when it
+    /// fills in a missing project title, up to 25 per run.
     Update {
         /// Slug of the instance.
         slug: String,

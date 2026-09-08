@@ -78,6 +78,38 @@ impl Modrinth {
         self.fetch_versions(project_id, minecraft, &[]).await
     }
 
+    /// Fetches one project and its long description in one request.
+    ///
+    /// Modrinth's `GET /project/{id}` carries the `body` markdown, so [`Source::project`]
+    /// and [`Source::description`] are the same request twice. A details screen calls this
+    /// instead and pays for one.
+    #[tracing::instrument(skip(self))]
+    pub async fn project_with_body(&self, id_or_slug: &str) -> Result<(Project, String), Error> {
+        let url = format!("{}/project/{}", self.base, encode(id_or_slug));
+        let raw: RawProject = self
+            .http
+            .get_json(&url)
+            .await
+            .map_err(|e| map_err(e, "project", Some(id_or_slug)))?;
+        // Modpacks are not a `ContentKind`; a pack is fetched through
+        // [`Modrinth::pack_versions`] instead of this method.
+        let kind = ContentKind::parse(&raw.project_type).ok_or(Error::BadResponse {
+            source_id: ID,
+            what: "project_type",
+            detail: raw.project_type.clone(),
+        })?;
+        let project = Project {
+            source: ID,
+            page_url: page_url(ID, kind, &raw.slug),
+            id: raw.id,
+            slug: raw.slug,
+            title: raw.title,
+            description: raw.description,
+            kind,
+        };
+        Ok((project, raw.body))
+    }
+
     /// GETs `{base}/project/{project_id}/version` with the given filters and maps the body.
     async fn fetch_versions(
         &self,
@@ -247,43 +279,15 @@ impl Source for Modrinth {
         })
     }
 
-    #[tracing::instrument(skip(self))]
     async fn project(&self, id_or_slug: &str) -> Result<Project, Error> {
-        let url = format!("{}/project/{}", self.base, encode(id_or_slug));
-        let raw: RawProject = self
-            .http
-            .get_json(&url)
-            .await
-            .map_err(|e| map_err(e, "project", Some(id_or_slug)))?;
-        // Modpacks are not a `ContentKind`; Task 7 fetches them through
-        // [`Modrinth::pack_versions`] instead of this method.
-        let kind = ContentKind::parse(&raw.project_type).ok_or(Error::BadResponse {
-            source_id: ID,
-            what: "project_type",
-            detail: raw.project_type.clone(),
-        })?;
-        Ok(Project {
-            source: ID,
-            page_url: page_url(ID, kind, &raw.slug),
-            id: raw.id,
-            slug: raw.slug,
-            title: raw.title,
-            description: raw.description,
-            kind,
-        })
+        Ok(self.project_with_body(id_or_slug).await?.0)
     }
 
-    #[tracing::instrument(skip(self))]
     async fn description(&self, project_id: &str) -> Result<String, Error> {
         // The long description is the project's own `body` field: Modrinth has no
-        // separate description endpoint, so this is the same GET as `project`.
-        let url = format!("{}/project/{}", self.base, encode(project_id));
-        let raw: RawProject = self
-            .http
-            .get_json(&url)
-            .await
-            .map_err(|e| map_err(e, "description", Some(project_id)))?;
-        Ok(raw.body)
+        // separate description endpoint, so this is the same GET as `project`. A caller
+        // that wants both asks [`Modrinth::project_with_body`] once.
+        Ok(self.project_with_body(project_id).await?.1)
     }
 
     #[tracing::instrument(skip(self))]

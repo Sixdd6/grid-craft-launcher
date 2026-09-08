@@ -928,6 +928,195 @@ async fn pinning_a_version_replaces_the_old_file() {
     assert_eq!(instance.config.content[0].version_id, "av2");
 }
 
+/// A source that runs `mutate` once, on its first project lookup.
+///
+/// It stands in for another process writing `instance.toml` while `check_updates` is
+/// waiting on the network.
+struct MutatingSource {
+    inner: BoxSource,
+    mutate: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
+}
+
+impl MutatingSource {
+    fn wrapping(inner: BoxSource, mutate: impl FnOnce() + Send + 'static) -> BoxSource {
+        Arc::new(MutatingSource {
+            inner,
+            mutate: std::sync::Mutex::new(Some(Box::new(mutate))),
+        })
+    }
+}
+
+#[async_trait]
+impl Source for MutatingSource {
+    fn id(&self) -> SourceId {
+        self.inner.id()
+    }
+
+    fn supported_kinds(&self) -> &[ContentKind] {
+        self.inner.supported_kinds()
+    }
+
+    async fn search(&self, q: &SearchQuery) -> Result<SearchPage, crate::sources::Error> {
+        self.inner.search(q).await
+    }
+
+    async fn project(&self, id_or_slug: &str) -> Result<Project, crate::sources::Error> {
+        let taken = self
+            .mutate
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .take();
+        if let Some(mutate) = taken {
+            mutate();
+        }
+        self.inner.project(id_or_slug).await
+    }
+
+    async fn description(&self, project_id: &str) -> Result<String, crate::sources::Error> {
+        self.inner.description(project_id).await
+    }
+
+    async fn versions(
+        &self,
+        project_id: &str,
+        f: &VersionFilter,
+    ) -> Result<Vec<Version>, crate::sources::Error> {
+        self.inner.versions(project_id, f).await
+    }
+
+    async fn version(&self, version_id: &str) -> Result<Version, crate::sources::Error> {
+        self.inner.version(version_id).await
+    }
+
+    async fn resolve_by_hash(
+        &self,
+        sha1: &[String],
+    ) -> Result<Vec<Version>, crate::sources::Error> {
+        self.inner.resolve_by_hash(sha1).await
+    }
+
+    async fn resolve_by_fingerprint(
+        &self,
+        fps: &[u32],
+    ) -> Result<Vec<Version>, crate::sources::Error> {
+        self.inner.resolve_by_fingerprint(fps).await
+    }
+}
+
+/// A titleless entry for `project_id`, as a `.mrpack` import or an old file writes one.
+fn untitled_entry(project_id: &str) -> ContentEntry {
+    ContentEntry {
+        source: "modrinth".to_string(),
+        project_id: project_id.to_string(),
+        version_id: format!("{project_id}-v1"),
+        file_name: format!("{project_id}.jar"),
+        kind: ContentKind::Mod,
+        title: None,
+        ..ContentEntry::default()
+    }
+}
+
+#[tokio::test]
+async fn check_updates_saves_a_fresh_instance() {
+    let (_dir, root, mut instance) = fixture();
+    instance.config.content = vec![untitled_entry("alpha"), untitled_entry("beta")];
+    instance.save().expect("save");
+
+    let inner = FakeSource::new(SourceId::Modrinth)
+        .with(
+            project("alpha", ContentKind::Mod),
+            vec![version("alpha", "alpha-v1", "1.0")],
+        )
+        .with(
+            project("beta", ContentKind::Mod),
+            vec![version("beta", "beta-v1", "1.0")],
+        )
+        .boxed();
+    // Another writer disables `beta` while the first project lookup is in flight.
+    let store = Instances::new(root.clone());
+    let slug = instance.slug.clone();
+    let source = MutatingSource::wrapping(inner, move || {
+        let mut on_disk = store.get(&slug).expect("reload");
+        on_disk
+            .config
+            .content
+            .iter_mut()
+            .filter(|entry| entry.project_id == "beta")
+            .for_each(|entry| entry.enabled = false);
+        on_disk.save().expect("save");
+    });
+
+    let h = Harness::new(root, vec![source]);
+    let candidates = with_ctx!(h, |ctx| {
+        check_updates(&ctx, &mut instance).await.expect("check")
+    });
+    assert!(candidates.is_empty(), "{candidates:?}");
+
+    let reloaded = Instances::new(h.root.clone())
+        .get(&instance.slug)
+        .expect("reload");
+    let beta = reloaded
+        .config
+        .content
+        .iter()
+        .find(|e| e.project_id == "beta")
+        .expect("beta is still there");
+    assert!(!beta.enabled, "the concurrent change survived the save");
+    assert_eq!(beta.title.as_deref(), Some("beta"));
+    let alpha = reloaded
+        .config
+        .content
+        .iter()
+        .find(|e| e.project_id == "alpha")
+        .expect("alpha is still there");
+    assert_eq!(alpha.title.as_deref(), Some("alpha"));
+}
+
+#[tokio::test]
+async fn title_backfill_stops_at_the_cap() {
+    let (_dir, root, mut instance) = fixture();
+    let count = MAX_TITLE_BACKFILL + 5;
+    let mut source = FakeSource::new(SourceId::Modrinth);
+    instance.config.content.clear();
+    for n in 0..count {
+        let id = format!("p{n}");
+        source = source.with(
+            project(&id, ContentKind::Mod),
+            vec![version(&id, &format!("{id}-v1"), "1.0")],
+        );
+        instance.config.content.push(untitled_entry(&id));
+    }
+    instance.save().expect("save");
+
+    let h = Harness::new(root, vec![source.boxed()]);
+    with_ctx!(h, |ctx| {
+        check_updates(&ctx, &mut instance).await.expect("check")
+    });
+
+    let store = Instances::new(h.root.clone());
+    let after_one = store.get(&instance.slug).expect("reload");
+    assert_eq!(
+        after_one
+            .config
+            .content
+            .iter()
+            .filter(|e| e.title.is_some())
+            .count(),
+        MAX_TITLE_BACKFILL,
+        "one call fills at most the cap"
+    );
+
+    let mut again = store.get(&instance.slug).expect("reload");
+    with_ctx!(h, |ctx| {
+        check_updates(&ctx, &mut again).await.expect("check")
+    });
+    let after_two = store.get(&instance.slug).expect("reload");
+    assert!(
+        after_two.config.content.iter().all(|e| e.title.is_some()),
+        "the rest are filled on the next call"
+    );
+}
+
 #[tokio::test]
 async fn check_updates_skips_an_entry_whose_source_is_missing() {
     let (_dir, root, mut instance) = fixture();

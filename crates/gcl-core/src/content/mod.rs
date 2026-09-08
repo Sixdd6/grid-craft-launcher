@@ -33,6 +33,13 @@ const MOD_LOADERS: [&str; 4] = ["fabric", "quilt", "forge", "neoforge"];
 /// The one Minecraft version where NeoForge still loads Forge mods.
 const NEOFORGE_FORGE_COMPAT_MC: &str = "1.20.1";
 
+/// How many missing titles one [`check_updates`] call fills in.
+///
+/// Each one costs a project request at the source. The rest are filled by later calls,
+/// so an instance imported from a large pack does not spend hundreds of requests the
+/// first time its updates are checked.
+const MAX_TITLE_BACKFILL: usize = 25;
+
 /// Errors from adding, updating, or importing content.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -677,9 +684,16 @@ pub(crate) async fn place(
 /// `.mrpack` import — is skipped silently: it has no project to check.
 ///
 /// The instance is borrowed mutably for the backfill: an entry written before the `title`
-/// key existed gets its project title here. `instance.toml` is saved once at the end, and
-/// only when a title actually changed. A source that cannot answer the project lookup only
-/// costs that one backfill, with a warning.
+/// key existed gets its project title here. At most [`MAX_TITLE_BACKFILL`] titles are
+/// fetched per call; the rest wait for a later one.
+///
+/// The saved copy is not the borrowed one. Network round trips take time, and another
+/// writer — the GUI enabling a mod, a second command — may have rewritten `instance.toml`
+/// meanwhile. So the titles are collected as `(project_id, title)` pairs, the instance is
+/// read back from disk at the end, the pairs are applied to whatever entries that fresh
+/// copy holds, and that copy is saved. Nothing is written when no title was filled in.
+/// A source that cannot answer the project lookup only costs that one backfill, with a
+/// warning.
 #[tracing::instrument(skip(ctx), fields(slug = %instance.slug))]
 pub async fn check_updates(
     ctx: &ContentCtx<'_>,
@@ -688,7 +702,7 @@ pub async fn check_updates(
     let minecraft = instance.config.minecraft.clone();
     let loader = instance.config.loader;
     let mut candidates = Vec::new();
-    let mut backfilled = false;
+    let mut titles: Vec<(String, String)> = Vec::new();
 
     for index in 0..instance.config.content.len() {
         let mut entry = instance.config.content[index].clone();
@@ -706,13 +720,21 @@ pub async fn check_updates(
             }
         };
         if entry.title.is_none() {
-            match source.project(&entry.project_id).await {
-                Ok(project) => {
-                    entry.title = Some(project.title.clone());
-                    instance.config.content[index].title = Some(project.title);
-                    backfilled = true;
+            if titles.len() < MAX_TITLE_BACKFILL {
+                match source.project(&entry.project_id).await {
+                    Ok(project) => {
+                        entry.title = Some(project.title.clone());
+                        instance.config.content[index].title = Some(project.title.clone());
+                        titles.push((entry.project_id.clone(), project.title));
+                    }
+                    Err(err) => warn(ctx, &entry.file_name, &err.to_string()),
                 }
-                Err(err) => warn(ctx, &entry.file_name, &err.to_string()),
+            } else {
+                tracing::debug!(
+                    cap = MAX_TITLE_BACKFILL,
+                    project = %entry.project_id,
+                    "title backfill cap reached; this entry waits for the next check"
+                );
             }
         }
         let filter = VersionFilter {
@@ -740,10 +762,35 @@ pub async fn check_updates(
             candidates.push(UpdateCandidate { entry, new: newest });
         }
     }
-    if backfilled {
-        instance.save()?;
-    }
+    save_titles(ctx, &instance.slug, &titles)?;
     Ok(candidates)
+}
+
+/// Applies backfilled titles to the instance as it is on disk now, and saves it.
+///
+/// Reading `instance.toml` again is the point: [`check_updates`] held its copy across
+/// every network call, so saving that copy would undo whatever another writer changed in
+/// between. Only the `title` of an entry whose `project_id` matches is touched. An empty
+/// list writes nothing.
+fn save_titles(ctx: &ContentCtx<'_>, slug: &str, titles: &[(String, String)]) -> Result<(), Error> {
+    if titles.is_empty() {
+        return Ok(());
+    }
+    let mut fresh = crate::instances::Instances::new(ctx.root.clone()).get(slug)?;
+    let mut changed = false;
+    for entry in &mut fresh.config.content {
+        if entry.title.is_some() {
+            continue;
+        }
+        if let Some((_, title)) = titles.iter().find(|(id, _)| *id == entry.project_id) {
+            entry.title = Some(title.clone());
+            changed = true;
+        }
+    }
+    if changed {
+        fresh.save()?;
+    }
+    Ok(())
 }
 
 /// Installs the newer version a [`check_updates`] candidate names.

@@ -1222,20 +1222,30 @@ impl Launcher {
 
     /// A project and its description, ready for a details screen. Blocks.
     ///
-    /// Two requests at the source: the project itself and its description text, which is
-    /// markdown at Modrinth and HTML at CurseForge. Both become the same
-    /// [`richtext::Block`] list, so a screen renders one shape whatever the source.
+    /// The description text is markdown at Modrinth and HTML at CurseForge. Both become
+    /// the same [`richtext::Block`] list, so a screen renders one shape whatever the
+    /// source.
+    ///
+    /// Modrinth carries the body in the project itself, so one details open costs one
+    /// `GET /project/{id}` there — [`crate::sources::modrinth::Modrinth::project_with_body`].
+    /// CurseForge keeps the description behind its own endpoint, so it costs two.
     pub fn project_details(
         &self,
         source: SourceId,
         project_id: &str,
     ) -> Result<ProjectDetails, crate::Error> {
         let source = self.source(source)?;
-        let id = source.id();
         Ok(self.block_on(async move {
+            if let Some(modrinth) = source.as_modrinth() {
+                let (project, text) = modrinth.project_with_body(project_id).await?;
+                return Ok(ProjectDetails {
+                    project,
+                    blocks: richtext::from_markdown(&text),
+                });
+            }
             let project = source.project(project_id).await?;
             let text = source.description(project_id).await?;
-            let blocks = match id {
+            let blocks = match source.id() {
                 SourceId::Modrinth => richtext::from_markdown(&text),
                 SourceId::CurseForge => richtext::from_html(&text),
             };

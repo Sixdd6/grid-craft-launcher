@@ -45,6 +45,13 @@ sha1: Option<String>, sha512: Option<String>, fingerprint: Option<u32>, primary 
 `dependencies: Vec<Dependency> { project_id: Option<String>, version_id: Option<String>, kind:
 Required | Optional | Incompatible | Embedded }`.
 
+`Modrinth::project_with_body(id_or_slug) -> (Project, String)` is an inherent method, not a
+trait one: Modrinth's `GET /project/{id}` already carries the description in `body`, so
+`Source::project` and `Source::description` are the same request twice. Both now call it and
+throw half the answer away. A caller that wants both — `Launcher::project_details` — reaches
+it through `as_modrinth()` and pays for one request per details open. CurseForge keeps the
+description behind `GET /mods/{id}/description`, so it still costs two there.
+
 Constructors: `Modrinth::new(http)` / `Modrinth::with_base_url(http, base)`,
 `CurseForge::new(http, api_key)` / `CurseForge::with_base_url(http, api_key, base)`.
 `Launcher::sources()` uses `new`/`with_base_url` against `Endpoints`, always with Modrinth and

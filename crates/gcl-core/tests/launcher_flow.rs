@@ -518,6 +518,41 @@ async fn project_details_and_versions_come_from_the_source() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn project_details_costs_one_project_request() {
+    let server = MockServer::start().await;
+    serve(
+        &server,
+        "/project/AAaaBBbb",
+        MODRINTH_DESCRIPTION.as_bytes().to_vec(),
+    )
+    .await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let uri = server.uri();
+
+    let dir = tokio::task::spawn_blocking(move || {
+        let launcher = modrinth_launcher(&dir, uri);
+        let details = launcher
+            .project_details(SourceId::Modrinth, "AAaaBBbb")
+            .expect("details");
+        assert_eq!(details.project.title, "Example Mod");
+        assert!(!details.blocks.is_empty(), "the body rendered");
+        dir
+    })
+    .await
+    .expect("blocking task");
+    drop(dir);
+
+    let hits = server
+        .received_requests()
+        .await
+        .expect("the mock records requests")
+        .into_iter()
+        .filter(|req| req.url.path() == "/project/AAaaBBbb")
+        .count();
+    assert_eq!(hits, 1, "the project is fetched once, body and all");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn sources_hold_curseforge_only_when_a_key_is_configured() {
     let dir = tempfile::tempdir().expect("tempdir");
     let with_key = tempfile::tempdir().expect("tempdir");

@@ -64,12 +64,26 @@ source = "modrinth"             # modrinth | curseforge | file (a `.mrpack` file
 project_id = "AANobbMI"
 version_id = "abc123"
 file_name = "sodium-fabric-0.5.8.jar"
+title = "Sodium"                # optional, the project title for display
 sha1 = "..."                    # optional, when the source publishes one
 fingerprint = 1234567890        # optional, CurseForge murmur2
 kind = "mod"                    # mod | resourcepack | shader | datapack | world
 world = "New World"             # optional, the target world for a datapack
 enabled = true
 ```
+
+`title` is absent in an `instance.toml` written before the key existed, and in one a modpack
+import wrote: a pack index names no project title. `content::check_updates` backfills it, at
+most 25 per call (`content::MAX_TITLE_BACKFILL`), each one a project request at the source;
+the rest are filled by later calls, and hitting the cap logs at debug.
+
+That backfill must never save the `Instance` the caller handed in. `check_updates` holds its
+copy across every network round trip, so another writer — the GUI enabling a mod, a second
+command — can rewrite `instance.toml` in between, and writing the stale copy back would undo
+it. It collects `(project_id, title)` pairs instead, reads the instance from disk again at the
+end (`content::save_titles`), applies the titles to whatever entries the fresh copy holds, and
+saves that. Nothing was backfilled means nothing is written. Any future code that mutates an
+instance after an `await` on the network follows the same rule.
 
 ## options.txt semantics
 
