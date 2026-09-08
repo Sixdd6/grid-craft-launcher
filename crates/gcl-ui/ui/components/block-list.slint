@@ -125,11 +125,14 @@ export component BlockList inherits VerticalLayout {
             // banner instead of being squeezed into a fixed-height box: full width, and a
             // height that ratio gives, capped so a tall image cannot push the rest of the
             // column off screen.
+            // A small image keeps its natural size: blowing a 200 px tile up to the column
+            // width only makes it blurry.
             if block.image_state == "ready": image_tile := Image {
                 source: block.image;
                 width: 100%;
                 height: min(
                     self.width * ((block.image.height * 1.0) / max(block.image.width, 1)),
+                    block.image.height * 1px,
                     Theme.icon-size * 8
                 );
                 image-fit: contain;
