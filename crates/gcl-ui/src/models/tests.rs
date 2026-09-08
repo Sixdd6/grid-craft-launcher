@@ -261,6 +261,30 @@ fn search_row_formats_the_download_count() {
 }
 
 #[test]
+fn search_row_collapses_newlines_in_the_description() {
+    let hit = SearchHit {
+        source: SourceId::Modrinth,
+        project_id: "AANobbMI".into(),
+        slug: "sodium".into(),
+        title: "Sodium".into(),
+        description: "A rendering engine\nfor Fabric\r\nand Quilt.  Fast.".into(),
+        author: "jellysquid3".into(),
+        kind: ContentKind::Mod,
+        is_pack: false,
+        downloads: 12_345,
+        icon_url: None,
+        page_url: "https://modrinth.com/mod/sodium".into(),
+    };
+    let row = search_row(&hit);
+    assert!(!row.description.contains('\n'));
+    assert!(!row.description.contains('\r'));
+    assert_eq!(
+        row.description.as_str(),
+        "A rendering engine for Fabric and Quilt. Fast."
+    );
+}
+
+#[test]
 fn account_row_shortens_the_expiry_and_marks_the_active_one() {
     let account = Account {
         id: "0123".into(),

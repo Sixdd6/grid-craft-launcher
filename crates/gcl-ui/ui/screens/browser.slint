@@ -431,9 +431,11 @@ export component BrowserScreen inherits Rectangle {
 
             for row[i] in BrowserState.pack_rows: pack_row := ListRow {
                 title: row.title;
-                height: 3 * Theme.font-size + 3 * Theme.gap + Theme.pad;
+                // Content-driven, same as `row_open` above: `pack_layout`'s preferred height
+                // already reflects however many lines the wrapped title takes.
+                height: pack_layout.preferred-height;
 
-                VerticalLayout {
+                pack_layout := VerticalLayout {
                     padding-top: Theme.gap;
                     padding-bottom: Theme.gap;
                     spacing: Theme.gap / 2;
@@ -446,8 +448,8 @@ export component BrowserScreen inherits Rectangle {
                             text: row.title;
                             color: Theme.text;
                             font-size: Theme.font-size;
-                            horizontal-stretch: 0;
-                            overflow: elide;
+                            horizontal-stretch: 1;
+                            wrap: word-wrap;
                         }
 
                         Text {
@@ -472,13 +474,6 @@ export component BrowserScreen inherits Rectangle {
                     Text {
                         text: row.description;
                         color: Theme.text-muted;
-                        font-size: Theme.font-size-small;
-                        overflow: elide;
-                    }
-
-                    Text {
-                        text: row.page_url;
-                        color: Theme.accent;
                         font-size: Theme.font-size-small;
                         overflow: elide;
                     }
@@ -560,7 +555,12 @@ export component BrowserScreen inherits Rectangle {
 
                 for row[i] in BrowserState.rows: row_open := ListRow {
                     title: row.title;
-                    height: 3 * Theme.font-size + 3 * Theme.gap + Theme.pad;
+                    // Content-driven: a wrapped multi-line title (see `row_title` below) is
+                    // not clipped to a fixed three-line height. `row_layout` is the inner
+                    // `VerticalLayout` that carries the title/badge/author line and the
+                    // description; its `preferred-height` already reflects however many lines
+                    // the wrapped title takes.
+                    height: row_layout.preferred-height;
                     selected: i == root.selected;
                     clicked => {
                         // Clicking anywhere on the row but a button opens the details, the
@@ -576,7 +576,10 @@ export component BrowserScreen inherits Rectangle {
                     // project has none). `src/screens/browser.rs` fetches and decodes it off
                     // the UI thread and only fills `row.icon` in once it lands.
                     Rectangle {
-                        y: (parent.height - self.height) / 2;
+                        // Top-aligned with the text column's own top padding, rather than
+                        // centered, now that a wrapped title can make the row taller than
+                        // the icon.
+                        y: Theme.gap;
                         width: Theme.icon-size;
                         height: Theme.icon-size;
                         horizontal-stretch: 0;
@@ -594,7 +597,7 @@ export component BrowserScreen inherits Rectangle {
                         }
                     }
 
-                    VerticalLayout {
+                    row_layout := VerticalLayout {
                         padding-top: Theme.gap;
                         padding-bottom: Theme.gap;
                         spacing: Theme.gap / 2;
@@ -606,9 +609,12 @@ export component BrowserScreen inherits Rectangle {
                             spacing: Theme.gap;
 
                             row_title := Rectangle {
-                                horizontal-stretch: 0;
-                                width: min(title_text.preferred-width, Theme.label-width);
-                                clip: true;
+                                // Flexible, not clamped to `Theme.label-width`: the title
+                                // wraps fully (see `title_text` below) rather than eliding,
+                                // so it needs real layout width to wrap within, not just its
+                                // own natural (unwrapped) preferred width.
+                                horizontal-stretch: 1;
+                                height: title_text.preferred-height;
 
                                 accessible-role: button;
                                 accessible-label: row.title;
@@ -623,9 +629,8 @@ export component BrowserScreen inherits Rectangle {
                                     color: title_touch.has-hover ? Theme.accent : Theme.text;
                                     font-size: Theme.font-size;
                                     horizontal-alignment: left;
-                                    vertical-alignment: center;
                                     width: 100%;
-                                    overflow: elide;
+                                    wrap: word-wrap;
                                 }
 
                                 // A thin underline is the hover cue; the row's own
@@ -638,7 +643,7 @@ export component BrowserScreen inherits Rectangle {
                                     visible: title_touch.has-hover;
                                     y: parent.height - 1px;
                                     height: 1px;
-                                    width: min(title_text.preferred-width, parent.width);
+                                    width: parent.width;
                                     background: Theme.accent;
                                 }
 
@@ -691,13 +696,6 @@ export component BrowserScreen inherits Rectangle {
                         Text {
                             text: row.description;
                             color: Theme.text-muted;
-                            font-size: Theme.font-size-small;
-                            overflow: elide;
-                        }
-
-                        Text {
-                            text: row.page_url;
-                            color: Theme.accent;
                             font-size: Theme.font-size-small;
                             overflow: elide;
                         }
@@ -775,6 +773,9 @@ export component BrowserScreen inherits Rectangle {
 // component fills the global with the sample search the screen used to carry as its
 // defaults. Nothing in the app instantiates it.
 export component PreviewBrowserScreen inherits BrowserScreen {
+    width: 1200px;
+    height: 760px;
+
     init => {
         BrowserState.query = "sodium";
         BrowserState.source_labels = ["modrinth", "curseforge"];
@@ -801,8 +802,8 @@ export component PreviewBrowserScreen inherits BrowserScreen {
                 source: "modrinth",
                 project_id: "gvQqBUqZ",
                 slug: "lithium",
-                title: "Lithium",
-                description: "No-compromises game logic and server optimisation mod.",
+                title: "Lithium: No-Compromises Game Logic and Server Optimisation Mod for Every Modded and Vanilla Server",
+                description: "No-compromises game logic and server optimisation mod. Works alongside Sodium and Phosphor with zero known incompatibilities across every supported Minecraft version.",
                 author: "jellysquid3",
                 kind: "mod",
                 downloads: "31.8M",

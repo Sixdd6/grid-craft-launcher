@@ -65,13 +65,18 @@ pub fn content_row(e: &ContentEntry, update: bool) -> ContentRow {
 
 /// Builds the browser row for one search hit. `icon` starts empty: `src/screens/browser.rs`
 /// fills it in once the row's icon has been fetched and decoded, off the UI thread.
+///
+/// The description collapses `\n`/`\r` to a single space and squeezes repeated spaces down to
+/// one, so a short description with embedded line breaks renders as one line the row's own
+/// `word-wrap` reflows, rather than as the literal blank lines a Slint `Text` would otherwise
+/// show.
 pub fn search_row(h: &SearchHit) -> SearchRow {
     SearchRow {
         source: h.source.to_string().into(),
         project_id: h.project_id.as_str().into(),
         slug: h.slug.as_str().into(),
         title: h.title.as_str().into(),
-        description: h.description.as_str().into(),
+        description: collapse_whitespace(&h.description).into(),
         author: h.author.as_str().into(),
         kind: h.kind.to_string().into(),
         downloads: format_downloads(h.downloads).into(),
@@ -79,6 +84,27 @@ pub fn search_row(h: &SearchHit) -> SearchRow {
         icon_url: h.icon_url.as_deref().unwrap_or_default().into(),
         icon: Default::default(),
     }
+}
+
+/// Replaces every `\n` and `\r` with a space, then squeezes any run of repeated spaces down to
+/// one, so a description with embedded line breaks becomes a single line a `Text`'s own
+/// `word-wrap` reflows instead of showing as literal blank lines.
+fn collapse_whitespace(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last_was_space = false;
+    for ch in text.chars() {
+        let ch = if ch == '\n' || ch == '\r' { ' ' } else { ch };
+        if ch == ' ' {
+            if !last_was_space {
+                out.push(' ');
+            }
+            last_was_space = true;
+        } else {
+            out.push(ch);
+            last_was_space = false;
+        }
+    }
+    out
 }
 
 /// Decodes a fetched icon's bytes into raw RGBA8 pixels and its dimensions.
