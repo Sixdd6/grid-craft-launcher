@@ -118,6 +118,35 @@ images, tables, `<script>`, and `<style>` are dropped with their contents; every
 marker is stripped and its text kept. No dependency — the markdown side is a line scanner, the
 HTML side a tag-aware stripper.
 
+A real Modrinth `body` is markdown with HTML in it: `<center><img>`, `<details>`, `<summary>`,
+badge tables, `<br>`. The rules, all covered by tests over the recorded bodies of Sodium,
+Create, and JEI (`tests/fixtures/modrinth/project_body_*.json`):
+
+- **Tags in markdown are stripped** with the same tokenizer `from_html` uses, outside code
+  fences only, so a fenced `<config>` survives. `<img>` goes, a `<script>`, `<style>`, or
+  `<table>` subtree goes whole, a block-level tag becomes a line break, `<li>` becomes `- `,
+  and entities are decoded.
+- **A body that is block-level HTML** (`<p>`, `<ul>`, `<h1..6>` in it) **with no markdown
+  structure at all** — no `#` heading, list marker, or fence — is handed to `from_html` whole.
+  A mixed body stays on the markdown path.
+- **Ordered lists** (`1. `, `1) `) become `Bullet`, since a `Block` carries no numbering.
+- **Setext headings**: a `===` or `---` underline after a text line is a `Heading` (1 or 2).
+  A `---` on its own is a rule and is dropped, as is a table separator row (only `|`, `-`, and
+  `:` in it). A leading `> ` is dropped.
+- **Two `<br>` in a row end the paragraph**; one is a space.
+- **A badge** — `[![alt](image)](url)` — is dropped whole, like an `<a>` with no text.
+- **Entities**: numeric (`&#8217;`, `&#x2019;`) plus `nbsp lt gt quot apos amp mdash ndash
+  hellip rsquo lsquo ldquo rdquo middot copy trade reg`. Anything else stays as written.
+- **`</a>` appends ` (href)` only when the anchor produced text**, so an image-only link keeps
+  no URL. `attr()` reads name/value pairs with quotes respected, so a `title="href=nope"` is
+  not mistaken for the `href`.
+- **A self-closing `<script/>`, `<style/>`, or `<table/>` opens no subtree**: `parse_tag`
+  reports `self_closing`, so it cannot swallow the rest of the document.
+- **Bounded work and bounded output**: a link label is looked for within 512 characters and no
+  scan starts past the last `]`, so a line of unmatched `[` stays linear. At most 2 000 blocks
+  and 8 KiB per block; a longer block ends in `…`, and a longer body ends with one
+  `Paragraph("…")`.
+
 ## Fingerprint (`sources::fingerprint`)
 
 MurmurHash2, 32-bit, the original `MurmurHash2` (not `MurmurHash2A`), seed `1`, over the file

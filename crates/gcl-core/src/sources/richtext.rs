@@ -35,16 +35,78 @@ impl Block {
             | Block::Code(text) => text,
         }
     }
+
+    /// The block's text for editing, without its kind.
+    fn text_mut(&mut self) -> &mut String {
+        match self {
+            Block::Heading(_, text)
+            | Block::Paragraph(text)
+            | Block::Bullet(text)
+            | Block::Code(text) => text,
+        }
+    }
+}
+
+/// Most blocks one description may produce.
+const MAX_BLOCKS: usize = 2_000;
+
+/// Most bytes one block's text may hold.
+const MAX_BLOCK_BYTES: usize = 8 * 1024;
+
+/// Marks text a cap cut short.
+const ELLIPSIS: char = '…';
+
+/// Applies the output caps: [`MAX_BLOCKS`] blocks, [`MAX_BLOCK_BYTES`] per block.
+///
+/// A description is display data, so a body that runs long is cut rather than refused: an
+/// over-long block ends in an ellipsis, and a body over the block cap ends with one
+/// `Paragraph("…")`.
+fn capped(mut blocks: Vec<Block>) -> Vec<Block> {
+    let over = blocks.len() > MAX_BLOCKS;
+    blocks.truncate(MAX_BLOCKS);
+    for block in &mut blocks {
+        truncate_text(block.text_mut());
+    }
+    if over {
+        blocks.push(Block::Paragraph(ELLIPSIS.to_string()));
+    }
+    blocks
+}
+
+/// Cuts `text` to [`MAX_BLOCK_BYTES`] on a character boundary, marking the cut.
+fn truncate_text(text: &mut String) {
+    if text.len() <= MAX_BLOCK_BYTES {
+        return;
+    }
+    let mut end = MAX_BLOCK_BYTES;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    text.push(ELLIPSIS);
 }
 
 /// Converts markdown to blocks.
 ///
-/// Headings come from leading `#`, bullets from a leading `-` or `*`, code from a
-/// ``` ``` ``` fence; every other non-empty run of lines is one paragraph, joined with
-/// spaces. `[text](url)` becomes `text (url)`, `![alt](url)` is dropped, and `**`,
-/// `__`, and backtick markers are removed. A single `*` or `_` is left alone so a
-/// `snake_case` word survives.
+/// Headings come from leading `#` or a `===`/`---` underline, bullets from a leading
+/// `-`, `*`, `+`, `1.`, or `1)`, code from a ``` ``` ``` fence; every other non-empty run
+/// of lines is one paragraph, joined with spaces. `[text](url)` becomes `text (url)`,
+/// `![alt](url)` is dropped, and `**`, `__`, and backtick markers are removed. A single
+/// `*` or `_` is left alone so a `snake_case` word survives. A leading `> ` is dropped,
+/// as are `---` rules and table separator rows.
+///
+/// A real body carries HTML too — `<center>`, `<details>`, badge tables, `<br>`. Tags
+/// outside a code fence are stripped first ([`strip_tags`]), and a body that is block-level
+/// HTML with no markdown structure left in it goes to [`from_html`] whole.
 pub fn from_markdown(text: &str) -> Vec<Block> {
+    if is_block_html(text) {
+        return from_html(text);
+    }
+    capped(scan_markdown(&strip_tags_outside_fences(text)))
+}
+
+/// The line scanner behind [`from_markdown`], over text whose tags are already stripped.
+fn scan_markdown(text: &str) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut paragraph: Vec<String> = Vec::new();
     let mut code: Option<Vec<String>> = None;
@@ -60,12 +122,22 @@ pub fn from_markdown(text: &str) -> Vec<Block> {
             }
             continue;
         }
-        let trimmed = line.trim_start();
+        let trimmed = unquote(line.trim_start());
         if trimmed.starts_with("```") {
             flush_paragraph(&mut blocks, &mut paragraph);
             code = Some(Vec::new());
         } else if trimmed.is_empty() {
             flush_paragraph(&mut blocks, &mut paragraph);
+        } else if let Some(level) = rule_line(trimmed) {
+            // `===` or `---` under a text line is a heading; on its own it is a rule, and a
+            // row of `|`, `-`, and `:` is a table separator. Both are dropped.
+            let text = paragraph.join(" ").trim().to_string();
+            paragraph.clear();
+            match (level, text.is_empty()) {
+                (Some(level), false) => blocks.push(Block::Heading(level, collapse(&text))),
+                (_, false) => blocks.push(Block::Paragraph(collapse(&text))),
+                _ => {}
+            }
         } else if let Some(rest) = trimmed.strip_prefix('#') {
             flush_paragraph(&mut blocks, &mut paragraph);
             let extra = rest.chars().take_while(|c| *c == '#').count();
@@ -91,10 +163,20 @@ pub fn from_markdown(text: &str) -> Vec<Block> {
     blocks
 }
 
-/// The text after a `-` or `*` list marker, or `None` when the line is not a bullet.
+/// The text after a list marker, or `None` when the line is not a list item.
+///
+/// A `-`, `*`, or `+` marker and an ordered `1.` / `1)` marker both count: an ordered list
+/// is displayed as bullets, since a [`Block`] carries no numbering.
 fn bullet_body(line: &str) -> Option<&str> {
     for marker in ["- ", "* ", "+ "] {
         if let Some(rest) = line.strip_prefix(marker) {
+            return Some(rest);
+        }
+    }
+    let digits = line.chars().take_while(char::is_ascii_digit).count();
+    if (1..=9).contains(&digits) {
+        let rest = &line[digits..];
+        if let Some(rest) = rest.strip_prefix(". ").or_else(|| rest.strip_prefix(") ")) {
             return Some(rest);
         }
     }
@@ -102,6 +184,37 @@ fn bullet_body(line: &str) -> Option<&str> {
         "-" | "*" | "+" => Some(""),
         _ => None,
     }
+}
+
+/// Drops every leading `>` blockquote marker from a line.
+fn unquote(line: &str) -> &str {
+    let mut rest = line;
+    while let Some(stripped) = rest.strip_prefix('>') {
+        rest = stripped.trim_start();
+    }
+    rest
+}
+
+/// Whether a line is a rule, a table separator, or a setext underline, and which heading
+/// level it would give the text line above it.
+///
+/// `Some(Some(1))` for `===`, `Some(Some(2))` for `---`, `Some(None)` for a table separator
+/// row (only `|`, `-`, and `:` in it), and `None` for an ordinary line.
+fn rule_line(line: &str) -> Option<Option<u8>> {
+    let body: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+    if body.len() < 2 {
+        return None;
+    }
+    if body.chars().all(|c| c == '=') {
+        return Some(Some(1));
+    }
+    if body.chars().all(|c| c == '-') {
+        return Some(Some(2));
+    }
+    if body.contains('|') && body.chars().all(|c| matches!(c, '|' | '-' | ':')) {
+        return Some(None);
+    }
+    None
 }
 
 /// Pushes the collected paragraph lines as one block, if any carry text.
@@ -126,15 +239,31 @@ fn push_code(blocks: &mut Vec<Block>, lines: Vec<String>) {
 fn inline(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let chars: Vec<char> = text.chars().collect();
+    // A line of unmatched `[` would otherwise rescan the rest of the line for every one of
+    // them. Past the last `]` no link can start, so the scan is skipped outright.
+    let last_close = chars.iter().rposition(|c| *c == ']');
+    let may_link = |at: usize| last_close.is_some_and(|close| at < close);
     let mut i = 0;
     while i < chars.len() {
         if chars[i] == '!'
+            && may_link(i + 1)
             && let Some(end) = link_at(&chars, i + 1)
         {
             i = end;
             continue;
         }
+        // `[![alt](image)](url)`: a badge, which is an image and nothing else. Both the
+        // image and the link around it go, the same way an anchor with no text keeps no URL.
         if chars[i] == '['
+            && chars.get(i + 1) == Some(&'!')
+            && may_link(i + 2)
+            && let Some(end) = badge_at(&chars, i)
+        {
+            i = end;
+            continue;
+        }
+        if chars[i] == '['
+            && may_link(i)
             && let Some(end) = link_at(&chars, i)
         {
             let (label, url) = split_link(&chars, i, end);
@@ -166,16 +295,33 @@ fn starts_with(chars: &[char], at: usize, pat: &str) -> bool {
         .all(|(offset, c)| chars.get(at + offset) == Some(&c))
 }
 
+/// How far past a `[` the label and the URL are looked for.
+const LINK_SCAN: usize = 512;
+
 /// The index just past a `[label](url)` starting at `at`, or `None`.
+///
+/// The label and the URL are each looked for within [`LINK_SCAN`] characters, so an
+/// unmatched `[` costs a bounded scan rather than the rest of the line.
 fn link_at(chars: &[char], at: usize) -> Option<usize> {
     if chars.get(at) != Some(&'[') {
         return None;
     }
-    let close = (at + 1..chars.len()).find(|i| chars[*i] == ']')?;
+    let close = (at + 1..chars.len().min(at + 1 + LINK_SCAN)).find(|i| chars[*i] == ']')?;
     if chars.get(close + 1) != Some(&'(') {
         return None;
     }
-    let end = (close + 2..chars.len()).find(|i| chars[*i] == ')')?;
+    let end = (close + 2..chars.len().min(close + 2 + LINK_SCAN)).find(|i| chars[*i] == ')')?;
+    Some(end + 1)
+}
+
+/// The index just past a `[![alt](image)](url)` badge starting at `at`, or `None`.
+fn badge_at(chars: &[char], at: usize) -> Option<usize> {
+    let image_end = link_at(chars, at + 2)?;
+    if chars.get(image_end) != Some(&']') || chars.get(image_end + 1) != Some(&'(') {
+        return None;
+    }
+    let end =
+        (image_end + 2..chars.len().min(image_end + 2 + LINK_SCAN)).find(|i| chars[*i] == ')')?;
     Some(end + 1)
 }
 
@@ -194,6 +340,140 @@ fn split_link(chars: &[char], start: usize, end: usize) -> (String, String) {
     // is displayed.
     let url = url.split_whitespace().next().unwrap_or("").to_string();
     (label, url)
+}
+
+/// Tags that start a new line when a markdown body's tags are stripped.
+const BLOCK_TAGS: [&str; 16] = [
+    "p",
+    "div",
+    "ul",
+    "ol",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "blockquote",
+    "center",
+    "details",
+    "summary",
+    "section",
+    "figure",
+];
+
+/// Whether a body is block-level HTML rather than markdown.
+///
+/// True when it carries a block-level tag and no markdown structure at all — no `#`
+/// heading, list marker, or code fence on any line. Such a body is handed to
+/// [`from_html`] whole, which keeps its headings and lists; a mixed body (markdown
+/// headings with `<p>` and badge images in it, the common Modrinth shape) stays on the
+/// markdown path with its tags stripped.
+fn is_block_html(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let has_block = [
+        "<p>", "<p ", "<ul", "<ol", "<li", "<h1", "<h2", "<h3", "<h4", "<h5", "<h6",
+    ]
+    .iter()
+    .any(|tag| lower.contains(tag));
+    if !has_block {
+        return false;
+    }
+    !text.lines().any(|line| {
+        let line = unquote(line.trim_start());
+        line.starts_with('#') || line.starts_with("```") || bullet_body(line).is_some()
+    })
+}
+
+/// Strips HTML tags from every part of `text` that is not inside a code fence.
+fn strip_tags_outside_fences(text: &str) -> String {
+    let mut out = String::new();
+    let mut plain = String::new();
+    let mut in_fence = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            if !in_fence {
+                out.push_str(&strip_tags(&std::mem::take(&mut plain)));
+            }
+            out.push_str(line);
+            out.push('\n');
+            in_fence = !in_fence;
+            continue;
+        }
+        let target = if in_fence { &mut out } else { &mut plain };
+        target.push_str(line);
+        target.push('\n');
+    }
+    out.push_str(&strip_tags(&plain));
+    out
+}
+
+/// Drops every tag from `html` and keeps its text, entities decoded.
+///
+/// The same tokenizer [`from_html`] uses: `<img>` and the subtree of a [`SKIPPED`] tag are
+/// dropped, a block-level tag becomes a line break, a `<li>` becomes a `-` bullet marker,
+/// and two `<br>` in a row become a blank line so the paragraph ends there.
+fn strip_tags(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut skip: Option<(String, u32)> = None;
+    let mut breaks = 0u32;
+    for token in tokenize(html) {
+        if let Some((tag, depth)) = skip.as_mut() {
+            if let Token::Tag { name, close, .. } = &token
+                && name == tag
+            {
+                if *close {
+                    *depth -= 1;
+                    if *depth == 0 {
+                        skip = None;
+                    }
+                } else {
+                    *depth += 1;
+                }
+            }
+            continue;
+        }
+        match token {
+            Token::Text(text) => {
+                if text.chars().any(|c| !c.is_whitespace()) {
+                    breaks = 0;
+                }
+                out.push_str(&decode_entities(&text));
+            }
+            Token::Tag {
+                name,
+                close,
+                self_closing,
+                ..
+            } => {
+                if SKIPPED.contains(&name.as_str()) {
+                    if !close && !self_closing {
+                        skip = Some((name, 1));
+                    }
+                    out.push('\n');
+                    continue;
+                }
+                if name == "br" {
+                    breaks += 1;
+                    match breaks {
+                        1 => out.push(' '),
+                        2 => out.push_str("\n\n"),
+                        _ => {}
+                    }
+                    continue;
+                }
+                breaks = 0;
+                match name.as_str() {
+                    "img" => {}
+                    "li" if !close => out.push_str("\n- "),
+                    "li" | "tr" | "hr" => out.push('\n'),
+                    name if BLOCK_TAGS.contains(&name) => out.push('\n'),
+                    _ => {}
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Squeezes every run of whitespace into one space and trims the ends.
@@ -226,7 +506,7 @@ pub fn from_html(text: &str) -> Vec<Block> {
         state.apply(token);
     }
     state.flush();
-    state.blocks
+    capped(state.blocks)
 }
 
 /// What the current run of text will become.
@@ -247,8 +527,11 @@ struct HtmlState {
     mode: Mode,
     /// Tag whose whole subtree is dropped, and how deep we are inside it.
     skip: Option<(String, u32)>,
-    /// `href` of the open `<a>`, appended when it closes.
-    href: Option<String>,
+    /// `href` of the open `<a>` and the buffer length when it opened. The URL is appended
+    /// when the anchor closes, and only when it produced text of its own.
+    anchor: Option<(String, usize)>,
+    /// `<br>` tags seen in a row. Two of them end the paragraph.
+    breaks: u32,
 }
 
 /// Tags whose contents never reach a block.
@@ -272,8 +555,18 @@ impl HtmlState {
             return;
         }
         match token {
-            Token::Text(text) => self.push_text(&text),
-            Token::Tag { name, close, attrs } => self.tag(&name, close, &attrs),
+            Token::Text(text) => {
+                if text.chars().any(|c| !c.is_whitespace()) {
+                    self.breaks = 0;
+                }
+                self.push_text(&text);
+            }
+            Token::Tag {
+                name,
+                close,
+                self_closing,
+                attrs,
+            } => self.tag(&name, close, self_closing, &attrs),
         }
     }
 
@@ -294,26 +587,38 @@ impl HtmlState {
         }
     }
 
-    fn tag(&mut self, name: &str, close: bool, attrs: &str) {
+    fn tag(&mut self, name: &str, close: bool, self_closing: bool, attrs: &str) {
         if SKIPPED.contains(&name) {
-            if !close {
+            // `<table/>` opens nothing, so it must not swallow everything after it.
+            if !close && !self_closing {
                 self.flush();
                 self.skip = Some((name.to_string(), 1));
             }
             return;
         }
+        if name != "br" {
+            self.breaks = 0;
+        }
         match name {
             "img" => {}
-            "br" => self.push_text(" "),
+            "br" => {
+                self.breaks += 1;
+                if self.breaks >= 2 {
+                    self.flush();
+                } else {
+                    self.push_text(" ");
+                }
+            }
             "a" => {
                 if close {
-                    if let Some(href) = self.href.take()
+                    if let Some((href, start)) = self.anchor.take()
                         && !href.is_empty()
+                        && self.buf.len() > start
                     {
                         self.buf.push_str(&format!(" ({href})"));
                     }
                 } else {
-                    self.href = Some(decode_entities(&attr(attrs, "href")));
+                    self.anchor = Some((decode_entities(&attr(attrs, "href")), self.buf.len()));
                 }
             }
             "p" | "div" | "blockquote" | "ul" | "ol" | "tr" | "td" | "th" => self.flush(),
@@ -367,6 +672,8 @@ enum Token {
     Tag {
         name: String,
         close: bool,
+        /// `<br/>` and friends: the tag opens no subtree.
+        self_closing: bool,
         attrs: String,
     },
 }
@@ -429,71 +736,149 @@ fn find_from(chars: &[char], at: usize, pat: &str) -> Option<usize> {
     (at..chars.len()).find(|i| starts_with(chars, *i, pat))
 }
 
-/// Splits a tag's inner text into its name and its attributes.
+/// Splits a tag's inner text into its name, its attributes, and whether it closes itself.
 fn parse_tag(inner: &str) -> Token {
-    let inner = inner.trim().trim_end_matches('/');
+    let inner = inner.trim();
+    let self_closing = inner.ends_with('/');
+    let inner = inner.trim_end_matches('/').trim_end();
     let close = inner.starts_with('/');
     let body = inner.trim_start_matches('/').trim_start();
     let split = body.find(|c: char| c.is_whitespace()).unwrap_or(body.len());
     Token::Tag {
         name: body[..split].to_ascii_lowercase(),
         close,
+        self_closing,
         attrs: body[split..].trim().to_string(),
     }
 }
 
 /// The value of `key` in an attribute string, quoted or bare, or an empty string.
+///
+/// The string is read as name/value pairs, so a value that mentions `key` (a `title` with
+/// `href=` in it, say) is never mistaken for the attribute itself.
 fn attr(attrs: &str, key: &str) -> String {
-    let lower = attrs.to_ascii_lowercase();
-    let mut from = 0;
-    while let Some(found) = lower[from..].find(key) {
-        let start = from + found;
-        from = start + key.len();
-        let before_ok = start == 0
-            || lower[..start]
-                .chars()
-                .next_back()
-                .is_some_and(char::is_whitespace);
-        let rest = attrs[from..].trim_start();
-        if !before_ok || !rest.starts_with('=') {
-            continue;
+    for (name, value) in attr_pairs(attrs) {
+        if name.eq_ignore_ascii_case(key) {
+            return value;
         }
-        let value = rest[1..].trim_start();
-        let quote = value.chars().next();
-        return match quote {
-            Some(q @ ('"' | '\'')) => value[1..]
-                .split(q)
-                .next()
-                .unwrap_or_default()
-                .trim()
-                .to_string(),
-            _ => value
-                .split_whitespace()
-                .next()
-                .unwrap_or_default()
-                .to_string(),
-        };
     }
     String::new()
 }
 
-/// Replaces the handful of HTML entities a description actually carries.
+/// Every `name="value"` pair in an attribute string, quotes respected.
+fn attr_pairs(attrs: &str) -> Vec<(String, String)> {
+    let chars: Vec<char> = attrs.chars().collect();
+    let mut pairs = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_whitespace() || chars[i] == '=' {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && !chars[i].is_whitespace() && chars[i] != '=' {
+            i += 1;
+        }
+        let name: String = chars[start..i].iter().collect();
+        while i < chars.len() && chars[i].is_whitespace() {
+            i += 1;
+        }
+        if chars.get(i) != Some(&'=') {
+            // A valueless attribute, such as `disabled`.
+            pairs.push((name, String::new()));
+            continue;
+        }
+        i += 1;
+        while i < chars.len() && chars[i].is_whitespace() {
+            i += 1;
+        }
+        let value = match chars.get(i) {
+            Some(quote @ ('"' | '\'')) => {
+                let quote = *quote;
+                i += 1;
+                let start = i;
+                while i < chars.len() && chars[i] != quote {
+                    i += 1;
+                }
+                let value: String = chars[start..i].iter().collect();
+                i += 1;
+                value
+            }
+            _ => {
+                let start = i;
+                while i < chars.len() && !chars[i].is_whitespace() {
+                    i += 1;
+                }
+                chars[start..i].iter().collect()
+            }
+        };
+        pairs.push((name, value.trim().to_string()));
+    }
+    pairs
+}
+
+/// Longest entity this decoder will look at, `&` and `;` included.
+const MAX_ENTITY: usize = 12;
+
+/// Replaces the HTML entities a description actually carries: numeric ones and a short
+/// named list. Anything else is left as it was written.
 fn decode_entities(text: &str) -> String {
     if !text.contains('&') {
         return text.to_string();
     }
-    let mut out = text.to_string();
-    for (entity, replacement) in [
-        ("&nbsp;", " "),
-        ("&lt;", "<"),
-        ("&gt;", ">"),
-        ("&quot;", "\""),
-        ("&#39;", "'"),
-        ("&apos;", "'"),
-        ("&#x27;", "'"),
-        ("&amp;", "&"),
-    ] {
-        out = out.replace(entity, replacement);
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '&' {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        let end = (i + 1..chars.len().min(i + MAX_ENTITY)).find(|j| chars[*j] == ';');
+        match end.and_then(|end| entity(&chars[i + 1..end])) {
+            Some(text) => {
+                out.push_str(&text);
+                i = end.unwrap_or(i) + 1;
+            }
+            None => {
+                out.push('&');
+                i += 1;
+            }
+        }
     }
     out
+}
+
+/// The text an entity body (between `&` and `;`) stands for, or `None`.
+fn entity(body: &[char]) -> Option<String> {
+    let name: String = body.iter().collect();
+    if let Some(number) = name.strip_prefix('#') {
+        let value = match number.strip_prefix(['x', 'X']) {
+            Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+            None => number.parse::<u32>().ok()?,
+        };
+        return char::from_u32(value).map(String::from);
+    }
+    let text = match name.to_ascii_lowercase().as_str() {
+        "nbsp" => " ",
+        "lt" => "<",
+        "gt" => ">",
+        "quot" => "\"",
+        "apos" => "'",
+        "amp" => "&",
+        "mdash" => "—",
+        "ndash" => "–",
+        "hellip" => "…",
+        "rsquo" => "’",
+        "lsquo" => "‘",
+        "ldquo" => "“",
+        "rdquo" => "”",
+        "middot" => "·",
+        "copy" => "©",
+        "trade" => "™",
+        "reg" => "®",
+        _ => return None,
+    };
+    Some(text.to_string())
 }

@@ -6,9 +6,10 @@
 //! not a promise about the bytes (the decoder sniffs the real format). A file already at that
 //! path is returned without a request.
 //!
-//! Two guards keep an untrusted URL from costing anything: the host must be one of
-//! [`ALLOWED_HOSTS`] (plus whatever a test adds), and a body over [`MAX_BYTES`] is deleted
-//! and refused.
+//! Three guards keep an untrusted URL from costing anything: the URL must be `https://`,
+//! the host must be one of [`ALLOWED_HOSTS`] (plus whatever a test adds), and a body over
+//! [`MAX_BYTES`] is deleted and refused. The size cap is checked after the transfer, since
+//! a host may send no `Content-Length`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -50,8 +51,10 @@ impl IconCache {
 
     /// Returns the cached path for `url`, downloading it first when it is not there.
     ///
-    /// `extra_hosts` adds to [`ALLOWED_HOSTS`] for this call; pass an empty slice for the
-    /// shipped list on its own. Two concurrent calls for one URL make one request: the
+    /// The URL must start with `https://` and its host must be allowed, or the call fails
+    /// with [`Error::DisallowedHost`] before any request. `extra_hosts` adds to
+    /// [`ALLOWED_HOSTS`] for this call and lets that host be plain HTTP, which is the test
+    /// seam; pass an empty slice for the shipped list on its own. Two concurrent calls for one URL make one request: the
     /// second waits on the first and then finds the file.
     #[tracing::instrument(skip(self, http, root, extra_hosts))]
     pub async fn fetch(
@@ -69,6 +72,12 @@ impl IconCache {
             url: url.to_string(),
             host: String::new(),
         })?;
+        if !scheme_allowed(url, host, extra_hosts) {
+            return Err(Error::DisallowedHost {
+                url: url.to_string(),
+                host: host.to_string(),
+            });
+        }
         if !host_allowed(host, extra_hosts) {
             return Err(Error::DisallowedHost {
                 url: url.to_string(),
@@ -177,6 +186,19 @@ fn extension_of(url: &str) -> String {
     } else {
         DEFAULT_EXT.to_string()
     }
+}
+
+/// Whether an icon URL's scheme is allowed.
+///
+/// It must be `https://`. The one exception is a host a caller named in `extra_hosts`,
+/// which is the test seam ([`crate::Launcher::with_icon_hosts`], empty in a shipped
+/// launcher): a wiremock server speaks plain HTTP. A URL naming no scheme at all is
+/// refused, since [`host_of`] needs one.
+fn scheme_allowed(url: &str, host: &str, extra: &[String]) -> bool {
+    url.starts_with("https://")
+        || extra
+            .iter()
+            .any(|allowed| allowed.trim().eq_ignore_ascii_case(host))
 }
 
 /// Whether an icon may be fetched from `host`.
@@ -362,6 +384,27 @@ mod tests {
             "{err:?}"
         );
         assert!(!root.icons_dir().join(cache_file_name(&url)).exists());
+    }
+
+    #[tokio::test]
+    async fn a_url_that_is_not_https_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(dir.path());
+        for url in [
+            "http://cdn.modrinth.com/icon.png",
+            "ftp://cdn.modrinth.com/icon.png",
+            "cdn.modrinth.com/icon.png",
+        ] {
+            let err = IconCache::new()
+                .fetch(&client(), &root, url, &[])
+                .await
+                .expect_err("the scheme is not https");
+            assert!(
+                matches!(err, Error::DisallowedHost { .. }),
+                "{url}: {err:?}"
+            );
+            assert!(!root.icons_dir().join(cache_file_name(url)).exists());
+        }
     }
 
     #[tokio::test]
