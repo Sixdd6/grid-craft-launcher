@@ -9,7 +9,7 @@ use gcl_core::auth::{Account, AccountKind};
 use gcl_core::content::ManualDownload;
 use gcl_core::instances::Instance;
 use gcl_core::instances::model::{ContentEntry, GcPreset};
-use gcl_core::launcher::{InstallState, LatestVersion, VersionTarget};
+use gcl_core::launcher::{InstallState, LatestVersion};
 use gcl_core::loaders::LoaderVersion;
 use gcl_core::mojang::manifest::ManifestEntry;
 use gcl_core::sources::SearchHit;
@@ -96,18 +96,17 @@ pub fn search_row(h: &SearchHit) -> SearchRow {
 ///
 /// `latest.version` being `None` (nothing at the source fits the target) is the only way
 /// `state` comes back `"none"`; `install_state` being `None` (no target instance to compare
-/// against) or [`InstallState::Unknown`] (its own lookup failed) both read as
-/// `"not_installed"` and `"unknown"` respectively — the first because there is nothing
-/// installed to compare against, the second because [`InstallState::Unknown`]'s own doc
-/// comment is exactly "leave the line blank until a state arrives", the same as a row that
-/// has not been checked at all. `target` is not read here: the display text a row shows
-/// (built in `browser.slint`, alongside `BrowserState.minecraft`/`loader`) is the only thing
-/// that needs it, and this converter only ever answers with a version this call already
-/// resolved for that target.
+/// against) reads as `"not_installed"`, and [`InstallState::Unknown`] (the lookup itself
+/// failed, whether because there was no target to check or because the check errored) reads
+/// as `"unknown"` — [`InstallState::Unknown`]'s own doc comment is exactly "leave the line
+/// blank until a state arrives", the same as a row that has not been checked at all. The
+/// target itself is not read here: the display text a row shows (built in `browser.slint`,
+/// alongside `BrowserState.latest_minecraft`/`latest_loader`) is the only thing that needs
+/// it, and this converter only ever answers with a version `fetch_latest`
+/// (`src/screens/browser.rs`) already resolved for that target.
 pub fn latest_row_fields(
     latest: &LatestVersion,
     install_state: Option<&InstallState>,
-    _target: &VersionTarget,
 ) -> (String, String, String, String) {
     let Some(version) = &latest.version else {
         return (

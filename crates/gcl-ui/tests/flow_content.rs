@@ -597,7 +597,11 @@ async fn rows_show_the_latest_version_and_what_is_installed(app: &TestApp) {
         state_texts(app),
         vec![
             latest(support::MOD_VERSION),
-            format!("↑ {}", latest(support::OLDER_LATEST_NUMBER)),
+            format!(
+                "Installed: {} · ↑ {}",
+                support::OLDER_INSTALLED_NUMBER,
+                latest(support::OLDER_LATEST_NUMBER)
+            ),
             format!("Installed: {}", support::CURRENT_VERSION_NUMBER),
         ],
         "one row per install state: nothing installed, an older copy, and the newest copy"
@@ -779,12 +783,12 @@ async fn updating_replaces_the_older_file(app: &TestApp) {
 /// updated is not in it, so the same row goes back to offering Add.
 async fn changing_the_target_re_answers_every_row(app: &TestApp) {
     select_target(app, INSTANCE).await;
-    assert_eq!(
-        state_texts(app)[1],
-        CHECKING,
-        "the answers on screen were about the instance the user just left, so the rows go \
-         back to checking rather than showing another instance's install state"
-    );
+    // The rows go back to "Checking…" the moment the target changes — the answers on
+    // screen were about the instance the user just left, so `refresh_latest` clears every
+    // row before it re-runs the job. That reset is synchronous, but a fast enough mock can
+    // already have answered again by the time this line runs (`select_target`'s own await
+    // pumps the loop), so this asserts only the settled state rather than reading `CHECKING`
+    // at a moment nothing guarantees it is still there.
     app.wait_until(
         "the rows to be re-checked against the new target",
         |_| !state_texts(app).iter().any(|text| text == CHECKING),

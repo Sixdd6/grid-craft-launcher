@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use gcl_core::auth::{Account, AccountKind};
 use gcl_core::instances::Instance;
 use gcl_core::instances::model::{ContentEntry, ContentKind, GcPreset, InstanceConfig, Loader};
-use gcl_core::launcher::{InstallState, LatestVersion, VersionTarget};
+use gcl_core::launcher::{InstallState, LatestVersion};
 use gcl_core::loaders::LoaderVersion;
 use gcl_core::mojang::manifest::{ManifestEntry, VersionType};
 use gcl_core::sources::{ReleaseKind, SearchHit, SourceId, Version};
@@ -33,13 +33,6 @@ fn version_fixture(id: &str, number: &str) -> Version {
         files: Vec::new(),
         dependencies: Vec::new(),
         changelog: None,
-    }
-}
-
-fn a_target() -> VersionTarget {
-    VersionTarget {
-        minecraft: Some("1.21".into()),
-        loader: Loader::Fabric,
     }
 }
 
@@ -459,7 +452,7 @@ fn latest_row_fields_of_no_version_reads_none() {
         project_id: "sodium".into(),
         version: None,
     };
-    let (number, id, installed, state) = latest_row_fields(&latest, None, &a_target());
+    let (number, id, installed, state) = latest_row_fields(&latest, None);
     assert_eq!(number, "");
     assert_eq!(id, "");
     assert_eq!(installed, "");
@@ -472,7 +465,7 @@ fn latest_row_fields_with_no_install_state_reads_not_installed() {
         project_id: "sodium".into(),
         version: Some(version_fixture("v2", "0.5.9")),
     };
-    let (number, id, installed, state) = latest_row_fields(&latest, None, &a_target());
+    let (number, id, installed, state) = latest_row_fields(&latest, None);
     assert_eq!(number, "0.5.9");
     assert_eq!(id, "v2");
     assert_eq!(installed, "");
@@ -486,7 +479,7 @@ fn latest_row_fields_of_not_installed_carries_no_installed_number() {
         version: Some(version_fixture("v2", "0.5.9")),
     };
     let (number, id, installed, state) =
-        latest_row_fields(&latest, Some(&InstallState::NotInstalled), &a_target());
+        latest_row_fields(&latest, Some(&InstallState::NotInstalled));
     assert_eq!(number, "0.5.9");
     assert_eq!(id, "v2");
     assert_eq!(installed, "");
@@ -503,8 +496,7 @@ fn latest_row_fields_of_installed_carries_its_own_number() {
         version_id: "v2".into(),
         number: "0.5.9".into(),
     };
-    let (number, id, installed, state) =
-        latest_row_fields(&latest, Some(&installed_state), &a_target());
+    let (number, id, installed, state) = latest_row_fields(&latest, Some(&installed_state));
     assert_eq!(number, "0.5.9");
     assert_eq!(id, "v2");
     assert_eq!(installed, "0.5.9");
@@ -520,8 +512,7 @@ fn latest_row_fields_of_older_carries_the_installed_number() {
     let older_state = InstallState::Older {
         installed_number: "0.5.8".into(),
     };
-    let (number, id, installed, state) =
-        latest_row_fields(&latest, Some(&older_state), &a_target());
+    let (number, id, installed, state) = latest_row_fields(&latest, Some(&older_state));
     assert_eq!(number, "0.5.9");
     assert_eq!(id, "v2");
     assert_eq!(installed, "0.5.8");
@@ -534,8 +525,7 @@ fn latest_row_fields_of_unknown_install_state_reads_unknown_with_no_installed_nu
         project_id: "sodium".into(),
         version: Some(version_fixture("v2", "0.5.9")),
     };
-    let (number, id, installed, state) =
-        latest_row_fields(&latest, Some(&InstallState::Unknown), &a_target());
+    let (number, id, installed, state) = latest_row_fields(&latest, Some(&InstallState::Unknown));
     assert_eq!(number, "0.5.9");
     assert_eq!(id, "v2");
     assert_eq!(installed, "");
@@ -570,8 +560,7 @@ fn a_fresh_row_is_unknown_with_no_latest_number_unlike_a_failed_lookup() {
         project_id: "sodium".into(),
         version: Some(version_fixture("v2", "0.5.9")),
     };
-    let (number, _, _, state) =
-        latest_row_fields(&latest, Some(&InstallState::Unknown), &a_target());
+    let (number, _, _, state) = latest_row_fields(&latest, Some(&InstallState::Unknown));
     assert_eq!(state, "unknown");
     assert_eq!(
         number, "0.5.9",

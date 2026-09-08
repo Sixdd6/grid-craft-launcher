@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use gcl_core::content::{AddRequest, DependencyConflict};
 use gcl_core::instances::Instance;
 use gcl_core::instances::model::{ContentKind, Loader};
-use gcl_core::launcher::{LatestVersion, VersionTarget};
+use gcl_core::launcher::{InstallState, LatestVersion, VersionTarget};
 use gcl_core::sources::{SearchHit, SearchQuery, SourceId};
 use slint::{
     ComponentHandle, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
@@ -60,6 +60,11 @@ struct Pending {
     project: String,
     /// The row's own kind, which is what the add installs as.
     kind: Option<ContentKind>,
+    /// The version to install once a world is picked: `Some(latest_id)` when the world
+    /// chooser was opened by Update, pinning the exact version that resolved for the
+    /// target, the same as a plain Update on any other kind. `None` for a plain Add, which
+    /// lets `content::add` pick the newest version on its own.
+    version: Option<String>,
 }
 
 /// What the name prompt is about to install as a new instance.
@@ -309,12 +314,15 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
         let bridge = bridge.clone();
         let shared = shared.clone();
         state.on_update(move |project_id, kind, version_id| {
-            install(
+            // A data pack still needs a world before anything lands in it, Update no less
+            // than Add: `pick_world` already checks `needs_world` and installs straight
+            // away for every other kind, so routing every Update through it here is what
+            // keeps the two buttons agreeing on the rule.
+            pick_world(
                 &bridge,
                 &shared,
                 project_id.as_str(),
-                ContentKind::parse(kind.as_str()),
-                None,
+                kind.as_str(),
                 Some(version_id.to_string()),
             );
         });
@@ -324,7 +332,7 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
         let bridge = bridge.clone();
         let shared = shared.clone();
         state.on_pick_world(move |project_id, kind| {
-            pick_world(&bridge, &shared, project_id.as_str(), kind.as_str())
+            pick_world(&bridge, &shared, project_id.as_str(), kind.as_str(), None)
         });
     }
 
@@ -345,7 +353,7 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
                 &pending.project,
                 pending.kind,
                 Some(world.to_string()),
-                None,
+                pending.version,
             );
         });
     }
@@ -555,6 +563,14 @@ fn search_packs(bridge: &Bridge, shared: &Shared) {
 
     state.set_loading(true);
     state.set_status("Searching modpacks…".into());
+    // A modpack row carries no latest-version job of its own, and its hits are never what
+    // `refresh_latest`/`refresh_row` re-run against: bumping `latest_generation` here
+    // orphans a content search's latest-version job that is still in flight, so its late
+    // answers do not paint over rows this page has since replaced, and clearing
+    // `last_hits` stops a target change from re-running that job over hits that no longer
+    // belong to the page on screen.
+    shared.latest_generation.fetch_add(1, Ordering::SeqCst);
+    shared.set_last_hits(Vec::new());
     run_reporting(
         bridge,
         "Search modpacks",
@@ -639,7 +655,7 @@ fn search(bridge: &Bridge, shared: &Shared) {
 /// search, and the rows on screen keep the kind they were found with.
 fn add(bridge: &Bridge, shared: &Shared, project_id: &str, kind: &str, world: Option<String>) {
     if world.is_none() && needs_world(kind) {
-        pick_world(bridge, shared, project_id, kind);
+        pick_world(bridge, shared, project_id, kind, None);
         return;
     }
     install(
@@ -706,11 +722,20 @@ fn install(
     );
 }
 
-/// Asks which world a data pack goes into, then adds it.
+/// Asks which world a data pack goes into, then adds it. `version` is what the world
+/// chooser's Accept pins for the install once a world is picked: `Some(latest_id)` when
+/// Update opened the chooser, `None` for a plain Add.
 ///
 /// Anything that is not a data pack is installed straight away, so the screen can send every
-/// row through here without knowing the rule.
-fn pick_world(bridge: &Bridge, shared: &Shared, project_id: &str, kind: &str) {
+/// row through here without knowing the rule — Update included, so a data pack row's Update
+/// asks for a world exactly the way its Add does.
+fn pick_world(
+    bridge: &Bridge,
+    shared: &Shared,
+    project_id: &str,
+    kind: &str,
+    version: Option<String>,
+) {
     let Some(window) = bridge.weak().upgrade() else {
         return;
     };
@@ -722,7 +747,7 @@ fn pick_world(bridge: &Bridge, shared: &Shared, project_id: &str, kind: &str) {
             project_id,
             ContentKind::parse(kind),
             None,
-            None,
+            version,
         );
         return;
     }
@@ -735,6 +760,7 @@ fn pick_world(bridge: &Bridge, shared: &Shared, project_id: &str, kind: &str) {
     let pending = Pending {
         project: project_id.to_string(),
         kind: ContentKind::parse(kind),
+        version,
     };
     let shared = shared.clone();
     state.set_loading(true);
@@ -1029,6 +1055,10 @@ fn clear_rows(state: &BrowserState<'_>) {
     state.set_has_more(false);
     state.set_rows(ModelRc::new(VecModel::from(Vec::<SearchRow>::new())));
     state.set_pack_rows(ModelRc::new(VecModel::from(Vec::<SearchRow>::new())));
+    // The target a stale page's rows were checked against goes with them; a new page's own
+    // `fetch_latest` writes these fresh once it resolves.
+    state.set_latest_minecraft("".into());
+    state.set_latest_loader("".into());
 }
 
 /// The kind the filters name, or an empty string when the source offers none.
@@ -1141,6 +1171,24 @@ fn fetch_latest(bridge: &Bridge, shared: &Shared, generation: u64, hits: &[Searc
         move |launcher| {
             let target =
                 resolve_target(launcher, &target_slug, fallback_minecraft, fallback_loader);
+            // `target_label()` (`browser.slint`) reads what this job actually resolved
+            // against, not the live filter fields, so a row's state line stays correct
+            // even after the user keeps editing `minecraft`/`loader` post-search. Posted
+            // once, ahead of the per-row answers below, and guarded by `generation` the
+            // same way they are.
+            {
+                let weak = weak.clone();
+                let shared = shared.clone();
+                let target = target.clone();
+                let _ = weak.upgrade_in_event_loop(move |window| {
+                    if shared.latest_generation.load(Ordering::SeqCst) != generation {
+                        return;
+                    }
+                    let state = window.global::<BrowserState>();
+                    state.set_latest_minecraft(target.minecraft.clone().unwrap_or_default().into());
+                    state.set_latest_loader(loader_label(target.loader).into());
+                });
+            }
             let (answers, painted) = std::sync::mpsc::channel::<LatestVersion>();
             let painter = {
                 let target = target.clone();
@@ -1174,13 +1222,26 @@ fn fetch_latest(bridge: &Bridge, shared: &Shared, generation: u64, hits: &[Searc
     );
 }
 
+/// The loader label `latest_minecraft`/`latest_loader` and `target()` (`browser.rs`) both
+/// write: `Loader::None` reads as [`ANY_LOADER`], every other loader as its own `Display`.
+fn loader_label(loader: Loader) -> String {
+    match loader {
+        Loader::None => ANY_LOADER.to_string(),
+        loader => loader.to_string(),
+    }
+}
+
 /// Asks for one answer's install state and paints it onto its row.
 ///
-/// Runs on the painter thread, off both the UI thread and the launcher's runtime. The
-/// install state is only asked for when a target instance is picked and the hit resolved to
-/// a version; with no version there is nothing to compare against, and
-/// [`gcl_core::launcher::InstallState::Unknown`] is what a failed lookup answers, which the
-/// row shows as "could not check" rather than as "checking" forever.
+/// Runs on the painter thread, off both the UI thread and the launcher's runtime. Checked
+/// against `generation` before the blocking lookup below, not only after it: a search or a
+/// target change that has already moved on must not pay for an install-state lookup whose
+/// answer would only be thrown away. The install state is only asked for when a target
+/// instance is picked and the hit resolved to a version; with no version there is nothing to
+/// compare against, and that lookup itself failing — the instance vanished, a network call
+/// errored — reads the same way: both are
+/// [`gcl_core::launcher::InstallState::Unknown`], which the row shows as "could not check"
+/// rather than as "not installed", a claim this code never actually checked.
 #[allow(clippy::too_many_arguments)]
 fn paint_answer(
     launcher: &gcl_core::Launcher,
@@ -1192,13 +1253,18 @@ fn paint_answer(
     target: &VersionTarget,
     answer: LatestVersion,
 ) {
+    if shared.latest_generation.load(Ordering::SeqCst) != generation {
+        return;
+    }
     let install_state = match (target_slug.is_empty(), answer.version.as_ref()) {
-        (false, Some(version)) => launcher
-            .install_state(target_slug, source, &answer.project_id, target, version)
-            .ok(),
+        (false, Some(version)) => Some(
+            launcher
+                .install_state(target_slug, source, &answer.project_id, target, version)
+                .unwrap_or(InstallState::Unknown),
+        ),
         _ => None,
     };
-    let fields = latest_row_fields(&answer, install_state.as_ref(), target);
+    let fields = latest_row_fields(&answer, install_state.as_ref());
     let project_id = answer.project_id;
     let shared = shared.clone();
     let _ = weak.upgrade_in_event_loop(move |window| {

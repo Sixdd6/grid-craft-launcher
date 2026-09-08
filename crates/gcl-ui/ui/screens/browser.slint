@@ -47,6 +47,15 @@ export global BrowserState {
     // Loader filters the ComboBox offers. `any` means the search is not filtered by loader.
     in-out property <[string]> loader_options: ["any", "fabric", "quilt", "forge", "neoforge"];
 
+    // The Minecraft version the latest-version job actually resolved each row against, as
+    // `fetch_latest` (`src/screens/browser.rs`) last saw it — never the live `minecraft`
+    // filter field above, which a user can keep editing after that job has already run.
+    // `target_label()` reads this pair, not the filter, so the state line under a row never
+    // claims a target the rows on screen were not actually checked against.
+    in-out property <string> latest_minecraft: "";
+    // The loader the latest-version job actually resolved each row against, `any` for none.
+    in-out property <string> latest_loader: "";
+
     // Slug of the instance an Add installs into, empty when none is chosen yet.
     in-out property <string> target_slug: "";
     // Display name of that instance, for the button label.
@@ -199,7 +208,8 @@ export component BrowserScreen inherits Rectangle {
         if (root.selected >= 0 && root.selected < BrowserState.rows.length
             && !BrowserState.loading
             && (BrowserState.rows[root.selected].kind == "modpack"
-                || (root.has_target && BrowserState.rows[root.selected].state != "installed"))) {
+                || (root.has_target && BrowserState.rows[root.selected].state != "installed"
+                    && BrowserState.rows[root.selected].state != "none"))) {
             root.row_primary_action(
                 BrowserState.rows[root.selected].project_id,
                 BrowserState.rows[root.selected].kind,
@@ -210,13 +220,17 @@ export component BrowserScreen inherits Rectangle {
         }
     }
 
-    // "1.20.1 fabric", or empty when the target's Minecraft version or loader is not known
-    // (no target instance and nothing typed into the filters, or the loader filter is
-    // "any"). What every state line below reads as "<mc> <loader>".
+    // "1.20.1 fabric", or empty when the target the latest-version job resolved against
+    // named no Minecraft version or no loader. Reads `latest_minecraft`/`latest_loader`,
+    // which is what that job actually ran with, not the filter fields: a user can keep
+    // editing `minecraft`/`loader` after the search has already answered, and the state
+    // lines must keep naming the target they were really checked against until the next
+    // search or target change re-resolves them. What every state line below reads as
+    // "<mc> <loader>".
     function target_label() -> string {
-        return (BrowserState.minecraft != "" && BrowserState.loader != ""
-            && BrowserState.loader != "any")
-            ? BrowserState.minecraft + " " + BrowserState.loader
+        return (BrowserState.latest_minecraft != "" && BrowserState.latest_loader != ""
+            && BrowserState.latest_loader != "any")
+            ? BrowserState.latest_minecraft + " " + BrowserState.latest_loader
             : "";
     }
 
@@ -230,7 +244,9 @@ export component BrowserScreen inherits Rectangle {
     // The line `row_state_text` shows under a row's description: "Checking…" while the
     // latest-version job has not answered for this row yet, "No version for …" when nothing
     // at the source fits the target, "Installed: <n>" when the installed copy is the latest
-    // one, and the latest line — with a "↑" in front when the installed copy is older.
+    // one, and "Installed: <n> · ↑ <latest line>" when the installed copy is older — the
+    // installed number stays on screen next to what it would become, rather than dropping
+    // out the moment a row goes from "installed" to "older".
     //
     // A row starts at state "unknown" with no latest number, and that is the one that reads
     // "Checking…". `InstallState::Unknown` — the install-state lookup itself failed — comes
@@ -250,7 +266,7 @@ export component BrowserScreen inherits Rectangle {
             return "Installed: " + installed_number;
         }
         if (state == "older") {
-            return "↑ " + root.latest_text(latest_number);
+            return "Installed: " + installed_number + " · ↑ " + root.latest_text(latest_number);
         }
         return root.latest_text(latest_number);
     }
@@ -792,10 +808,17 @@ export component BrowserScreen inherits Rectangle {
                                         : (root.has_target
                                             ? "Add to " + BrowserState.target_name
                                             : "Pick an instance")));
+                            // A row with nothing at the source for this target has no
+                            // version an Add could install, so the button reads that out
+                            // rather than the row's own instance name.
+                            access_label: row.kind != "modpack" && row.state == "none"
+                                ? "No version for this instance"
+                                : "";
                             kind: row.state == "installed" ? "secondary" : "primary";
                             enabled: !BrowserState.loading
                                 && (row.kind == "modpack"
-                                    || (root.has_target && row.state != "installed"));
+                                    || (root.has_target && row.state != "installed"
+                                        && row.state != "none"));
                             clicked => {
                                 keys.focus();
                                 root.selected = i;
@@ -864,6 +887,10 @@ export component PreviewBrowserScreen inherits BrowserScreen {
         BrowserState.minecraft = "1.20.1";
         BrowserState.loader = "fabric";
         BrowserState.loader_index = 1;
+        // What `target_label()` actually reads: the target the (imagined) latest-version
+        // job resolved against, kept in step with the filters above for the preview.
+        BrowserState.latest_minecraft = "1.20.1";
+        BrowserState.latest_loader = "fabric";
         BrowserState.target_slug = "fabric-perf";
         BrowserState.target_name = "Fabric Performance";
         BrowserState.has_more = true;
