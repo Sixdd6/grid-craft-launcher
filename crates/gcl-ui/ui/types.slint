@@ -42,6 +42,17 @@ export struct SearchRow {
     // The decoded icon, built on the UI thread. Empty (`width == 0`) until the row's icon
     // has been fetched, or when the project has none.
     icon: image,
+    // Newest version's number for the search target (the picked instance's Minecraft
+    // version and loader, or the browser's own filters with no instance picked), empty
+    // until `src/screens/browser.rs`'s `fetch_latest` job answers for this row.
+    latest_number: string,
+    // Id of that version. What Update installs through `BrowserState.add`.
+    latest_id: string,
+    // Number of the version already installed for this project, empty when none is.
+    installed_number: string,
+    // "unknown" until the job answers, then "none" (no version fits the target),
+    // "not_installed", "installed", or "older" (the installed copy is behind `latest_number`).
+    state: string,
 }
 
 // One saved account.

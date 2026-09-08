@@ -160,6 +160,7 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::title_text` | `Text` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::title_touch` | `TouchArea` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::badge` | `Text` |
+| `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::row_state_text` | `Text` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::row_install` | `Button` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::prev_button` | `Button` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::next_button` | `Button` |

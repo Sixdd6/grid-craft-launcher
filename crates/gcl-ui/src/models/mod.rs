@@ -9,6 +9,7 @@ use gcl_core::auth::{Account, AccountKind};
 use gcl_core::content::ManualDownload;
 use gcl_core::instances::Instance;
 use gcl_core::instances::model::{ContentEntry, GcPreset};
+use gcl_core::launcher::{InstallState, LatestVersion, VersionTarget};
 use gcl_core::loaders::LoaderVersion;
 use gcl_core::mojang::manifest::ManifestEntry;
 use gcl_core::sources::SearchHit;
@@ -83,6 +84,66 @@ pub fn search_row(h: &SearchHit) -> SearchRow {
         page_url: h.page_url.as_str().into(),
         icon_url: h.icon_url.as_deref().unwrap_or_default().into(),
         icon: Default::default(),
+        latest_number: "".into(),
+        latest_id: "".into(),
+        installed_number: "".into(),
+        state: "unknown".into(),
+    }
+}
+
+/// The four fields `fetch_latest` (`src/screens/browser.rs`) writes onto one row once its
+/// latest version and, when there is a target instance, its install state have answered.
+///
+/// `latest.version` being `None` (nothing at the source fits the target) is the only way
+/// `state` comes back `"none"`; `install_state` being `None` (no target instance to compare
+/// against) or [`InstallState::Unknown`] (its own lookup failed) both read as
+/// `"not_installed"` and `"unknown"` respectively — the first because there is nothing
+/// installed to compare against, the second because [`InstallState::Unknown`]'s own doc
+/// comment is exactly "leave the line blank until a state arrives", the same as a row that
+/// has not been checked at all. `target` is not read here: the display text a row shows
+/// (built in `browser.slint`, alongside `BrowserState.minecraft`/`loader`) is the only thing
+/// that needs it, and this converter only ever answers with a version this call already
+/// resolved for that target.
+pub fn latest_row_fields(
+    latest: &LatestVersion,
+    install_state: Option<&InstallState>,
+    _target: &VersionTarget,
+) -> (String, String, String, String) {
+    let Some(version) = &latest.version else {
+        return (
+            String::new(),
+            String::new(),
+            String::new(),
+            "none".to_string(),
+        );
+    };
+    let latest_number = version.number.clone();
+    let latest_id = version.id.clone();
+    match install_state {
+        None | Some(InstallState::NotInstalled) => (
+            latest_number,
+            latest_id,
+            String::new(),
+            "not_installed".to_string(),
+        ),
+        Some(InstallState::Unknown) => (
+            latest_number,
+            latest_id,
+            String::new(),
+            "unknown".to_string(),
+        ),
+        Some(InstallState::Installed { number, .. }) => (
+            latest_number,
+            latest_id,
+            number.clone(),
+            "installed".to_string(),
+        ),
+        Some(InstallState::Older { installed_number }) => (
+            latest_number,
+            latest_id,
+            installed_number.clone(),
+            "older".to_string(),
+        ),
     }
 }
 

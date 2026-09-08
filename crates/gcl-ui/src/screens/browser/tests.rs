@@ -77,6 +77,7 @@ fn add_request_pins_no_version_and_carries_the_world() {
         "AANobbMI",
         Some(ContentKind::DataPack),
         Some("New World".to_string()),
+        None,
     );
     assert_eq!(request.source, SourceId::Modrinth);
     assert_eq!(request.project, "AANobbMI");
@@ -87,9 +88,21 @@ fn add_request_pins_no_version_and_carries_the_world() {
 
 #[test]
 fn add_request_without_a_kind_lets_the_project_decide() {
-    let request = add_request(SourceId::CurseForge, "238222", None, None);
+    let request = add_request(SourceId::CurseForge, "238222", None, None, None);
     assert_eq!(request.kind, None);
     assert_eq!(request.world, None);
+}
+
+#[test]
+fn add_request_pins_update_s_version() {
+    let request = add_request(
+        SourceId::Modrinth,
+        "AANobbMI",
+        Some(ContentKind::Mod),
+        None,
+        Some("v-latest".to_string()),
+    );
+    assert_eq!(request.version.as_deref(), Some("v-latest"));
 }
 
 #[test]
@@ -198,6 +211,7 @@ fn a_datapack_row_keeps_its_kind_in_the_request() {
         "abc",
         kind,
         Some("New World".to_string()),
+        None,
     );
     assert_eq!(request.kind, Some(ContentKind::DataPack));
     assert_eq!(request.world.as_deref(), Some("New World"));

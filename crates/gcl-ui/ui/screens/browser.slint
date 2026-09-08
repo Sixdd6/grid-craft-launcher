@@ -125,6 +125,10 @@ export global BrowserState {
     // A data pack row's Add button was pressed: ask which world it goes into. Carries the
     // project id and the row's own kind.
     callback pick_world(string /* project_id */, string /* kind */);
+    // A row's Update button was pressed: install `version_id` (its own `latest_id`) over
+    // the file already there, then refresh that row's install state. Carries the project
+    // id, the row's own kind, and the version to install.
+    callback update(string /* project_id */, string /* kind */, string /* version_id */);
     // The world chooser was accepted. Carries the world picked.
     callback choice_ok(string /* world */);
     // The world chooser was dismissed.
@@ -174,18 +178,75 @@ export component BrowserScreen inherits Rectangle {
         }
     }
 
+    // A result row's `row_install` button, and Enter on the selected row: Update over an
+    // older install, nothing over an up-to-date one (the button is disabled there), and
+    // `activate` for everything else. One seam so the button and the keyboard never drift
+    // apart on what "older" or "installed" means.
+    function row_primary_action(project_id: string, kind: string, title: string, state: string, latest_id: string) {
+        if (kind != "modpack" && state == "installed") {
+            return;
+        }
+        if (kind != "modpack" && state == "older") {
+            BrowserState.update(project_id, kind, latest_id);
+        } else {
+            root.activate(project_id, kind, title);
+        }
+    }
+
     // The keyboard version. It repeats the button's `enabled` rule, so Enter does nothing
     // where the button would be greyed out.
     function activate_selected() {
         if (root.selected >= 0 && root.selected < BrowserState.rows.length
             && !BrowserState.loading
-            && (BrowserState.rows[root.selected].kind == "modpack" || root.has_target)) {
-            root.activate(
+            && (BrowserState.rows[root.selected].kind == "modpack"
+                || (root.has_target && BrowserState.rows[root.selected].state != "installed"))) {
+            root.row_primary_action(
                 BrowserState.rows[root.selected].project_id,
                 BrowserState.rows[root.selected].kind,
                 BrowserState.rows[root.selected].title,
+                BrowserState.rows[root.selected].state,
+                BrowserState.rows[root.selected].latest_id,
             );
         }
+    }
+
+    // "1.20.1 fabric", or empty when the target's Minecraft version or loader is not known
+    // (no target instance and nothing typed into the filters, or the loader filter is
+    // "any"). What every state line below reads as "<mc> <loader>".
+    function target_label() -> string {
+        return (BrowserState.minecraft != "" && BrowserState.loader != ""
+            && BrowserState.loader != "any")
+            ? BrowserState.minecraft + " " + BrowserState.loader
+            : "";
+    }
+
+    // "Latest for 1.20.1 fabric: 1.2.3", or "Latest: 1.2.3" with no known target.
+    function latest_text(number: string) -> string {
+        return root.target_label() != ""
+            ? "Latest for " + root.target_label() + ": " + number
+            : "Latest: " + number;
+    }
+
+    // The line `row_state_text` shows under a row's description: "Checking…" while the
+    // latest-version job has not answered for this row yet, "No version for …" when nothing
+    // at the source fits the target, "Installed: <n>" when the installed copy is the latest
+    // one, and the latest line — with a "↑" in front when the installed copy is older.
+    function row_state_text(state: string, latest_number: string, installed_number: string) -> string {
+        if (state == "unknown") {
+            return "Checking…";
+        }
+        if (state == "none") {
+            return root.target_label() != ""
+                ? "No version for " + root.target_label()
+                : "No version";
+        }
+        if (state == "installed") {
+            return "Installed: " + installed_number;
+        }
+        if (state == "older") {
+            return "↑ " + root.latest_text(latest_number);
+        }
+        return root.latest_text(latest_number);
     }
 
     // The kind the filters name, empty when the source offers none.
@@ -699,6 +760,16 @@ export component BrowserScreen inherits Rectangle {
                             font-size: Theme.font-size-small;
                             overflow: elide;
                         }
+
+                        // The row's newest version for the search target, whether it is
+                        // installed, and whether that copy is behind it. See
+                        // `row_state_text` above for what each `row.state` reads as.
+                        row_state_text := Text {
+                            text: root.row_state_text(row.state, row.latest_number, row.installed_number);
+                            color: Theme.text-muted;
+                            font-size: Theme.font-size-small;
+                            overflow: elide;
+                        }
                     }
 
                     VerticalLayout {
@@ -708,16 +779,21 @@ export component BrowserScreen inherits Rectangle {
                         row_install := Button {
                             text: row.kind == "modpack"
                                 ? "Install modpack"
-                                : (root.has_target
-                                    ? "Add to " + BrowserState.target_name
-                                    : "Pick an instance");
-                            kind: "primary";
+                                : (row.state == "installed"
+                                    ? "Installed"
+                                    : (row.state == "older"
+                                        ? "Update"
+                                        : (root.has_target
+                                            ? "Add to " + BrowserState.target_name
+                                            : "Pick an instance")));
+                            kind: row.state == "installed" ? "secondary" : "primary";
                             enabled: !BrowserState.loading
-                                && (row.kind == "modpack" || root.has_target);
+                                && (row.kind == "modpack"
+                                    || (root.has_target && row.state != "installed"));
                             clicked => {
                                 keys.focus();
                                 root.selected = i;
-                                root.activate(row.project_id, row.kind, row.title);
+                                root.row_primary_action(row.project_id, row.kind, row.title, row.state, row.latest_id);
                             }
                         }
                     }
@@ -785,7 +861,10 @@ export component PreviewBrowserScreen inherits BrowserScreen {
         BrowserState.target_slug = "fabric-perf";
         BrowserState.target_name = "Fabric Performance";
         BrowserState.has_more = true;
-        BrowserState.status = "2 result(s)";
+        BrowserState.status = "5 result(s)";
+        // One row per `state` a real search can answer with, so the preview shows the
+        // whole range: a fresh hit not yet checked, one with nothing for this target, one
+        // never installed, one installed and current, and one installed but older.
         BrowserState.rows = [
             {
                 source: "modrinth",
@@ -797,6 +876,7 @@ export component PreviewBrowserScreen inherits BrowserScreen {
                 kind: "mod",
                 downloads: "45.2M",
                 page_url: "https://modrinth.com/mod/sodium",
+                state: "unknown",
             },
             {
                 source: "modrinth",
@@ -808,6 +888,51 @@ export component PreviewBrowserScreen inherits BrowserScreen {
                 kind: "mod",
                 downloads: "31.8M",
                 page_url: "https://modrinth.com/mod/lithium",
+                state: "none",
+            },
+            {
+                source: "modrinth",
+                project_id: "P7dR8mSH",
+                slug: "fabric-api",
+                title: "Fabric API",
+                description: "Essential hooks for modding with Fabric.",
+                author: "FabricMC",
+                kind: "mod",
+                downloads: "120.4M",
+                page_url: "https://modrinth.com/mod/fabric-api",
+                latest_number: "0.102.0",
+                latest_id: "v-fabric-api-latest",
+                state: "not_installed",
+            },
+            {
+                source: "modrinth",
+                project_id: "gu5vRgu5",
+                slug: "modmenu",
+                title: "Mod Menu",
+                description: "Adds a mod menu to view a list of mods you have installed.",
+                author: "Prospector",
+                kind: "mod",
+                downloads: "60.1M",
+                page_url: "https://modrinth.com/mod/modmenu",
+                latest_number: "11.0.3",
+                latest_id: "v-modmenu-latest",
+                installed_number: "11.0.3",
+                state: "installed",
+            },
+            {
+                source: "modrinth",
+                project_id: "hEOCdOgW",
+                slug: "cloth-config",
+                title: "Cloth Config API",
+                description: "A config library for Minecraft mods.",
+                author: "shedaniel",
+                kind: "mod",
+                downloads: "50.7M",
+                page_url: "https://modrinth.com/mod/cloth-config",
+                latest_number: "14.0.126",
+                latest_id: "v-cloth-config-latest",
+                installed_number: "14.0.120",
+                state: "older",
             },
         ];
     }

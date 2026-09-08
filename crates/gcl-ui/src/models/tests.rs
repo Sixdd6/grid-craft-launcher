@@ -6,15 +6,42 @@ use std::path::PathBuf;
 use gcl_core::auth::{Account, AccountKind};
 use gcl_core::instances::Instance;
 use gcl_core::instances::model::{ContentEntry, ContentKind, GcPreset, InstanceConfig, Loader};
+use gcl_core::launcher::{InstallState, LatestVersion, VersionTarget};
 use gcl_core::loaders::LoaderVersion;
 use gcl_core::mojang::manifest::{ManifestEntry, VersionType};
-use gcl_core::sources::{SearchHit, SourceId};
+use gcl_core::sources::{ReleaseKind, SearchHit, SourceId, Version};
 
 use super::{
     account_row, content_row, decode_description_image, decode_icon, format_bytes,
-    format_downloads, gc_rows, instance_row, loader_version_row, search_row, setting_rows,
-    short_time, version_row,
+    format_downloads, gc_rows, instance_row, latest_row_fields, loader_version_row, search_row,
+    setting_rows, short_time, version_row,
 };
+
+/// A version fixture with a chosen number and id, everything else filled in with a value the
+/// converter never inspects.
+fn version_fixture(id: &str, number: &str) -> Version {
+    Version {
+        source: SourceId::Modrinth,
+        project_id: "sodium".into(),
+        id: id.into(),
+        name: number.into(),
+        number: number.into(),
+        kind: ReleaseKind::Release,
+        game_versions: vec!["1.21".into()],
+        loaders: vec!["fabric".into()],
+        published: "2026-09-08T00:00:00Z".into(),
+        files: Vec::new(),
+        dependencies: Vec::new(),
+        changelog: None,
+    }
+}
+
+fn a_target() -> VersionTarget {
+    VersionTarget {
+        minecraft: Some("1.21".into()),
+        loader: Loader::Fabric,
+    }
+}
 
 #[test]
 fn format_bytes_uses_binary_units() {
@@ -160,6 +187,10 @@ fn search_row_carries_the_icon_url_with_no_decoded_icon_yet() {
     let row = search_row(&hit);
     assert_eq!(row.icon_url.as_str(), "https://cdn.modrinth.com/icon.png");
     assert_eq!(row.icon.size().width, 0, "nothing has been fetched yet");
+    assert_eq!(row.latest_number.as_str(), "");
+    assert_eq!(row.latest_id.as_str(), "");
+    assert_eq!(row.installed_number.as_str(), "");
+    assert_eq!(row.state.as_str(), "unknown");
 }
 
 #[test]
@@ -420,4 +451,93 @@ fn loader_version_row_carries_both_flags() {
     assert_eq!(row.version.as_str(), "0.16.9");
     assert!(row.stable);
     assert!(row.recommended);
+}
+
+#[test]
+fn latest_row_fields_of_no_version_reads_none() {
+    let latest = LatestVersion {
+        project_id: "sodium".into(),
+        version: None,
+    };
+    let (number, id, installed, state) = latest_row_fields(&latest, None, &a_target());
+    assert_eq!(number, "");
+    assert_eq!(id, "");
+    assert_eq!(installed, "");
+    assert_eq!(state, "none");
+}
+
+#[test]
+fn latest_row_fields_with_no_install_state_reads_not_installed() {
+    let latest = LatestVersion {
+        project_id: "sodium".into(),
+        version: Some(version_fixture("v2", "0.5.9")),
+    };
+    let (number, id, installed, state) = latest_row_fields(&latest, None, &a_target());
+    assert_eq!(number, "0.5.9");
+    assert_eq!(id, "v2");
+    assert_eq!(installed, "");
+    assert_eq!(state, "not_installed");
+}
+
+#[test]
+fn latest_row_fields_of_not_installed_carries_no_installed_number() {
+    let latest = LatestVersion {
+        project_id: "sodium".into(),
+        version: Some(version_fixture("v2", "0.5.9")),
+    };
+    let (number, id, installed, state) =
+        latest_row_fields(&latest, Some(&InstallState::NotInstalled), &a_target());
+    assert_eq!(number, "0.5.9");
+    assert_eq!(id, "v2");
+    assert_eq!(installed, "");
+    assert_eq!(state, "not_installed");
+}
+
+#[test]
+fn latest_row_fields_of_installed_carries_its_own_number() {
+    let latest = LatestVersion {
+        project_id: "sodium".into(),
+        version: Some(version_fixture("v2", "0.5.9")),
+    };
+    let installed_state = InstallState::Installed {
+        version_id: "v2".into(),
+        number: "0.5.9".into(),
+    };
+    let (number, id, installed, state) =
+        latest_row_fields(&latest, Some(&installed_state), &a_target());
+    assert_eq!(number, "0.5.9");
+    assert_eq!(id, "v2");
+    assert_eq!(installed, "0.5.9");
+    assert_eq!(state, "installed");
+}
+
+#[test]
+fn latest_row_fields_of_older_carries_the_installed_number() {
+    let latest = LatestVersion {
+        project_id: "sodium".into(),
+        version: Some(version_fixture("v2", "0.5.9")),
+    };
+    let older_state = InstallState::Older {
+        installed_number: "0.5.8".into(),
+    };
+    let (number, id, installed, state) =
+        latest_row_fields(&latest, Some(&older_state), &a_target());
+    assert_eq!(number, "0.5.9");
+    assert_eq!(id, "v2");
+    assert_eq!(installed, "0.5.8");
+    assert_eq!(state, "older");
+}
+
+#[test]
+fn latest_row_fields_of_unknown_install_state_reads_unknown_with_no_installed_number() {
+    let latest = LatestVersion {
+        project_id: "sodium".into(),
+        version: Some(version_fixture("v2", "0.5.9")),
+    };
+    let (number, id, installed, state) =
+        latest_row_fields(&latest, Some(&InstallState::Unknown), &a_target());
+    assert_eq!(number, "0.5.9");
+    assert_eq!(id, "v2");
+    assert_eq!(installed, "");
+    assert_eq!(state, "unknown");
 }

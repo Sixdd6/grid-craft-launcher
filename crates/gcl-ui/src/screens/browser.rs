@@ -12,13 +12,14 @@ use std::sync::{Arc, Mutex};
 use gcl_core::content::{AddRequest, DependencyConflict};
 use gcl_core::instances::Instance;
 use gcl_core::instances::model::{ContentKind, Loader};
+use gcl_core::launcher::VersionTarget;
 use gcl_core::sources::{SearchHit, SearchQuery, SourceId};
 use slint::{
     ComponentHandle, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
 };
 
 use crate::bridge::{Bridge, warn};
-use crate::models::{decode_icon, search_row};
+use crate::models::{decode_icon, latest_row_fields, search_row};
 use crate::{App, AppWindow, BrowserState, Screen, SearchRow};
 
 /// How many hits one page asks for. Matches `BrowserState.page_size`.
@@ -87,6 +88,13 @@ struct Shared {
     /// Bumped by every `search`, so an icon batch that finishes after a newer search has
     /// started does not paint its rows over that newer search's own rows.
     icon_generation: Arc<AtomicU64>,
+    /// Bumped by every `search` and every target change, so a latest-version batch that
+    /// finishes after a newer one has started does not paint its rows over that newer
+    /// batch's own rows.
+    latest_generation: Arc<AtomicU64>,
+    /// The hits the page on screen was built from, kept so a target change can re-run the
+    /// latest-version job without searching again.
+    last_hits: Arc<Mutex<Vec<SearchHit>>>,
 }
 
 impl Shared {
@@ -158,6 +166,19 @@ impl Shared {
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .take()
+    }
+
+    /// Remembers the hits the page on screen was built from.
+    fn set_last_hits(&self, hits: Vec<SearchHit>) {
+        *self.last_hits.lock().unwrap_or_else(|err| err.into_inner()) = hits;
+    }
+
+    /// The hits the page on screen was built from, empty before the first search.
+    fn last_hits(&self) -> Vec<SearchHit> {
+        self.last_hits
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone()
     }
 }
 
@@ -269,6 +290,10 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
             let state = window.global::<BrowserState>();
             state.set_target_index(index);
             apply_target(&state, shared.target_at(index).as_ref());
+            // The target names which instance's Minecraft version and loader the latest
+            // job resolves against, so a new target re-runs it. The rows themselves are
+            // unchanged, only what each one reports about them.
+            refresh_latest(&bridge, &shared);
         });
     }
 
@@ -277,6 +302,21 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
         let shared = shared.clone();
         state.on_add(move |project_id, kind| {
             add(&bridge, &shared, project_id.as_str(), kind.as_str(), None)
+        });
+    }
+
+    {
+        let bridge = bridge.clone();
+        let shared = shared.clone();
+        state.on_update(move |project_id, kind, version_id| {
+            install(
+                &bridge,
+                &shared,
+                project_id.as_str(),
+                ContentKind::parse(kind.as_str()),
+                None,
+                Some(version_id.to_string()),
+            );
         });
     }
 
@@ -305,6 +345,7 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
                 &pending.project,
                 pending.kind,
                 Some(world.to_string()),
+                None,
             );
         });
     }
@@ -556,12 +597,15 @@ fn search(bridge: &Bridge, shared: &Shared) {
 
     state.set_loading(true);
     state.set_status("Searching…".into());
-    // Stamped before the search runs, so any icon batch from an older search that is still
-    // in flight when this page lands is recognized as stale and drops its result instead of
-    // painting over these rows.
+    // Stamped before the search runs, so an icon batch or a latest-version batch from an
+    // older search that is still in flight when this page lands is recognized as stale and
+    // drops its result instead of painting over these rows.
     let generation = shared.icon_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let latest_generation = shared.latest_generation.fetch_add(1, Ordering::SeqCst) + 1;
     let bridge_for_icons = bridge.clone();
     let shared_for_icons = shared.clone();
+    let bridge_for_latest = bridge.clone();
+    let shared_for_latest = shared.clone();
     run_reporting(
         bridge,
         "Search",
@@ -578,6 +622,13 @@ fn search(bridge: &Bridge, shared: &Shared) {
                 generation,
                 &found.hits,
             );
+            fetch_latest(
+                &bridge_for_latest,
+                &shared_for_latest,
+                latest_generation,
+                &found.hits,
+            );
+            shared_for_latest.set_last_hits(found.hits);
         },
     );
 }
@@ -591,16 +642,30 @@ fn add(bridge: &Bridge, shared: &Shared, project_id: &str, kind: &str, world: Op
         pick_world(bridge, shared, project_id, kind);
         return;
     }
-    install(bridge, shared, project_id, ContentKind::parse(kind), world);
+    install(
+        bridge,
+        shared,
+        project_id,
+        ContentKind::parse(kind),
+        world,
+        None,
+    );
 }
 
 /// Installs one project into the chosen instance, into `world` when it is a data pack.
+///
+/// `version` pins the file Update sends: `Some(latest_id)`, straight from the row, so the
+/// newest version resolved for the target is the one that replaces what is there. It is
+/// `None` for a plain Add, which installs whatever `content::add` picks as newest on its
+/// own. On success with a `version` given, the row for `project_id` is refreshed so its
+/// state catches up with the file that just replaced it.
 fn install(
     bridge: &Bridge,
     shared: &Shared,
     project_id: &str,
     kind: Option<ContentKind>,
     world: Option<String>,
+    version: Option<String>,
 ) {
     let Some(window) = bridge.weak().upgrade() else {
         return;
@@ -615,8 +680,9 @@ fn install(
         state.set_status("Pick an instance to add to first".into());
         return;
     }
-    let request = add_request(source, project_id, kind, world);
+    let request = add_request(source, project_id, kind, world, version.clone());
 
+    let refresh = version.map(|_| (bridge.clone(), shared.clone(), project_id.to_string()));
     state.set_loading(true);
     state.set_status("Installing\u{2026}".into());
     run_reporting(
@@ -632,6 +698,9 @@ fn install(
                 warn(window, &conflict_note(&outcome.conflicts));
             }
             state.set_status(format!("installed {}", outcome.installed.len()).into());
+            if let Some((bridge, shared, project_id)) = refresh {
+                refresh_row(&bridge, &shared, &project_id);
+            }
         },
     );
 }
@@ -646,7 +715,14 @@ fn pick_world(bridge: &Bridge, shared: &Shared, project_id: &str, kind: &str) {
     };
     let state = window.global::<BrowserState>();
     if !needs_world(kind) {
-        install(bridge, shared, project_id, ContentKind::parse(kind), None);
+        install(
+            bridge,
+            shared,
+            project_id,
+            ContentKind::parse(kind),
+            None,
+            None,
+        );
         return;
     }
     let slug = state.get_target_slug().to_string();
@@ -802,20 +878,22 @@ pub fn needs_world(row_kind: &str) -> bool {
     ContentKind::parse(row_kind) == Some(ContentKind::DataPack)
 }
 
-/// Builds the request one Add sends.
+/// Builds the request one Add or Update sends.
 ///
-/// `version` is always `None`: the browser installs the newest compatible version, and
-/// pinning one is the CLI's job.
+/// `version` is `None` for a plain Add — the newest compatible version is `content::add`'s
+/// own job to pick — and `Some(latest_id)` for Update, which pins the exact version the
+/// latest-version job already resolved rather than asking `content::add` to pick again.
 pub fn add_request(
     source: SourceId,
     project: &str,
     kind: Option<ContentKind>,
     world: Option<String>,
+    version: Option<String>,
 ) -> AddRequest {
     AddRequest {
         source,
         project: project.to_string(),
-        version: None,
+        version,
         kind,
         world,
     }
@@ -992,6 +1070,130 @@ fn error_dialog(window: &AppWindow, title: &str, text: &str) {
     app.set_error_title(title.into());
     app.set_error_text(text.into());
     app.set_error_open(true);
+}
+
+/// The `VersionTarget` the latest-version job resolves against: the picked instance's own
+/// Minecraft version and loader, read fresh through the launcher rather than trusted off
+/// screen — the search filter fields can be edited after a target is picked, and this is
+/// what an add would actually install for — or, with no instance picked, `fallback_minecraft`
+/// and `fallback_loader`, which are the browser's own filters as they stood when the search
+/// that found these hits ran.
+fn resolve_target(
+    launcher: &gcl_core::Launcher,
+    target_slug: &str,
+    fallback_minecraft: Option<String>,
+    fallback_loader: Loader,
+) -> VersionTarget {
+    if !target_slug.is_empty()
+        && let Ok(instance) = launcher.instances().get(target_slug)
+    {
+        return VersionTarget {
+            minecraft: Some(instance.config.minecraft),
+            loader: instance.config.loader,
+        };
+    }
+    VersionTarget {
+        minecraft: fallback_minecraft,
+        loader: fallback_loader,
+    }
+}
+
+/// Resolves every hit's newest version for the search target, then, when there is a target
+/// instance, whether it is installed there and whether that copy is behind it. Patches the
+/// matching row (by `project_id`, so this also serves [`refresh_row`]'s one-row refresh) in
+/// place once the job answers.
+///
+/// Guarded by `generation` the same way `fetch_icons` is guarded by `icon_generation`: a
+/// page that a newer search or a target change has since replaced must not paint over it.
+fn fetch_latest(bridge: &Bridge, shared: &Shared, generation: u64, hits: &[SearchHit]) {
+    if hits.is_empty() {
+        return;
+    }
+    let Some(window) = bridge.weak().upgrade() else {
+        return;
+    };
+    let state = window.global::<BrowserState>();
+    let Some(source) = shared.source_at(state.get_source_index()) else {
+        return;
+    };
+    let target_slug = state.get_target_slug().to_string();
+    let fallback_minecraft = some_text(state.get_minecraft().as_str());
+    let fallback_loader = parse_loader(state.get_loader().as_str()).unwrap_or(Loader::None);
+    let hits = hits.to_vec();
+
+    let shared = shared.clone();
+    bridge.run(
+        "Latest versions",
+        move |launcher| {
+            let target =
+                resolve_target(launcher, &target_slug, fallback_minecraft, fallback_loader);
+            let latest = launcher.latest_versions(source, &hits, &target)?;
+            let updates = latest
+                .into_iter()
+                .map(|answer| {
+                    let install_state = if target_slug.is_empty() {
+                        None
+                    } else {
+                        answer.version.as_ref().and_then(|version| {
+                            launcher
+                                .install_state(
+                                    &target_slug,
+                                    source,
+                                    &answer.project_id,
+                                    &target,
+                                    version,
+                                )
+                                .ok()
+                        })
+                    };
+                    let fields = latest_row_fields(&answer, install_state.as_ref(), &target);
+                    (answer.project_id, fields)
+                })
+                .collect::<Vec<_>>();
+            Ok(updates)
+        },
+        move |window, updates: Vec<(String, (String, String, String, String))>| {
+            if shared.latest_generation.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            let state = window.global::<BrowserState>();
+            let mut rows: Vec<SearchRow> = state.get_rows().iter().collect();
+            for (project_id, (number, id, installed_number, row_state)) in updates {
+                let Some(row) = rows.iter_mut().find(|row| row.project_id == project_id) else {
+                    continue;
+                };
+                row.latest_number = number.into();
+                row.latest_id = id.into();
+                row.installed_number = installed_number.into();
+                row.state = row_state.into();
+            }
+            state.set_rows(ModelRc::new(VecModel::from(rows)));
+        },
+    );
+}
+
+/// Re-runs the latest-version job for the page already on screen: the hits stay the same,
+/// but what each one's install state compares against does not, so this always bumps
+/// `latest_generation` rather than reusing the one the last search stamped.
+fn refresh_latest(bridge: &Bridge, shared: &Shared) {
+    let hits = shared.last_hits();
+    if hits.is_empty() {
+        return;
+    }
+    let generation = shared.latest_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    fetch_latest(bridge, shared, generation, &hits);
+}
+
+/// Refreshes one row after Update has installed a new file for it. Runs on the generation
+/// the page's own latest-version job already answered on: a search that has since moved on
+/// guards this exactly the way it would guard that job's own late answer.
+fn refresh_row(bridge: &Bridge, shared: &Shared, project_id: &str) {
+    let hits = shared.last_hits();
+    let Some(hit) = hits.into_iter().find(|hit| hit.project_id == project_id) else {
+        return;
+    };
+    let generation = shared.latest_generation.load(Ordering::SeqCst);
+    fetch_latest(bridge, shared, generation, std::slice::from_ref(&hit));
 }
 
 /// Fetches and decodes every row's icon on this page, one job for the whole page rather than
