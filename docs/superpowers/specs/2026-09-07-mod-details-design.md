@@ -1,6 +1,6 @@
 # Mod details and browser polish: design
 
-Date: 2026-09-07. Status: approved in chat.
+Date: 2026-09-07. Status: implemented by plan 9.
 
 ## Goals
 

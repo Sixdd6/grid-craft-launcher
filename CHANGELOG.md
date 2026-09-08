@@ -5,6 +5,19 @@ All notable changes to GRID Craft Launcher are documented here. Format follows
 
 ## Unreleased
 
+- Browser and instance detail: a mod, resource pack, shader, or data pack now has a details
+  screen. It shows the project's description as text — the source's markdown or HTML is turned
+  into headings, paragraphs, bullets, and code blocks, with images and tables dropped — and a
+  Versions tab that lists the versions the target instance can run, marks the one installed,
+  and installs any other one over it. A search row's title opens it; so does the source button
+  on an installed content row, which returns to the instance it came from.
+- Instance detail: an installed content row shows the project's title on top and the file name
+  under it, sorted by title. `instance.toml` gained an optional `title` per entry. An entry
+  written before the key existed has none; `content update` fills in up to 25 of them
+  per run and saves the file once.
+- Browser: a search row shows the project's icon. Icons are downloaded once into `cache/icons`
+  and reused; the download is capped at 2 MiB and allowed only from the sources' own CDNs over
+  HTTPS.
 - Launch: a loader that repeats a vanilla library no longer puts the jar on the classpath twice. NeoForge 1.21 and Forge refused to start with `Duplicate key`.
 - Content: a dependency pinned to another version of an installed mod is reported as a conflict instead of placing a second jar. Modpack files resolve to their Modrinth project when the hash is known.
 - Loaders: a Forge processor output whose entries match is accepted when the host zlib changes the compressed bytes. Fedora and Arch ship zlib-ng.

@@ -330,9 +330,11 @@ Rules:
 - **One Slint backend per process.** `support::init_backend()` calls
   `i_slint_backend_testing::init_integration_test_with_system_time` behind a `Once`, and no
   other backend may be set in that process. So each flow group is its own test binary with one
-  `#[test]` inside it, running its sub-flows in order over one window. Four binaries today:
-  `flow_instances`, `flow_settings`, `flow_content`, `flow_accounts`. Adding a second `#[test]`
-  to one of them is the failure mode to watch for.
+  `#[test]` inside it, running its sub-flows in order over one window. Five binaries today:
+  `flow_instances`, `flow_settings`, `flow_content`, `flow_accounts`, and `flow_project` (search,
+  open a hit's details from its title, install a version from the Versions tab, reopen the
+  details from the installed row's source button, install a newer version over it, and go back).
+  Adding a second `#[test]` to one of them is the failure mode to watch for.
 - **System time, not mock time.** The mock-time backend deadlocked the timer yield
   `wait_until` runs on. `support::pump()` therefore calls `mock_elapsed_time(Duration::ZERO)`,
   which drives one loop turn and hands the loop no time at all. A control that only saves after
@@ -366,6 +368,14 @@ Rules:
   is below, so a row already past the top edge is reached rather than walked away from. It
   checks after its last scroll as well as before each one, so the step that brings the
   element in is never the one that reports failure.
+- **A search row's icon must point at the mock host.** A `SearchHit.icon_url` is fetched by the
+  browser screen through `Launcher::fetch_icon`, which allows the sources' real CDNs. A recorded
+  Modrinth fixture names `cdn.modrinth.com`, so a flow that searches used to fetch real icons
+  over the real internet and swallow the outcome, because the icon path keeps its placeholder on
+  any error. `Mocks` therefore rewrites every hit's `icon_url` to the wiremock host, serves a
+  small PNG there, and `TestApp` builds the launcher with
+  `with_icon_hosts(["127.0.0.1", "localhost"])`. Any new search fixture needs the same rewrite.
+  `strace -e trace=connect` on the test binary is how this was proved, and how to prove it again.
 - No flow test opens a display, reaches the network, or touches the keyring.
 
 ### Real X input: `just ui-xtest`
@@ -383,9 +393,23 @@ reading the GUI log for the jobs the run must have raised. The temp root is remo
 kept on failure, with its path printed.
 
 Every wait is a poll with a bounded timeout, not a fixed sleep: `xdpyinfo -display` for the X
-server, the `gui start` line in the GUI log for the app, and `instances/smoke` on disk plus the
-`Install loader` job for the install. Each python drive runs under `timeout 180`. The exit trap
-kills *and* waits for the Xvfb pid: an Xvfb that is still running holds its lock.
+server, the `gui start` line in the GUI log for the app, `instances/smoke` on disk plus the
+`Install loader` job for the install, and the `Search` and `Project details` jobs for the browse
+leg. Each python drive runs under `timeout 180`. The exit trap kills *and* waits for the Xvfb
+pid: an Xvfb that is still running holds its lock.
+
+The recipe drives two legs. The first creates a Fabric instance through the dialog and checks
+that a click after an Escape still lands. The second opens the browser from the rail, types a
+query into the search field, presses Enter, clicks the first hit's title, and switches to the
+Versions tab — the only check that a search row's title, which is a click target of its own
+inside the row, can be hit at all. It needs the network: the search and the description are live
+Modrinth calls.
+
+**Match a job label with its quotes.** The GUI log writes `job ok label="Search"` and colours
+the line, so the ANSI escapes sit between `label` and `=` and a plain `grep -q 'label="Search"'`
+never matches. Grep for the quoted label alone (`'"Search"'`), which also keeps `Search` from
+matching `Search icons`. `wait_for` runs its argument through `eval`, so pass the pattern in a
+shell variable rather than fighting the quoting.
 
 `scripts/ui-xtest.py` sends every event through the XTest extension, so the app sees them as a
 user's. Steps, applied in order: `focus[:wm-class]`, `click:X,Y`, `drag:X1,Y1,X2,Y2`,

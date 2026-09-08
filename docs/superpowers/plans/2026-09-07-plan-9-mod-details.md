@@ -1,6 +1,6 @@
 # Plan 9: mod details and browser polish
 
-Date: 2026-09-07. Branch: `plan-9-mod-details`. HEAD: fc4e38e. Status: proposed.
+Date: 2026-09-07. Branch: `plan-9-mod-details`. HEAD: fc4e38e. Status: done (tasks 1-7).
 
 **For agentic workers:** use superpowers:subagent-driven-development or
 superpowers:executing-plans to run this plan task by task. Checkboxes track progress.

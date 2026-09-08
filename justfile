@@ -65,6 +65,9 @@ bump-version version:
 
 # Drive the real window with real X input on Xvfb and report PASS or FAIL.
 #
+# It drives two legs: create an instance through the dialog, then search Modrinth in the
+# browser and open a hit's project details.
+#
 # Needs the network, `Xvfb`, `xdpyinfo` (x11-utils), ImageMagick's `import`, and python3-xlib.
 # Xvfb picks its own free display through `-displayfd`, so no fixed number and no stale lock
 # can break the run. The GUI runs over a throwaway root, `scripts/ui-xtest.py` sends the
@@ -127,8 +130,26 @@ ui-xtest:
         shot:"$root/created.png" \
         click:250,75 sleep:2 click:933,37 sleep:2 key:Escape sleep:1 \
         click:68,181 sleep:2 shot:"$root/accounts.png"
+    # The GUI log writes a label in quotes and colours the line, so the job name alone is
+    # ambiguous: "Search" is also a prefix of "Search icons". The quotes are the whole
+    # pattern, and a variable carries them past `wait_for`'s eval.
+    want_search='"Search"'
+    want_details='"Project details"'
+    # Open the browser from the rail, search Modrinth, and open the first hit's details.
+    # A search row's title is its own click target, so real hit-testing is the only check
+    # that it can be hit at all. Needs the network: the search and the description are
+    # live Modrinth calls.
+    timeout 180 env GCL_XTEST_DISPLAY="$disp" python3 scripts/ui-xtest.py focus \
+        click:68,145 sleep:2 click:600,29 type:sodium key:Return
+    wait_for "the search to answer" 120 'grep -q "$want_search" "$root/gui.log"'
+    timeout 180 env GCL_XTEST_DISPLAY="$disp" python3 scripts/ui-xtest.py focus \
+        shot:"$root/results.png" click:305,114
+    wait_for "the project details to load" 120 \
+        'grep -q "$want_details" "$root/gui.log"'
+    timeout 180 env GCL_XTEST_DISPLAY="$disp" python3 scripts/ui-xtest.py focus \
+        shot:"$root/details.png" click:360,155 sleep:2 shot:"$root/versions.png"
     fail=0
-    for want in "Create instance" "Install loader"; do
+    for want in "Create instance" "Install loader" "$want_search" "$want_details"; do
         if grep -q "$want" "$root/gui.log"; then
             echo "ok: job $want"
         else

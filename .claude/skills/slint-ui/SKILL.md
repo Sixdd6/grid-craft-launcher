@@ -116,6 +116,29 @@ piece of shared state that lives outside a `*State` global: an `Arc<Mutex<HashSe
 running slugs, so the instances list and the detail screen agree on "Running" regardless of which
 one started the launch.
 
+## A screen that has to come back: `ProjectState.return_to`
+
+There is no navigation back stack. `App.navigate` sets `App.screen` and nothing else. Five of the
+six screens are reached from the rail, so they need none. The project details screen is the
+exception: it opens from a browser search row's title *and* from an installed content row's
+source button, and Back has to go to whichever it was.
+
+The pattern, and the one to copy if another screen ever needs the same:
+
+- `ProjectState` carries `return_to: Screen`. Whoever opens the screen sets it —
+  `Screen.browser` from the browser row, `Screen.instance` from the instance content row — as
+  one more argument of `ProjectState.open(source, project_id, target_slug, return_to, ...)`.
+- `ProjectState.back()` sets `App.screen` to `return_to`. The rail highlight reads `return_to`
+  too, so the rail stays lit on the screen the user thinks they are in.
+- Opening from the instance screen leaves `App.current_slug` alone, so the details screen still
+  installs into the right instance and Back lands on the same instance.
+- No stack, no history list, and no other screen changes. Add the property, not a mechanism.
+
+`BrowserScreen` cannot call `ProjectState.open` itself: `app.slint` imports the screens, so the
+reverse import would cycle. The screen declares an `open_project(...)` callback instead, and
+`app.slint` wires it to `ProjectState.open` plus `App.navigate` — the same seam
+`InstanceScreen.open_project` uses.
+
 ## Launching
 
 `launch_flow::launch(bridge, run, slug, offline_user)` is the only way either screen starts a

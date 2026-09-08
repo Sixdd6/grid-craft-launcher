@@ -45,6 +45,12 @@ sha1: Option<String>, sha512: Option<String>, fingerprint: Option<u32>, primary 
 `dependencies: Vec<Dependency> { project_id: Option<String>, version_id: Option<String>, kind:
 Required | Optional | Incompatible | Embedded }`.
 
+`SearchHit.icon_url` is the project's icon, `None` when the source serves none. It is a plain
+CDN URL, not a hash-addressed file, so `download::icons` caches it by URL rather than through the
+object store; see the `download-cache` skill. Never point a test fixture's `icon_url` at a real
+CDN: the icon allowlist accepts `cdn.modrinth.com` and the two `forgecdn.net` hosts, so a flow
+test would reach the live internet and swallow the outcome.
+
 `Modrinth::project_with_body(id_or_slug) -> (Project, String)` is an inherent method, not a
 trait one: Modrinth's `GET /project/{id}` already carries the description in `body`, so
 `Source::project` and `Source::description` are the same request twice. Both now call it and

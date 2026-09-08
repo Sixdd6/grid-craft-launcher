@@ -17,7 +17,7 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 - R2.2 List, rename, delete instances. Delete asks for confirmation in the UI; the CLI needs `--yes`. Rename is in the GUI too: the detail header's Rename button opens a prompt with the current name in it, and the slug never changes.
 - R2.3 Each instance has its own game directory (`.minecraft/`) with mods, resourcepacks, shaderpacks, saves, options.txt, logs.
 - R2.4 `instance.toml` records name, Minecraft version, loader, loader version, JVM min and max memory, Java path override, settings overrides, and the installed content list.
-- R2.5 The installed content list stores per item: source (modrinth, curseforge, file), project id, version or file id, file name, sha1, content type, enabled flag.
+- R2.5 The installed content list stores per item: source (modrinth, curseforge, file), project id, version or file id, file name, sha1, content type, enabled flag, and the project title when one is known.
 - R2.6 Enable or disable a mod by renaming to `.jar.disabled`.
 
 ## R3 Minecraft versions and caching
@@ -52,13 +52,13 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 
 ## R7 Content sources
 
-- R7.1 Search Modrinth and CurseForge by text, content type, Minecraft version, and loader.
+- R7.1 Search Modrinth and CurseForge by text, content type, Minecraft version, and loader. A hit opens a details screen with the project's description and its version list. The description comes from the source's own markup — Modrinth's `body` markdown, CurseForge's `GET /v1/mods/{id}/description` HTML — and is converted to headings, paragraphs, bullets, and code blocks for display; images and tables are dropped.
 - R7.2 Content types: mods, modpacks, resource packs, shaders, data packs, worlds. Each source exposes the types it supports. Verified: Modrinth supports mod, resourcepack, shader, and datapack; it has no `world` project type, so worlds are Modrinth-unsupported. CurseForge supports mods, modpacks, resource packs, and worlds; it also supports shaders and data packs when its `/v1/categories` response has those classes, which is unverified on this codebase's development machine, which has no CurseForge API key.
 - R7.3 Install a chosen version into the right instance folder: mods, resourcepacks, shaderpacks, saves/<world>/datapacks, saves.
 - R7.4 Required dependencies are installed with the item.
 - R7.5 CurseForge files with no download URL show the file's web page and accept a manually dropped file, verified by fingerprint. CLI convention: a command that leaves one or more manual downloads pending (`content add`, `content update --apply`, `modpack install`, `modpack install-file`) exits with code 3, not 0, even though it installed everything it could. Text and JSON output both still list what was installed and what needs a hand download.
 - R7.6 Without `CURSEFORGE_API_KEY`, CurseForge is hidden and Modrinth works.
-- R7.7 Update check: for each installed item, find the newest compatible version.
+- R7.7 Update check: for each installed item, find the newest compatible version. The same pass fills in a missing display title on an installed item, at most 25 per run.
 
 ## R8 Modpacks
 
@@ -95,11 +95,11 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 
 ## R13 GUI
 
-- R13.1 Screens: instances list, instance detail (content, settings, JVM, logs), content browser (search across sources with type and version filters), accounts, launcher settings. All five are delivered (`crates/gcl-ui`).
+- R13.1 Screens: instances list, instance detail (content, settings, JVM, logs), content browser (search across sources with type and version filters), accounts, launcher settings. All five are delivered (`crates/gcl-ui`). A sixth screen, project details, sits behind the browser and the instance content list: it shows the description and a Versions tab, and returns to whichever screen opened it.
 - R13.2 Progress for downloads and installs is visible per task. Delivered: `App.tasks` shows one row per active task with a fraction and status, in the bottom panel.
 - R13.3 Dark theme by default. Native window, no web view. Delivered through `winit` + `renderer-femtovg`. `std-widgets` controls (combo boxes, text fields, spin boxes) follow the dark shell as well: `AppWindow`'s `init` sets `Palette.color-scheme = ColorScheme.dark`.
 - R13.4 Keyboard: every list is arrow-navigable, Enter activates a row, Escape closes the open dialog, digits 1-5 jump to a screen. Delivered and unit-tested at the pure-function level (`gcl-ui/src/keys.rs`); the `.slint` wiring is verified by compiling, not by a keyboard-driving test.
-- R13.5 Every screen is driven end to end by a headless flow test: `crates/gcl-ui/tests/flow_{instances,settings,content,accounts}.rs` build the real `AppWindow` over a real `Launcher` on a temp root and click through create, install, launch, stop, the settings editor, content add and remove, modpack search and install, and the account flows. The GUI writes `<root>/logs/gui.log.<date>`, and `--screenshot <path>` saves a PNG of the window.
+- R13.5 Every screen is driven end to end by a headless flow test: `crates/gcl-ui/tests/flow_{instances,settings,content,accounts,project}.rs` build the real `AppWindow` over a real `Launcher` on a temp root and click through create, install, launch, stop, the settings editor, content add and remove, modpack search and install, and the account flows. The GUI writes `<root>/logs/gui.log.<date>`, and `--screenshot <path>` saves a PNG of the window.
 - Known gaps: there is no file picker — a pack archive on disk is named by typing its path. The CurseForge search and a real Microsoft sign-in are unverified against the live services on this machine; both are driven against mocks by the flow tests.
 
 ## Later
@@ -127,7 +127,7 @@ tests are there, but no live run has exercised it here).
 | R2.2 | Done | List, rename, delete. The CLI needs `--yes` to delete; the GUI confirms. The slug never changes. |
 | R2.3 | Done | Each instance owns `.minecraft/` with mods, resourcepacks, shaderpacks, saves, options.txt, logs. |
 | R2.4 | Done | `instance.toml` records every field the spec lists. |
-| R2.5 | Done | A `ContentEntry` carries source, project id, version id, file name, sha1, kind, and the enabled flag. |
+| R2.5 | Done | A `ContentEntry` carries source, project id, version id, file name, sha1, kind, the enabled flag, and an optional `title`. An entry written before that key existed has none until `content update` backfills it. |
 | R2.6 | Done | Enable and disable rename the file to and from `.disabled`. |
 | R3.1 | Done | The piston-meta manifest is fetched and cached with its ETag. |
 | R3.2 | Done | Version JSON, client jar, libraries, asset index, and assets live under `cache/` and are shared. |
@@ -147,13 +147,13 @@ tests are there, but no live run has exercised it here).
 | R6.3 | Done | Many accounts, one active; `account select` and the accounts screen switch. |
 | R6.4 | Done | An `Auth` failure prints `use --offline-user <name> to play offline`. |
 | R6.5 | Done | Without a client id, Microsoft login is hidden and offline mode works. |
-| R7.1 | Partial | Text, type, version, and loader filters work at both sources. Modrinth verified live; CurseForge not verified live (no key). |
+| R7.1 | Partial | Text, type, version, and loader filters work at both sources, and a hit opens a details screen with the description and the version list. Modrinth verified live, description included; CurseForge not verified live (no key), and its description envelope is unverified. |
 | R7.2 | Partial | Mods, modpacks, resource packs, shaders, data packs, and worlds are modeled. Modrinth has no world project type. The CurseForge class list is unverified. |
 | R7.3 | Done | Files land in `mods/`, `resourcepacks/`, `shaderpacks/`, `saves/<world>/datapacks/`, and `saves/`. |
 | R7.4 | Done | `content add` walks required dependencies breadth-first, depth 10. |
 | R7.5 | Not verified live | A file with no download URL becomes a pending manual download; `content import-file` verifies it and the command exits 3. Only CurseForge serves such files, so this path has no live run. |
 | R7.6 | Done | Without `CURSEFORGE_API_KEY`, CurseForge is hidden and Modrinth works. |
-| R7.7 | Done | `content update` lists newer compatible versions; `--apply` installs them. |
+| R7.7 | Done | `content update` lists newer compatible versions; `--apply` installs them. The same pass backfills a missing entry title, at most 25 per run, and writes `instance.toml` once, only when something changed. |
 | R8.1 | Done | `.mrpack` imports from the catalog and from a file. `just e2e-modpack` imported Fabulously Optimized live today: 50 content entries. |
 | R8.2 | Not verified live | The CurseForge pack parser and importer are written and unit-tested against synthetic fixtures. No key here, so no live import. |
 | R8.3 | Done | The new instance takes the pack's Minecraft version, loader, files, and overrides. |
@@ -171,17 +171,25 @@ tests are there, but no live run has exercised it here).
 | R11.5 | Done | A non-zero game exit is reported with a crash hint. A stop the user asked for reports "Stopped" and raises no warning. The hint scans the whole log tail for each marker, in priority order, from the end, so a stack trace's real cause wins over an earlier benign error. |
 | R12.1 | Done | `instance`, `version`, `loader`, `java`, `account`, `content`, `modpack`, `settings`, `launch`, `config`, and `debug` cover the requirements above. |
 | R12.2 | Done | Every command prints text by default and JSON with `--json`. |
-| R13.1 | Done | All five screens ship: instances, instance detail, browser, accounts, settings. |
+| R13.1 | Done | All five screens ship: instances, instance detail, browser, accounts, settings. A project details screen (Description and Versions tabs) opens from a search row's title and from an installed row's source button, and returns to whichever screen opened it. |
 | R13.2 | Done | The bottom panel shows one row per task with a fraction and a status. |
 | R13.3 | Done | The shell is dark and native (winit + FemtoVG), and `std-widgets` controls follow it: `Palette.color-scheme = ColorScheme.dark` in `AppWindow`'s `init`. |
 | R13.4 | Done | Digits 1-5, arrows, Enter, and Escape are wired; `keys.rs` is unit-tested. The wiring is verified by compile and Slint's documented event routing, not by a live keyboard. |
-| R13.5 | Done | Four headless flow binaries drive the real window over a real launcher: instances (create, install, launch, stop, rename, delete), settings, content, accounts. Each click goes through real pointer hit-testing rather than an accessible action. The GUI logs to `<root>/logs/gui.log.<date>`; `--screenshot <path>` saves a PNG. `just ui-xtest` drives the built app with real X input under Xvfb; verified: create via the dialog, a never-launched instance's Logs tab starts empty, a click after closing a dialog with Escape still lands, a number-key shortcut works after a screen change past a text field, and the browser starts empty on open. |
+| R13.5 | Done | Five headless flow binaries drive the real window over a real launcher: instances (create, install, launch, stop, rename, delete), settings, content, accounts, and project (search, open details, install a version over another one). Each click goes through real pointer hit-testing rather than an accessible action. The GUI logs to `<root>/logs/gui.log.<date>`; `--screenshot <path>` saves a PNG. `just ui-xtest` drives the built app with real X input under Xvfb; verified: create via the dialog, a never-launched instance's Logs tab starts empty, a click after closing a dialog with Escape still lands, a number-key shortcut works after a screen change past a text field, the browser starts empty on open, and a search row's title opens the project details screen. |
 
 ### Known limitations
 
 - **CurseForge is unverified live.** This machine has no `CURSEFORGE_API_KEY`. Search, install,
   fingerprint lookup, and pack import compile and pass unit tests against synthetic fixtures
   built from the public docs. `debug verify-source curseforge` prints SKIP.
+- **The CurseForge description envelope is unverified.** `GET /v1/mods/{id}/description` is read
+  as `{"data": "<html string>"}`, which is what the public docs describe and what every other
+  endpoint this client parses looks like. No live response has confirmed it, so
+  `tests/fixtures/curseforge/get_mod_description.json` is synthetic. Modrinth's side is verified:
+  its description is the `body` of `GET /project/{id}`.
+- **`cache/icons` is never pruned.** A project icon is cached by its URL and kept. Nothing
+  evicts it — `cleanup_partials` sweeps only `*.part` files — so the directory grows with the
+  number of distinct icon URLs the browser has shown.
 - **Microsoft login is unverified live.** The repo ships no `GCL_MSA_CLIENT_ID`, so the six-step
   device-code chain has run against wiremock only. `debug verify-source msa` prints SKIP.
 - **No clipboard.** Slint 1.17 exposes no clipboard call here. Text a user may want to copy sits
@@ -233,6 +241,29 @@ The dry-run downloaded `java-runtime-gamma` rather than using this machine's Ope
 is the behaviour Task 4 fixed: 1.20.1 asks for Java 17, and a higher local JVM is no longer
 accepted. The screenshot run needs `xvfb-run`: under Wayland the window gets no frame callback,
 so the `AfterRendering` notifier never fires.
+
+### Plan 9 status (2026-09-07)
+
+The mod details plan closed on 2026-09-07 on the same machine. What it added:
+
+- A project details screen with a Description tab and a Versions tab (R7.1, R13.1). The
+  description is the source's own markup converted to display blocks; the Versions tab marks the
+  installed version and installs another one over it.
+- `ContentEntry.title` (R2.5), set on install and backfilled by `content update` (R7.7). The
+  instance's content list shows the title over the file name, sorted by title.
+- Project icons on browser search rows, cached under `cache/icons` by URL.
+- A fifth GUI flow binary, `flow_project` (R13.5), and a browse leg in `just ui-xtest` that
+  opens a details page with real X input.
+
+| Command | Result | Key line |
+|---|---|---|
+| `just check` | PASS | `Summary [4.177s] 907 tests run: 907 passed, 0 skipped` |
+| `just deny` | PASS | `advisories ok, bans ok, licenses ok, sources ok` |
+| `just lint-claude` | PASS | `PASS: claude files have frontmatter` |
+| `just ui-xtest` | PASS | `ok: job "Search"`, `ok: job "Project details"` |
+| `just e2e` (Fabric, MC 1.20.1) | PASS | `PASS dry-run launch`, `PASS check classpath files exist, none twice (61 entries)` |
+| `just verify-api modrinth` | PASS | `PASS project sodium (AANobbMI)`, `PASS versions sodium 1.20.1 fabric (13)` |
+| `just verify-api curseforge` | SKIP | no `CURSEFORGE_API_KEY`; the description envelope stays unverified |
 
 ### Verification record
 

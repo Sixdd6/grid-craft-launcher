@@ -76,6 +76,12 @@ came from — an instance override, the file the game wrote, the launcher presee
 own default — and a row this screen's layer holds offers Reset. A key the launcher does not know
 keeps a raw row and is never dropped.
 
+A search result's title opens a details page for that mod, pack, or shader: the project's
+description as text, and a Versions tab listing the versions your instance can run. The tab marks
+the version you have installed and installs any other one over it. An installed item's source
+button opens the same page, and Back returns to where you came from. Installed items show the
+project's title with the file name under it, sorted by title.
+
 The instance detail screen has a Stop button. It asks the game to exit, waits ten seconds, then
 kills it; a stop you asked for is reported as "Stopped", not as a crash.
 
@@ -86,7 +92,8 @@ instead of the accessible actions the flow tests use. It needs Xvfb, `xdpyinfo`,
 `import`, the `python3-xlib` package, and network access. It checks that a dialog closed with
 Escape does not eat the next click, that a number-key shortcut still works after a screen
 change, and that an instance created from the CLI shows up in the GUI's instance list without a
-Refresh.
+Refresh. It also searches Modrinth in the browser and opens a result's details page from its
+title.
 
 ## Try it
 
