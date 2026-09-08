@@ -57,6 +57,8 @@ fn the_details_screen_installs_a_chosen_version() {
         a_row_title_opens_the_description(app).await;
         back_keeps_the_search_results_and_reopens_the_same_row(app).await;
         the_versions_tab_installs_the_older_version(app).await;
+        the_notes_button_shows_the_changelog(app).await;
+        a_changelog_the_source_refuses_shows_the_error(app).await;
         the_content_list_shows_the_title_over_the_file_name(app).await;
         checking_updates_backfills_the_title_and_keeps_the_mark(app).await;
         the_source_button_reopens_the_details(app).await;
@@ -105,6 +107,25 @@ fn blocks(window: &AppWindow) -> Vec<(String, String)> {
         .iter()
         .map(|block| (block.kind.to_string(), block.text.to_string()))
         .collect()
+}
+
+/// The notes modal's blocks, as `(kind, text)`.
+fn notes_blocks(window: &AppWindow) -> Vec<(String, String)> {
+    window
+        .global::<ProjectState>()
+        .get_notes_blocks()
+        .iter()
+        .map(|block| (block.kind.to_string(), block.text.to_string()))
+        .collect()
+}
+
+/// The first description block of `kind`, `None` when the description has none.
+fn block_of_kind(window: &AppWindow, kind: &str) -> Option<gcl_ui::Block> {
+    window
+        .global::<ProjectState>()
+        .get_blocks()
+        .iter()
+        .find(|block| block.kind == kind)
 }
 
 /// The version rows the details screen is showing, as `(number, installed)`.
@@ -277,7 +298,58 @@ async fn a_row_title_opens_the_description(app: &TestApp) {
     );
     assert!(
         blocks.iter().all(|(_, text)| !text.contains('<')),
-        "and no markup at all, so the body's `<img>` reaches no block: {blocks:?}"
+        "and no markup at all: {blocks:?}"
+    );
+    assert!(
+        blocks
+            .iter()
+            .any(|(kind, text)| kind == "quote" && text == support::MOD_BODY_QUOTE),
+        "the body's quote reaches a quote block of its own: {blocks:?}"
+    );
+
+    let nested = app
+        .window
+        .global::<ProjectState>()
+        .get_blocks()
+        .iter()
+        .find(|block| block.text == support::MOD_BODY_NESTED_BULLET)
+        .expect("the description carries the nested bullet");
+    assert_eq!(
+        (nested.kind.to_string(), nested.depth),
+        ("bullet".to_string(), 1),
+        "a bullet one level in keeps its depth, so the screen can indent it"
+    );
+
+    let table = block_of_kind(&app.window, "table").expect("the description carries a table");
+    assert_eq!(table.columns, 2, "the pipe table has two columns");
+    assert_eq!(
+        table.cells.iter().next().map(|cell| cell.to_string()),
+        Some(support::MOD_BODY_TABLE_HEADER.to_string()),
+        "cell 0 is the header row's first cell, row-major from there"
+    );
+    assert_eq!(
+        table.cells.iter().count(),
+        4,
+        "one header row and one body row, two cells each"
+    );
+
+    // The image is fetched and decoded off the UI thread after the blocks land, so this is
+    // the one description assertion that has to wait.
+    app.wait_until(
+        "the description image to be fetched and decoded",
+        |window| block_of_kind(window, "image").is_some_and(|block| block.image_state == "ready"),
+        QUICK,
+    )
+    .await;
+    let image = block_of_kind(&app.window, "image").expect("the description carries an image");
+    assert_eq!(
+        image.text.to_string(),
+        support::MOD_BODY_IMAGE_ALT,
+        "the block keeps the alt text, which is what a failed load would show instead"
+    );
+    assert!(
+        image.image.size().width > 0 && image.image.size().height > 0,
+        "and carries the decoded pixels the mock served, not an empty image"
     );
 }
 
@@ -334,6 +406,107 @@ async fn the_versions_tab_installs_the_older_version(app: &TestApp) {
         mods_dir(app).join(support::OLD_MOD_FILE_NAME).is_file(),
         "the older version's jar is in the instance's mods folder"
     );
+}
+
+/// (c2) A version row's Notes button opens the modal on that version's changelog, and Escape
+/// closes it again.
+async fn the_notes_button_shows_the_changelog(app: &TestApp) {
+    let index = version_index(&app.window, support::MOD_VERSION);
+    app.click_nth("ProjectScreen::version_notes_button", index);
+    app.wait_until(
+        "the notes modal to open and load the changelog",
+        |window| {
+            let state = window.global::<ProjectState>();
+            state.get_notes_open() && !state.get_notes_loading()
+        },
+        QUICK,
+    )
+    .await;
+
+    assert!(
+        app.has("Dialog::cancel_button"),
+        "the modal is mounted, with a Close button to press"
+    );
+    assert!(
+        app.has_label(&format!("{} notes", support::MOD_VERSION)),
+        "and its title names the version the button belongs to. Showing: {:?}",
+        app.ids()
+    );
+
+    let blocks = notes_blocks(&app.window);
+    assert!(
+        blocks
+            .iter()
+            .any(|(kind, text)| kind.starts_with("heading")
+                && text == support::MOD_CHANGELOG_HEADING),
+        "the modal shows the changelog's heading: {blocks:?}"
+    );
+    assert!(
+        blocks
+            .iter()
+            .any(|(kind, text)| kind == "bullet" && text == support::MOD_CHANGELOG_BULLET),
+        "and its bullet: {blocks:?}"
+    );
+
+    app.press_key(slint::platform::Key::Escape);
+    app.wait_until(
+        "Escape to close the notes modal",
+        |window| !window.global::<ProjectState>().get_notes_open(),
+        QUICK,
+    )
+    .await;
+    assert!(
+        !app.has("Dialog::cancel_button"),
+        "and the modal is unmounted, not merely hidden"
+    );
+}
+
+/// Which of the closing buttons on screen belongs to the error dialog, which prints
+/// "Dismiss" where every other dialog prints "Close".
+fn dismiss_index(app: &TestApp) -> usize {
+    app.all("Dialog::cancel_button")
+        .iter()
+        .position(|button| button.accessible_label().as_deref() == Some("Dismiss"))
+        .expect("the error dialog is one of the dialogs on screen")
+}
+
+/// (c3) A changelog the source refuses reports the failure and leaves both the error and the
+/// modal closable.
+async fn a_changelog_the_source_refuses_shows_the_error(app: &TestApp) {
+    let index = version_index(&app.window, support::OLD_MOD_VERSION);
+    app.click_nth("ProjectScreen::version_notes_button", index);
+    app.wait_until(
+        "the failed changelog to raise the error dialog",
+        |window| {
+            window.global::<App>().get_error_open()
+                && !window.global::<ProjectState>().get_notes_loading()
+        },
+        QUICK,
+    )
+    .await;
+    assert!(
+        notes_blocks(&app.window).is_empty(),
+        "a failed fetch leaves the modal with no blocks rather than the last version's"
+    );
+
+    // Two dialogs are up at once, so each closing button is picked by the word it prints.
+    // The error dialog must be the one on top: its Dismiss button is only reachable by a
+    // pointer if the notes modal's overlay does not cover it.
+    app.click_nth("Dialog::cancel_button", dismiss_index(app));
+    app.wait_until(
+        "the error dialog to close",
+        |window| !window.global::<App>().get_error_open(),
+        QUICK,
+    )
+    .await;
+
+    app.click("Dialog::cancel_button");
+    app.wait_until(
+        "the notes modal to close behind it",
+        |window| !window.global::<ProjectState>().get_notes_open(),
+        QUICK,
+    )
+    .await;
 }
 
 /// (d) The content list shows the project's title over the file it installed.

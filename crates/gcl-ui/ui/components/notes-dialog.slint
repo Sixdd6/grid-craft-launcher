@@ -32,12 +32,14 @@ export component NotesDialog inherits Rectangle {
             root.close();
         }
 
-        // A fixed height, the same shape the error dialog's `TextEdit` uses, so a long
-        // changelog scrolls inside the panel instead of growing it past the screen.
+        // As tall as the notes need, up to sixteen rows: a long changelog scrolls inside the
+        // panel instead of growing it past the screen, and a two-line one does not leave the
+        // Close button stranded at the bottom of the window, where it lands outside the
+        // screen's own scroll viewport and no pointer can reach it.
         ScrollView {
-            height: 16 * Theme.row-height;
+            height: min(body.preferred-height, 16 * Theme.row-height);
 
-            VerticalLayout {
+            body := VerticalLayout {
                 padding: Theme.pad;
                 spacing: Theme.gap;
                 alignment: start;

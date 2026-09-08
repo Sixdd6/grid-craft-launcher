@@ -507,6 +507,23 @@ export component AppWindow inherits Window {
         }
     }
 
+    // A version's changelog, opened from its Notes button on the project details screen's
+    // Versions tab. Mounted only while open, per the `slint-ui` skill's dialog rule, and
+    // before the error dialog: a dialog mounted later draws over the one before it, and a
+    // failed changelog raises the error dialog while this modal is still up. Mounted the
+    // other way round, this modal's own overlay swallowed the click on Dismiss.
+    if ProjectState.notes_open: NotesDialog {
+        width: root.width;
+        height: root.height;
+        open: ProjectState.notes_open;
+        title: "" + ProjectState.notes_title + " notes";
+        blocks: ProjectState.notes_blocks;
+        loading: ProjectState.notes_loading;
+        close => {
+            ProjectState.close_notes();
+        }
+    }
+
     // Error dialog. Rust sets the three error properties; dismiss_error clears them.
     if App.error_open: error_dialog := Dialog {
         width: root.width;
@@ -526,20 +543,6 @@ export component AppWindow inherits Window {
             text: App.error_text;
             read-only: true;
             wrap: word-wrap;
-        }
-    }
-
-    // A version's changelog, opened from its Notes button on the project details screen's
-    // Versions tab. Mounted only while open, per the `slint-ui` skill's dialog rule.
-    if ProjectState.notes_open: NotesDialog {
-        width: root.width;
-        height: root.height;
-        open: ProjectState.notes_open;
-        title: "" + ProjectState.notes_title + " notes";
-        blocks: ProjectState.notes_blocks;
-        loading: ProjectState.notes_loading;
-        close => {
-            ProjectState.close_notes();
         }
     }
 }

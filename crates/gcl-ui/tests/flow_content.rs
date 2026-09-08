@@ -217,6 +217,7 @@ async fn searching_and_adding_a_mod_installs_its_file(app: &TestApp) {
         Some(format!("Add to {INSTANCE}").into()),
         "the row's button names the instance it adds to"
     );
+    a_long_title_wraps_and_a_description_loses_its_line_breaks(app);
 
     app.click_nth("BrowserScreen::row_install", 0);
     app.wait_until(
@@ -228,6 +229,42 @@ async fn searching_and_adding_a_mod_installs_its_file(app: &TestApp) {
     assert!(
         mod_file(app, false).is_file(),
         "the mod's file is in the instance's mods folder"
+    );
+}
+
+/// (a2) A row shows the whole of a long title and folds a description's line breaks away.
+///
+/// The mock gives the second hit a 90-character title and a description written over three
+/// lines. A row that elided the title, or capped its width, would show something shorter than
+/// the title itself; a description that kept its `\n` would print blank lines inside the row.
+fn a_long_title_wraps_and_a_description_loses_its_line_breaks(app: &TestApp) {
+    let title = app.el_nth("BrowserScreen::row_title", 1);
+    assert_eq!(
+        title.accessible_label().map(|label| label.to_string()),
+        Some(support::LONG_TITLE.to_string()),
+        "the row carries the whole title, not a shortened one"
+    );
+    assert!(
+        app.el_nth("BrowserScreen::row_open", 1).size().height
+            > app.el_nth("BrowserScreen::row_open", 0).size().height,
+        "and is taller than the row above it, so the wrapped line is not clipped away"
+    );
+
+    let description = app
+        .window
+        .global::<BrowserState>()
+        .get_rows()
+        .iter()
+        .nth(1)
+        .map(|row| row.description.to_string())
+        .expect("the search found the second hit");
+    assert!(
+        !description.contains('\n') && !description.contains('\r'),
+        "the description reaches the row as one line the row wraps itself: {description:?}"
+    );
+    assert_eq!(
+        description, "A Sodium addon. It adds options and more options.",
+        "every line break became one space, and no text was lost"
     );
 }
 

@@ -233,7 +233,11 @@ impl TestApp {
             // A project icon may only be fetched from a source's own CDN, and the mock
             // server is not one of those either. Without this the search rows' icons would
             // be fetched from the real `cdn.modrinth.com` the fixture names.
-            .with_icon_hosts(vec!["127.0.0.1".to_string(), "localhost".to_string()]);
+            .with_icon_hosts(vec!["127.0.0.1".to_string(), "localhost".to_string()])
+            // A description image may come from any host, but only over https, and the mock
+            // server speaks plain HTTP. This lifts the scheme rule for it alone; there is no
+            // host allowlist to extend.
+            .with_image_hosts(vec!["127.0.0.1".to_string(), "localhost".to_string()]);
 
         let java = write_fake_java(dir.path());
         launcher
@@ -367,6 +371,16 @@ impl TestApp {
     /// Whether an element with this id is showing.
     pub fn has(&self, id: &str) -> bool {
         !self.all(id).is_empty()
+    }
+
+    /// Whether the window is showing an element with this accessible label.
+    ///
+    /// A `Text` carries its own text as its label, so this reads a line the user sees whose
+    /// element has no id of its own to look up — a dialog's title, for one.
+    pub fn has_label(&self, label: &str) -> bool {
+        ElementHandle::find_by_accessible_label(&self.window, label)
+            .next()
+            .is_some()
     }
 
     /// The ids of every element the window is showing, sorted and deduplicated.
@@ -905,6 +919,24 @@ async fn mock_modrinth(server: &MockServer, project: bool) {
     serve(server, MOD_FILE_PATH, MOD_JAR.to_vec()).await;
     serve(server, OLD_MOD_FILE_PATH, OLD_MOD_JAR.to_vec()).await;
     serve(server, ICON_PATH, ICON_PNG.to_vec()).await;
+    serve(server, DESC_IMAGE_PATH, ICON_PNG.to_vec()).await;
+
+    if project {
+        // A version's changelog comes from the single-version endpoint, which the version
+        // list's `include_changelog=false` does not filter. The newest version answers with
+        // notes; the older one answers 500, so the flow can drive the failure path too.
+        serve(
+            server,
+            &format!("/version/{MOD_VERSION_ID}"),
+            mod_version_with_changelog(&base).into_bytes(),
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path_matcher(format!("/version/{OLD_MOD_VERSION_ID}")))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .mount(server)
+            .await;
+    }
 
     let pack = mrpack_bytes(&base, PACK_NAME);
     serve(
@@ -953,6 +985,28 @@ pub const MOD_VERSION: &str = "mc1.20.1-0.5.13-fabric";
 /// Version number of the older one.
 pub const OLD_MOD_VERSION: &str = "mc1.20.1-0.5.12-beta.2-fabric";
 
+/// Version id of the newest version, which is the one whose changelog the mock serves.
+///
+/// [`mod_versions`] checks the recorded list still names it, so a re-recorded fixture fails
+/// here rather than leaving the changelog mock silently unmatched.
+pub const MOD_VERSION_ID: &str = "OihdIimA";
+
+/// Version id of the older one, whose changelog request the mock answers 500.
+pub const OLD_MOD_VERSION_ID: &str = "ryOMVRuG";
+
+/// The changelog the mock serves for [`MOD_VERSION_ID`], as Modrinth markdown.
+const MOD_CHANGELOG: &str = "\
+## What's new
+
+- Faster chunk loading
+";
+
+/// The heading the notes modal must show for that changelog.
+pub const MOD_CHANGELOG_HEADING: &str = "What's new";
+
+/// The bullet under it.
+pub const MOD_CHANGELOG_BULLET: &str = "Faster chunk loading";
+
 /// Path the mock serves the project icon at.
 const ICON_PATH: &str = "/icons/sodium.png";
 
@@ -965,28 +1019,60 @@ const ICON_PNG: &[u8] = &[
     0xfd, 0x5d, 0xa3, 0xca, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
 ];
 
+/// Path the mock serves the one image the description names at.
+///
+/// A description image is fetched from any host, unlike an icon, so this points at the mock
+/// server rather than a CDN: a body left as recorded would fetch a real banner over the real
+/// internet.
+const DESC_IMAGE_PATH: &str = "/images/banner.png";
+
 /// The description the mock serves for that project.
 ///
-/// It carries every shape the description tab has to answer for: a heading, a paragraph, a
-/// bullet list, and an `<img>` tag that must not reach a block.
-const MOD_BODY: &str = "\
-# Sodium
+/// It carries every shape the description tab has to answer for: a heading, a paragraph, an
+/// image, a quote, a rule, a pipe table, and a bullet list with one nested level.
+fn mod_body(base: &str) -> String {
+    format!(
+        "\
+# {MOD_BODY_HEADING}
 
 A rendering engine that improves frame rates.
 
-<img src=\"https://cdn.modrinth.com/data/AANobbMI/banner.png\" alt=\"banner\">
+![{MOD_BODY_IMAGE_ALT}]({base}{DESC_IMAGE_PATH})
+
+> {MOD_BODY_QUOTE}
+
+---
+
+| {MOD_BODY_TABLE_HEADER} | Default |
+|---|---|
+| Chunk updates | 1 |
 
 ## Features
 
-- Significantly improved frame rates
+- {MOD_BODY_BULLET}
+  - {MOD_BODY_NESTED_BULLET}
 - Much better frame pacing
-";
+"
+    )
+}
 
 /// The heading text the description tab must show first.
 pub const MOD_BODY_HEADING: &str = "Sodium";
 
 /// The first bullet the description tab must show.
 pub const MOD_BODY_BULLET: &str = "Significantly improved frame rates";
+
+/// The bullet one level in under it, which must reach the screen as `depth: 1`.
+pub const MOD_BODY_NESTED_BULLET: &str = "Faster chunk loading";
+
+/// The quote the description carries, which must reach a `quote` block of its own.
+pub const MOD_BODY_QUOTE: &str = "Sodium does not change the game's visuals.";
+
+/// The first cell of the description table's header row.
+pub const MOD_BODY_TABLE_HEADER: &str = "Setting";
+
+/// The alt text of the description's one image, which is what a failed load would show.
+pub const MOD_BODY_IMAGE_ALT: &str = "banner";
 
 /// Path the mock serves those bytes at.
 const MOD_FILE_PATH: &str = "/files/sodium.jar";
@@ -1046,10 +1132,32 @@ fn mod_versions(base: &str, both: bool) -> String {
         "the recorded version list is shorter than the flows need"
     );
     list[0]["files"] = one_file(base, MOD_FILE_PATH, MOD_FILE_NAME, MOD_JAR);
+    assert_eq!(
+        list[0]["id"], MOD_VERSION_ID,
+        "the changelog mock is mounted under this id"
+    );
     if both {
         list[1]["files"] = one_file(base, OLD_MOD_FILE_PATH, OLD_MOD_FILE_NAME, OLD_MOD_JAR);
+        assert_eq!(
+            list[1]["id"], OLD_MOD_VERSION_ID,
+            "the failing changelog mock is mounted under this id"
+        );
     }
     versions.to_string()
+}
+
+/// The newest recorded version on its own, as the single-version endpoint answers it, with a
+/// changelog the version list itself never carries.
+fn mod_version_with_changelog(base: &str) -> String {
+    let mut versions: serde_json::Value =
+        serde_json::from_str(MODRINTH_VERSIONS).expect("read the recorded version list");
+    let list = versions
+        .as_array_mut()
+        .expect("the recorded version list is an array");
+    let mut version = list[0].take();
+    version["files"] = one_file(base, MOD_FILE_PATH, MOD_FILE_NAME, MOD_JAR);
+    version["changelog"] = serde_json::json!(MOD_CHANGELOG);
+    version.to_string()
 }
 
 /// One primary file, served by the mock host at `path`, with the sha1 of the bytes it serves.
@@ -1077,16 +1185,29 @@ fn mod_search(base: &str) -> String {
     for hit in hits.iter_mut() {
         hit["icon_url"] = serde_json::json!(format!("{base}{ICON_PATH}"));
     }
+    // The second hit carries a title no row can fit on one line and a description written
+    // over three lines, so a browser flow can prove the row wraps the whole title and folds
+    // the line breaks away. The first hit is left as recorded: every other flow opens it.
+    hits[1]["title"] = serde_json::json!(LONG_TITLE);
+    hits[1]["description"] = serde_json::json!(MULTILINE_DESCRIPTION);
     found.to_string()
 }
 
+/// A 90-character title, longer than any row is wide.
+pub const LONG_TITLE: &str =
+    "Sodium Extra with a title long enough to wrap over more than one line in any browser row!!";
+
+/// A description broken over three lines, with both line endings in it.
+pub const MULTILINE_DESCRIPTION: &str = "A Sodium addon.\nIt adds options\r\nand more options.";
+
 /// The recorded project, with its icon pointed at the mock host and a description written
-/// for the flow: a heading, a paragraph, an `<img>` no block may carry, and a bullet list.
+/// for the flow: a heading, a paragraph, an image the mock serves, a quote, a rule, a table,
+/// and a bullet list one level deep.
 fn mod_project(base: &str) -> String {
     let mut project: serde_json::Value =
         serde_json::from_str(MODRINTH_PROJECT).expect("read the recorded project");
     project["icon_url"] = serde_json::json!(format!("{base}{ICON_PATH}"));
-    project["body"] = serde_json::json!(MOD_BODY);
+    project["body"] = serde_json::json!(mod_body(base));
     project.to_string()
 }
 
