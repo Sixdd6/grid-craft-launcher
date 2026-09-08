@@ -258,12 +258,44 @@ pub fn pick_version(
             .cloned();
     }
 
-    usable.sort_by(|a, b| {
+    sort_newest_first(&mut usable);
+    usable.first().map(|v| (*v).clone())
+}
+
+/// Chooses the newest version in `versions`, with an optional Minecraft filter.
+///
+/// This is [`pick_version`]'s rule without an install target: `minecraft` filters game
+/// versions only when it is `Some`, and the loader filter is skipped entirely when
+/// `loader` is [`Loader::None`], so a browser row can still name a mod's newest file for
+/// a loader-less instance. Otherwise the same [`loader_matches`] rule applies and the
+/// same sort picks the winner: release channel first, publish time second.
+pub fn pick_latest(
+    versions: &[Version],
+    kind: ContentKind,
+    minecraft: Option<&str>,
+    loader: Loader,
+) -> Option<Version> {
+    let compatible = compatible_loaders(loader, minecraft.unwrap_or_default());
+    let mut usable: Vec<&Version> = versions
+        .iter()
+        .filter(|v| match minecraft {
+            Some(mc) => v.game_versions.iter().any(|g| g == mc),
+            None => true,
+        })
+        .filter(|v| loader == Loader::None || loader_matches(v, kind, &compatible))
+        .collect();
+
+    sort_newest_first(&mut usable);
+    usable.first().map(|v| (*v).clone())
+}
+
+/// Sorts candidates newest first: release channel first, publish time second.
+fn sort_newest_first(versions: &mut [&Version]) {
+    versions.sort_by(|a, b| {
         b.kind
             .cmp(&a.kind)
             .then_with(|| b.published.cmp(&a.published))
     });
-    usable.first().map(|v| (*v).clone())
 }
 
 /// Whether `version` can run under the loaders in `compatible`, for this content kind.
@@ -474,7 +506,7 @@ pub async fn add(
 /// already on disk, whatever the entry calls itself — and a [`FILE_SOURCE`] entry with
 /// the picked file's name, which placing the new file would silently overwrite while
 /// leaving both entries in `instance.toml`.
-fn entry_holding_file<'a>(
+pub(crate) fn entry_holding_file<'a>(
     instance: &'a Instance,
     file: &crate::sources::VersionFile,
 ) -> Option<&'a ContentEntry> {

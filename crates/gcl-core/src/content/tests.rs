@@ -402,6 +402,99 @@ fn pick_version_accepts_datapacks_with_or_without_a_datapack_loader() {
 }
 
 // ---------------------------------------------------------------------------
+// pick_latest
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pick_latest_without_a_minecraft_filter_takes_any_game_version() {
+    let mut old = version("p", "v1", "1.0");
+    old.game_versions = vec!["1.20.1".to_string()];
+    old.published = "2026-01-01T00:00:00Z".to_string();
+    let mut newer = version("p", "v2", "2.0");
+    newer.game_versions = vec!["1.21.4".to_string()];
+    newer.published = "2026-05-01T00:00:00Z".to_string();
+
+    let picked =
+        pick_latest(&[old, newer], ContentKind::Mod, None, Loader::Fabric).expect("a version");
+    assert_eq!(picked.id, "v2");
+}
+
+#[test]
+fn pick_latest_with_a_minecraft_filter_excludes_other_game_versions() {
+    let mut older = version("p", "v1", "1.0");
+    older.game_versions = vec!["1.20.1".to_string()];
+    older.published = "2026-01-01T00:00:00Z".to_string();
+    let mut newer = version("p", "v2", "2.0");
+    newer.game_versions = vec!["1.21.4".to_string()];
+    newer.published = "2026-05-01T00:00:00Z".to_string();
+
+    let picked = pick_latest(
+        &[older, newer],
+        ContentKind::Mod,
+        Some("1.20.1"),
+        Loader::Fabric,
+    )
+    .expect("a version");
+    assert_eq!(picked.id, "v1");
+}
+
+#[test]
+fn pick_latest_with_loader_none_skips_the_loader_filter_for_mods() {
+    let mut forge_only = version("p", "v1", "1.0");
+    forge_only.loaders = vec!["forge".to_string()];
+
+    assert!(
+        pick_version(
+            std::slice::from_ref(&forge_only),
+            ContentKind::Mod,
+            "1.20.1",
+            Loader::None,
+            None
+        )
+        .is_none(),
+        "pick_version still refuses a mod on a loader-less instance"
+    );
+    let picked = pick_latest(
+        &[forge_only],
+        ContentKind::Mod,
+        Some("1.20.1"),
+        Loader::None,
+    )
+    .expect("a version");
+    assert_eq!(picked.id, "v1");
+}
+
+#[test]
+fn pick_latest_prefers_a_release_over_a_newer_beta() {
+    let mut release = version("p", "v1", "1.0");
+    release.published = "2026-01-01T00:00:00Z".to_string();
+    let mut beta = version("p", "v2", "2.0-beta");
+    beta.kind = ReleaseKind::Beta;
+    beta.published = "2026-09-01T00:00:00Z".to_string();
+
+    let picked =
+        pick_latest(&[release, beta], ContentKind::Mod, None, Loader::Fabric).expect("a version");
+    assert_eq!(picked.id, "v1");
+}
+
+#[test]
+fn pick_latest_breaks_a_release_channel_tie_by_publish_date() {
+    let mut old = version("p", "v1", "1.0");
+    old.published = "2026-01-01T00:00:00Z".to_string();
+    let mut newer = version("p", "v2", "2.0");
+    newer.published = "2026-05-01T00:00:00Z".to_string();
+
+    let picked =
+        pick_latest(&[old, newer], ContentKind::Mod, None, Loader::Fabric).expect("a version");
+    assert_eq!(picked.id, "v2");
+}
+
+#[test]
+fn pick_latest_on_an_empty_list_is_none() {
+    assert!(pick_latest(&[], ContentKind::Mod, None, Loader::Fabric).is_none());
+}
+
+// ---------------------------------------------------------------------------
 // add
 // ---------------------------------------------------------------------------
 
