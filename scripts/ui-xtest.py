@@ -10,6 +10,8 @@ Every step is one argument, applied in order:
     type:TEXT          type the text, one key at a time; a character the layout only
                        reaches with Shift (uppercase letters, `_`, `:`) is typed with it
     key:NAME           press one key by keysym name, e.g. `Escape` or `Return`
+    wheel:X,Y,N        move the pointer there and turn the wheel N notches: down when N
+                       is positive (button 5), up when negative (button 4), 50 ms apart
     sleep:SECONDS      wait
     shot:PATH          save a PNG of the root window
 
@@ -54,6 +56,19 @@ def click(x, y, hold=0.05):
     time.sleep(hold)
     xtest.fake_input(d, X.ButtonRelease, 1)
     d.sync()
+    time.sleep(0.4)
+
+
+def wheel(x, y, notches):
+    xtest.fake_input(d, X.MotionNotify, x=x, y=y)
+    d.sync()
+    time.sleep(0.15)
+    button = 5 if notches > 0 else 4
+    for _ in range(abs(notches)):
+        xtest.fake_input(d, X.ButtonPress, button)
+        xtest.fake_input(d, X.ButtonRelease, button)
+        d.sync()
+        time.sleep(0.05)
     time.sleep(0.4)
 
 
@@ -177,6 +192,8 @@ def main(steps):
             focus(arg or "grid-craft-launcher")
         elif kind == "drag":
             drag(*map(int, arg.split(",")))
+        elif kind == "wheel":
+            wheel(*map(int, arg.split(",")))
         elif kind == "sleep":
             time.sleep(float(arg))
         elif kind == "shot":

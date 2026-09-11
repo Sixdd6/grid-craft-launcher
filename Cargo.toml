@@ -52,6 +52,17 @@ bytes = "1"
 futures-util = "0.3"
 nix = { version = "0.31", features = ["signal"] }
 
+# A debug build (F5, `just run-ui`) keeps our crates unoptimized for the debugger but builds
+# every dependency with optimizations: the Slint runtime and FemtoVG do the rendering, and
+# unoptimized they render the content list at a few frames per second.
+[profile.dev.package."*"]
+opt-level = 3
+
+# The generated Slint code (property evaluation, layout) is compiled as part of gcl-ui, so a
+# little optimization there raises the frame rate again. Breakpoints and variables still work.
+[profile.dev.package.gcl-ui]
+opt-level = 1
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

@@ -40,6 +40,11 @@ just run-cli debug verify-source modrinth
 just run-ui
 ```
 
+A debug build compiles every dependency with optimizations (`[profile.dev.package."*"]` in
+`Cargo.toml`) and gcl-ui at opt-level 1, because the Slint runtime and the generated UI code
+do the rendering: unoptimized, a long content list scrolled at a few frames per second. Our
+crates stay debuggable; the first build after a clean takes longer.
+
 In VS Code with the CodeLLDB extension, F5 builds and starts the GUI under the debugger
 (`.vscode/launch.json`); Ctrl+Shift+B runs `just run-ui` as a task (`.vscode/tasks.json`).
 
