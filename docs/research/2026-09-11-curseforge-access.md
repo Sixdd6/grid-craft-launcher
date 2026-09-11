@@ -9,7 +9,8 @@ VERIFY lack a live check.
 
 Form: https://support.curseforge.com/support/solutions/articles/9000208346-about-the-curseforge-api-and-how-to-apply-for-a-key
 It asks for contact details, a project description, links, and expected usage, and requires
-accepting the third-party API terms
+accepting the third-party API terms. A website is not listed as a required field; the public
+GitHub repository serves as the project link (form fields unread here, VERIFY)
 (https://support.curseforge.com/support/solutions/articles/9000207405-curse-forge-3rd-party-api-terms-and-conditions).
 Overwolf answers by email in about 48 to 72 hours.
 
@@ -22,8 +23,16 @@ the application notes. VERIFY.
 
 ### B. The user pastes a personal key
 
-Already supported through `CURSEFORGE_API_KEY` and the Settings screen. No waiting. The user
-carries the terms.
+Already supported through `CURSEFORGE_API_KEY` and the Settings screen. No waiting.
+
+The terms neither allow nor forbid this. A key is licensed "non-exclusive, non-transferable"
+and "may not be shared with any third party". A user who applied for a key and runs the
+launcher on their own machine shares it with no one, so the model fits the letter of the terms.
+Overwolf has no personal-key program; the application text names mod managers, bots and
+modpack tools as its audience, and a 2023 request for personal keys got "we will look into it"
+and nothing since (https://curseforge-ideas.overwolf.com/ideas/CF-I-2523). The launcher never
+logs or transmits the key beyond the API header. Risk: Overwolf may decline the application or
+revoke the key. Nothing beyond that.
 
 ### C. Public website endpoints and CDN patterns without a key
 
