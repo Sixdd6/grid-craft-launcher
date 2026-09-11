@@ -216,6 +216,53 @@ fn config_set_root_is_saved() {
     );
 }
 
+/// A second `set-root` must land in the pointer config the next start reads.
+///
+/// Linux only: it redirects the platform data directory with `XDG_DATA_HOME`, which is how
+/// `directories` resolves the un-redirected root there. No `GCL_ROOT` is set, because that
+/// env var turns the redirect off.
+#[cfg(target_os = "linux")]
+#[test]
+fn config_set_root_twice_keeps_the_second_root() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let first = tempfile::tempdir().expect("tempdir");
+    let second = tempfile::tempdir().expect("tempdir");
+    let third = tempfile::tempdir().expect("tempdir");
+    let data = home.path().join("data");
+    std::fs::create_dir_all(&data).expect("mkdir");
+
+    let run = |path: &Path| {
+        let mut cmd = Command::cargo_bin("gcl").expect("gcl binary builds");
+        cmd.env_remove("GCL_ROOT")
+            .env("HOME", home.path())
+            .env("XDG_DATA_HOME", &data)
+            .args(["--json", "config", "set-root", &path.display().to_string()]);
+        let out = cmd.assert().success().get_output().stdout.clone();
+        serde_json::from_slice::<serde_json::Value>(&out).expect("stdout is json")
+    };
+
+    run(first.path());
+    let after_second = run(second.path());
+    assert_eq!(
+        after_second["previous_root"].as_str(),
+        Some(first.path().display().to_string().as_str()),
+        "the second run must already work from the first root"
+    );
+    let after_third = run(third.path());
+    assert_eq!(
+        after_third["previous_root"].as_str(),
+        Some(second.path().display().to_string().as_str()),
+        "the third run must work from the second root"
+    );
+
+    let pointer = std::fs::read_to_string(data.join("grid-craft-launcher").join("config.toml"))
+        .expect("pointer config written");
+    assert!(
+        pointer.contains(&third.path().display().to_string()),
+        "{pointer}"
+    );
+}
+
 #[test]
 fn java_list_exits_zero() {
     let dir = tempfile::tempdir().expect("tempdir");

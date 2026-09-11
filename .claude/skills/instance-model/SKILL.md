@@ -8,6 +8,17 @@ description: App root layout, instance.toml schema, installed content list, opti
 `GCL_ROOT` env → `config.toml` `root` override → platform data dir plus `grid-craft-launcher`
 (`directories::ProjectDirs::from("", "", "grid-craft-launcher").data_dir()`).
 
+**The `root` pointer is read and written at the un-redirected root.** `Launcher::open` reads
+`config.toml` at the resolved root (the platform data dir, unless `GCL_ROOT` or a caller
+override decided it), applies its `root` key, and then loads the redirected root's own
+`config.toml` when it has one. `Launcher` keeps the un-redirected path as `base_root`, and
+`update_config` saves the config at the current root and then writes the `root` key alone back
+into `base_root`'s `config.toml`. Without that write a second root change is lost: it would
+land only at the first redirected root, which the next start never reads. A launcher whose
+root was not redirected writes one file, since both paths are the same. `open` also rewrites
+the in-memory `config.root` to the root it actually runs at, so a stale pointer left in a
+target's own `config.toml` is never written back as the current choice.
+
 ```
 <root>/config.toml
 <root>/accounts.json

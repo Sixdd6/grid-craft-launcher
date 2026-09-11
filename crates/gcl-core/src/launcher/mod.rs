@@ -423,6 +423,14 @@ fn java_source_text(source: JavaSource) -> &'static str {
 pub struct Launcher {
     runtime: tokio::runtime::Runtime,
     root: Root,
+    /// The un-redirected root: the platform data directory, or whatever root was resolved
+    /// before `config.toml`'s own `root` pointed elsewhere.
+    ///
+    /// The pointer is read there at startup, so [`Launcher::update_config`] writes it back
+    /// there too. Writing it only at the redirected root would lose a second root change:
+    /// the next start reads the pointer at this path and never sees it. It equals
+    /// [`Launcher::root`] when nothing redirected the root.
+    base_root: Root,
     /// The loaded config. Read through [`Launcher::config`], changed through
     /// [`Launcher::update_config`], which is the only thing that writes it back to disk.
     config: RwLock<Config>,
@@ -512,10 +520,17 @@ impl Launcher {
 
         let mut config = Config::load(&resolved.config_file())?;
         let root = redirect_root(resolved.clone(), config.root.as_deref(), overridden);
-        if root != resolved && root.config_file().is_file() {
-            // The redirected root has its own config.toml. It is the one the user edits and
-            // the one `update_config` writes, so it wins over the config that pointed here.
-            config = Config::load(&root.config_file())?;
+        if root != resolved {
+            if root.config_file().is_file() {
+                // The redirected root has its own config.toml. It is the one the user edits
+                // and the one `update_config` writes, so it wins over the config that
+                // pointed here.
+                config = Config::load(&root.config_file())?;
+            }
+            // Whatever that file says about `root`, this launcher runs at `root`. A stale
+            // pointer left in the target's own config must not be written back to the
+            // un-redirected root as if it were the current choice.
+            config.root = Some(root.path().to_path_buf());
         }
 
         root.ensure_layout()?;
@@ -530,6 +545,7 @@ impl Launcher {
         let launcher = Launcher {
             runtime,
             root,
+            base_root: resolved,
             config: RwLock::new(config),
             http,
             sources: RwLock::new(None),
@@ -621,11 +637,33 @@ impl Launcher {
         let saved = {
             let mut config = self.config.write().unwrap_or_else(|err| err.into_inner());
             f(&mut config);
-            config.save(&self.root.config_file())
+            config
+                .save(&self.root.config_file())
+                .and_then(|()| self.save_root_pointer(config.root.as_deref()))
         };
         self.clear_sources();
         saved?;
         Ok(())
+    }
+
+    /// Writes the `root` pointer into the un-redirected root's `config.toml`.
+    ///
+    /// [`Launcher::open`] reads the pointer at [`Launcher::base_root`], so that is where a
+    /// changed root has to land: a launcher already running at a redirected root would
+    /// otherwise save the new path only at the redirected root, where the next start never
+    /// looks, and the change would be lost. Every other key in the pointer file is left as
+    /// it is. Nothing is written when no redirect is in play, because the config just saved
+    /// is that same file.
+    fn save_root_pointer(&self, root: Option<&Path>) -> Result<(), crate::config::Error> {
+        if self.base_root == self.root {
+            return Ok(());
+        }
+        let mut pointer = Config::load(&self.base_root.config_file())?;
+        if pointer.root.as_deref() == root {
+            return Ok(());
+        }
+        pointer.root = root.map(Path::to_path_buf);
+        pointer.save(&self.base_root.config_file())
     }
 
     /// The config's read guard, taking a poisoned lock's value rather than panicking.
@@ -3032,6 +3070,36 @@ mod tests {
                 .expect("second launcher");
         assert_eq!(again.root().path(), target.path());
         assert_eq!(again.config().jvm.max_mib, 8192);
+    }
+
+    #[test]
+    fn a_second_root_change_lands_where_the_next_start_reads_it() {
+        let base = tempfile::tempdir().expect("tempdir");
+        let first = tempfile::tempdir().expect("tempdir");
+        let second = tempfile::tempdir().expect("tempdir");
+
+        let (launcher, _rx) =
+            Launcher::open(Root::from_path(base.path()), false, Endpoints::default())
+                .expect("first launcher");
+        assert_eq!(launcher.root().path(), base.path());
+        launcher
+            .update_config(|config| config.root = Some(first.path().to_path_buf()))
+            .expect("save first root");
+
+        let (launcher, _rx) =
+            Launcher::open(Root::from_path(base.path()), false, Endpoints::default())
+                .expect("second launcher");
+        assert_eq!(launcher.root().path(), first.path());
+        launcher
+            .update_config(|config| config.root = Some(second.path().to_path_buf()))
+            .expect("save second root");
+
+        let (launcher, _rx) =
+            Launcher::open(Root::from_path(base.path()), false, Endpoints::default())
+                .expect("third launcher");
+        assert_eq!(launcher.root().path(), second.path());
+        let pointer = Config::load(&Root::from_path(base.path()).config_file()).expect("pointer");
+        assert_eq!(pointer.root.as_deref(), Some(second.path()));
     }
 
     #[test]
