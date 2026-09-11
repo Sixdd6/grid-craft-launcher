@@ -31,6 +31,7 @@ use crate::config::Config;
 use crate::content::{AddOutcome, AddRequest, ContentCtx, ManualDownload, UpdateCandidate};
 use crate::download::icons::IconCache;
 use crate::download::images::ImageCache;
+use crate::download::media::{Pruned, prune_dir};
 use crate::download::{DownloadCtx, cleanup_partials};
 use crate::events::{Event, EventSink};
 use crate::http::HttpClient;
@@ -563,6 +564,9 @@ impl Launcher {
             running: Arc::new(Mutex::new(HashMap::new())),
             version_cache: Mutex::new(HashMap::new()),
         };
+        // Off the hot path: the sweep reads a directory and deletes files, which must not
+        // hold up the first screen. The handle is dropped, so the task runs on its own.
+        let _prune = launcher.spawn_media_prune();
         Ok((launcher, receiver))
     }
 
@@ -2826,6 +2830,43 @@ impl Launcher {
         self
     }
 
+    /// Prunes the icon and image caches on the runtime, without waiting for the answer.
+    ///
+    /// [`Launcher::open`] calls this once per start and drops the handle: the sweep is
+    /// filesystem work that must not delay the first screen, so it runs on a blocking
+    /// thread and logs what it removed. A test awaits the handle instead.
+    pub fn spawn_media_prune(&self) -> tokio::task::JoinHandle<()> {
+        let icons = self.root.icons_dir();
+        let images = self.root.images_dir();
+        self.runtime.spawn_blocking(move || {
+            prune_and_log("icons", &icons, crate::download::icons::MAX_CACHE_BYTES);
+            prune_and_log("images", &images, crate::download::images::MAX_CACHE_BYTES);
+        })
+    }
+
+    /// Prunes both media caches to their shipped caps and returns what each one did. Blocks.
+    ///
+    /// The caps are [`crate::download::icons::MAX_CACHE_BYTES`] (64 MiB) and
+    /// [`crate::download::images::MAX_CACHE_BYTES`] (256 MiB). The answer is
+    /// `(icons, images)`.
+    pub fn prune_media_caches(&self) -> Result<(Pruned, Pruned), crate::Error> {
+        self.prune_media_caches_to(
+            crate::download::icons::MAX_CACHE_BYTES,
+            crate::download::images::MAX_CACHE_BYTES,
+        )
+    }
+
+    /// [`Launcher::prune_media_caches`] with the two caps named, for a test. Blocks.
+    pub fn prune_media_caches_to(
+        &self,
+        icon_max: u64,
+        image_max: u64,
+    ) -> Result<(Pruned, Pruned), crate::Error> {
+        let icons = self.icons.prune(&self.root, icon_max)?;
+        let images = self.images.prune(&self.root, image_max)?;
+        Ok((icons, images))
+    }
+
     /// Downloads a description image into `cache/images/` and returns its path. Blocks.
     ///
     /// The cache key is the URL: the file is `cache/images/<sha1(url)>.<ext>`, with
@@ -2840,6 +2881,29 @@ impl Launcher {
         let root = self.root.clone();
         let hosts = self.image_hosts.clone();
         Ok(self.block_on(async move { self.images.fetch(&http, &root, url, &hosts).await })?)
+    }
+}
+
+/// Prunes one media cache directory and logs what went, or why nothing could be read.
+fn prune_and_log(what: &str, dir: &Path, max_bytes: u64) {
+    match prune_dir(dir, max_bytes) {
+        Ok(pruned) if pruned.removed == 0 => tracing::debug!(
+            cache = what,
+            bytes = pruned.remaining_bytes,
+            max_bytes,
+            "media cache is under its cap"
+        ),
+        Ok(pruned) => tracing::info!(
+            cache = what,
+            removed = pruned.removed,
+            freed_bytes = pruned.freed_bytes,
+            bytes = pruned.remaining_bytes,
+            max_bytes,
+            "pruned the oldest files from a media cache"
+        ),
+        Err(source) => {
+            tracing::warn!(cache = what, %source, "could not prune a media cache");
+        }
     }
 }
 
@@ -3121,6 +3185,58 @@ mod tests {
         assert_eq!(launcher.root().path(), target.path());
         assert_eq!(launcher.config().parallel_downloads, 2);
         assert_eq!(launcher.config().root.as_deref(), Some(target.path()));
+    }
+
+    /// Writes a file of `bytes` bytes at `dir/name`, stamped `age_secs` in the past.
+    fn planted_cache_file(dir: &Path, name: &str, bytes: usize, age_secs: u64) -> PathBuf {
+        std::fs::create_dir_all(dir).expect("mkdir");
+        let path = dir.join(name);
+        let file = std::fs::File::create(&path).expect("create");
+        std::io::Write::write_all(&mut (&file), &vec![3u8; bytes]).expect("write");
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age_secs);
+        file.set_modified(when).expect("set mtime");
+        path
+    }
+
+    #[test]
+    fn pruning_the_media_caches_drops_the_oldest_files_of_each() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (launcher, _rx) =
+            Launcher::open_with_endpoints(dir.path().to_path_buf(), Endpoints::default())
+                .expect("build launcher");
+        let icons = launcher.root().icons_dir();
+        let images = launcher.root().images_dir();
+        let old_icon = planted_cache_file(&icons, "old.png", 400, 300);
+        let new_icon = planted_cache_file(&icons, "new.png", 400, 10);
+        let old_image = planted_cache_file(&images, "old.png", 400, 300);
+        let new_image = planted_cache_file(&images, "new.png", 400, 10);
+
+        let (icon_report, image_report) = launcher
+            .prune_media_caches_to(500, 500)
+            .expect("prune the media caches");
+
+        assert_eq!(icon_report.removed, 1);
+        assert_eq!(icon_report.remaining_bytes, 400);
+        assert_eq!(image_report.removed, 1);
+        assert!(!old_icon.exists());
+        assert!(new_icon.exists());
+        assert!(!old_image.exists());
+        assert!(new_image.exists());
+    }
+
+    #[test]
+    fn the_startup_prune_leaves_a_small_cache_alone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (launcher, _rx) =
+            Launcher::open_with_endpoints(dir.path().to_path_buf(), Endpoints::default())
+                .expect("build launcher");
+        let icon = planted_cache_file(&launcher.root().icons_dir(), "a.png", 32, 5);
+
+        // The same job `open` spawns, awaited here instead of left to the runtime.
+        let handle = launcher.spawn_media_prune();
+        launcher.block_on(handle).expect("prune job");
+
+        assert!(icon.exists(), "a cache under the cap keeps every file");
     }
 
     #[test]

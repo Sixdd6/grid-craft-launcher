@@ -23,6 +23,11 @@ pub enum ConfigCommand {
         /// Directory to use as the app root.
         path: PathBuf,
     },
+    /// Delete the oldest cached icons and description images over their size caps.
+    ///
+    /// `cache/icons` is capped at 64 MiB and `cache/images` at 256 MiB. The launcher runs
+    /// this once at every start; the command is the way to run it now.
+    PruneCache,
     /// Change the default JVM heap bounds and garbage collector preset.
     ///
     /// The preset seeds a new instance's own `jvm.gc` when it is created. It is not read
@@ -126,6 +131,32 @@ pub fn run(launcher: &mut Launcher, format: Format, command: ConfigCommand) -> R
                         "existing data stays at {old_root}; move it by hand if you want it in \
                          the new root"
                     );
+                    Ok(())
+                }
+            }
+        }
+        ConfigCommand::PruneCache => {
+            let (icons, images) = launcher.prune_media_caches()?;
+            match format {
+                Format::Json => print_json(&serde_json::json!({
+                    "icons": {
+                        "removed": icons.removed,
+                        "freed_bytes": icons.freed_bytes,
+                        "remaining_bytes": icons.remaining_bytes,
+                    },
+                    "images": {
+                        "removed": images.removed,
+                        "freed_bytes": images.freed_bytes,
+                        "remaining_bytes": images.remaining_bytes,
+                    },
+                })),
+                Format::Text => {
+                    for (name, pruned) in [("icons", icons), ("images", images)] {
+                        println!(
+                            "{name}: removed {} files, freed {} bytes, {} bytes left",
+                            pruned.removed, pruned.freed_bytes, pruned.remaining_bytes
+                        );
+                    }
                     Ok(())
                 }
             }

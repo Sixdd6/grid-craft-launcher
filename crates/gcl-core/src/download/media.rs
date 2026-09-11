@@ -50,6 +50,17 @@ pub struct Policy {
     pub dir: fn(&Root) -> PathBuf,
 }
 
+/// What one [`MediaCache::prune`] call did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Pruned {
+    /// How many files were deleted.
+    pub removed: usize,
+    /// How many bytes those files held.
+    pub freed_bytes: u64,
+    /// How many bytes the directory holds now.
+    pub remaining_bytes: u64,
+}
+
 /// Downloads URL-keyed files into one cache directory, at most one request per URL at a time.
 ///
 /// It is `Send + Sync`, so any thread may ask it for a file.
@@ -128,6 +139,21 @@ impl MediaCache {
         };
         self.release(url);
         result
+    }
+
+    /// Deletes the oldest files in the policy's directory until it fits in `max_bytes`.
+    ///
+    /// Nothing here keys a file to a project, so age is the only thing to go on: files are
+    /// sorted by modification time and the oldest go first, until the total is at or under
+    /// the cap. A missing directory, and one already under the cap, are no work. Only files
+    /// directly in the directory count; a subdirectory is left alone. A file that cannot be
+    /// deleted is counted as kept rather than failing the call, so one locked file does not
+    /// stop the sweep.
+    ///
+    /// This is blocking filesystem work. Call it from
+    /// [`tokio::task::spawn_blocking`] or off the hot path.
+    pub fn prune(&self, root: &Root, max_bytes: u64) -> Result<Pruned, Error> {
+        prune_dir(&(self.policy.dir)(root), max_bytes)
     }
 
     /// Whether a fetch of `url` is in flight. Test helper.
@@ -229,6 +255,70 @@ async fn is_file(path: &Path) -> bool {
     tokio::fs::metadata(path)
         .await
         .is_ok_and(|meta| meta.is_file())
+}
+
+/// Deletes the oldest files in `dir` until it holds at most `max_bytes` bytes.
+///
+/// See [`MediaCache::prune`], which is this over a policy's directory.
+pub fn prune_dir(dir: &Path, max_bytes: u64) -> Result<Pruned, Error> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Pruned::default()),
+        Err(source) => {
+            return Err(Error::Io {
+                path: dir.to_path_buf(),
+                source,
+            });
+        }
+    };
+
+    let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = Vec::new();
+    let mut total: u64 = 0;
+    for entry in entries {
+        let entry = entry.map_err(|source| Error::Io {
+            path: dir.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        // A file whose time cannot be read is treated as brand new, so a filesystem that
+        // keeps no mtime empties nothing by surprise.
+        let when = meta
+            .modified()
+            .unwrap_or_else(|_| std::time::SystemTime::now());
+        total += meta.len();
+        files.push((when, meta.len(), path));
+    }
+
+    let mut pruned = Pruned {
+        removed: 0,
+        freed_bytes: 0,
+        remaining_bytes: total,
+    };
+    if total <= max_bytes {
+        return Ok(pruned);
+    }
+
+    files.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.2.cmp(&b.2)));
+    for (_, size, path) in files {
+        if pruned.remaining_bytes <= max_bytes {
+            break;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                pruned.removed += 1;
+                pruned.freed_bytes += size;
+                pruned.remaining_bytes -= size;
+            }
+            Err(source) => {
+                tracing::warn!(path = %path.display(), %source, "could not prune a cached file")
+            }
+        }
+    }
+    Ok(pruned)
 }
 
 /// The cache file name for `url`: its sha1 in hex, then the extension label.
@@ -354,6 +444,86 @@ mod tests {
 
     fn allowed(url: &str, extra: &[String], policy: &Policy) -> bool {
         Url::parse(url).is_ok_and(|parsed| url_allowed(&parsed, extra, policy))
+    }
+
+    /// Writes `bytes` bytes at `path` and stamps it `age_secs` seconds into the past.
+    fn planted(dir: &Path, name: &str, bytes: usize, age_secs: u64) -> PathBuf {
+        let path = dir.join(name);
+        let file = std::fs::File::create(&path).expect("create");
+        std::io::Write::write_all(&mut (&file), &vec![7u8; bytes]).expect("write");
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age_secs);
+        file.set_modified(when).expect("set mtime");
+        path
+    }
+
+    #[test]
+    fn prune_removes_the_oldest_files_until_the_directory_fits() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(root.path());
+        let dir = root.icons_dir();
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let oldest = planted(&dir, "a.png", 400, 300);
+        let middle = planted(&dir, "b.png", 400, 200);
+        let newest = planted(&dir, "c.png", 400, 100);
+
+        let cache = MediaCache::new(cdn_policy());
+        let pruned = cache.prune(&root, 900).expect("prune");
+
+        assert_eq!(pruned.removed, 1);
+        assert_eq!(pruned.freed_bytes, 400);
+        assert_eq!(pruned.remaining_bytes, 800);
+        assert!(!oldest.exists(), "the oldest file is the one that goes");
+        assert!(middle.exists());
+        assert!(newest.exists());
+    }
+
+    #[test]
+    fn prune_keeps_everything_when_the_directory_is_under_the_cap() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(root.path());
+        let dir = root.icons_dir();
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let only = planted(&dir, "a.png", 100, 10);
+
+        let cache = MediaCache::new(cdn_policy());
+        let pruned = cache.prune(&root, 1024).expect("prune");
+
+        assert_eq!(pruned.removed, 0);
+        assert_eq!(pruned.freed_bytes, 0);
+        assert_eq!(pruned.remaining_bytes, 100);
+        assert!(only.exists());
+    }
+
+    #[test]
+    fn prune_of_a_directory_that_was_never_written_is_no_work() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(root.path());
+        let cache = MediaCache::new(cdn_policy());
+        let pruned = cache.prune(&root, 1024).expect("prune");
+        assert_eq!(pruned.removed, 0);
+        assert_eq!(pruned.remaining_bytes, 0);
+    }
+
+    #[test]
+    fn prune_ignores_a_subdirectory_and_can_empty_the_cache() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let root = Root::from_path(root.path());
+        let dir = root.icons_dir();
+        std::fs::create_dir_all(dir.join("nested")).expect("mkdir");
+        planted(&dir, "a.png", 300, 30);
+        planted(&dir, "b.png", 300, 20);
+        std::fs::write(dir.join("nested").join("c.png"), vec![1u8; 500]).expect("write");
+
+        let cache = MediaCache::new(cdn_policy());
+        let pruned = cache.prune(&root, 0).expect("prune");
+
+        assert_eq!(pruned.removed, 2);
+        assert_eq!(pruned.freed_bytes, 600);
+        assert_eq!(pruned.remaining_bytes, 0);
+        assert!(
+            dir.join("nested").join("c.png").exists(),
+            "a directory is left alone"
+        );
     }
 
     #[test]

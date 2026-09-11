@@ -45,9 +45,7 @@ no length, so the transfer is stopped mid-body and the part file deleted with
 `Error::TooLarge`. One request per URL at a time; a second caller waits and then finds the
 file.
 
-**`cache/icons` has no eviction.** Nothing prunes it — not `cleanup_partials`, which only
-sweeps `*.part` files. The directory grows with the number of distinct icon URLs a user
-browses. A cap or an age sweep is still to be written.
+**`cache/icons` is capped at 64 MiB** (`icons::MAX_CACHE_BYTES`). See "Pruning" below.
 
 ## Description images (`download::images`)
 
@@ -60,14 +58,33 @@ after-the-transfer size check. Two things differ, on purpose:
   (`Launcher::with_image_hosts`, empty in a shipped launcher) excuses it for a wiremock host in
   a test — there is no list to extend. This is a deliberate widening over icons, approved in
   `docs/superpowers/specs/2026-09-08-description-rendering-design.md`.
-- **A 5 MiB cap** (`images::MAX_BYTES`), not 2 MiB.
+- **A 5 MiB cap** (`images::MAX_BYTES`), not 2 MiB, and a 256 MiB directory cap
+  (`images::MAX_CACHE_BYTES`), not 64 MiB.
 
 Both caches are one type underneath: `download::media::MediaCache::new(policy)` with a
 `Policy { allowed_hosts: Option<Vec<String>>, max_bytes, refuse_private, dir }` — `None`
 allowlist means any host, and `dir` is the `Root` accessor the file lands under (`icons_dir` or
 `images_dir`). `icons.rs` and `images.rs` are the two policies over it; the streaming, staging,
-capping, and single-flight code lives in `media.rs` once. `cache/images` has no eviction, the
-same gap `cache/icons` carries.
+capping, and single-flight code lives in `media.rs` once.
+
+### Pruning
+
+Neither cache keys a file to a project, so age is all there is to go on.
+`MediaCache::prune(root, max_bytes)` (`media::prune_dir(dir, max_bytes)` underneath) sorts the
+files directly in the cache directory by modification time and deletes the oldest until the
+total is at or under the cap. It answers a `Pruned { removed, freed_bytes, remaining_bytes }`.
+A missing directory, and one already under the cap, are no work; a subdirectory is skipped;
+a file that will not delete is logged and counted as kept, so one locked file does not stop
+the sweep. It is blocking filesystem work — call it from `spawn_blocking`.
+
+Caps: `cache/icons` 64 MiB (`icons::MAX_CACHE_BYTES`), `cache/images` 256 MiB
+(`images::MAX_CACHE_BYTES`).
+
+`Launcher::open` runs one sweep per start through `Launcher::spawn_media_prune`, a blocking
+task whose handle it drops, so nothing waits on it; it logs what each cache removed at info,
+and a cache under its cap at debug. `Launcher::prune_media_caches()` is the same sweep run to
+completion, and `prune_media_caches_to(icon_max, image_max)` names the caps for a test.
+`gcl config prune-cache` is the command over it.
 
 ### The three media rules
 

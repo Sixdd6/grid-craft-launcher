@@ -17,7 +17,7 @@
 use std::path::PathBuf;
 
 use super::Error;
-use super::media::{MediaCache, Policy};
+use super::media::{MediaCache, Policy, Pruned};
 use crate::http::HttpClient;
 use crate::paths::Root;
 
@@ -30,6 +30,9 @@ pub const ALLOWED_HOSTS: [&str; 3] = [
 
 /// Largest icon body accepted, in bytes.
 pub const MAX_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Largest `cache/icons/` may grow before [`IconCache::prune`] deletes its oldest files.
+pub const MAX_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Downloads icons into `cache/icons/`, at most one request per URL at a time.
 ///
@@ -70,6 +73,14 @@ impl IconCache {
         extra_hosts: &[String],
     ) -> Result<PathBuf, Error> {
         self.inner.fetch(http, root, url, extra_hosts).await
+    }
+
+    /// Deletes the oldest icons until `cache/icons/` fits in `max_bytes`.
+    ///
+    /// Pass [`MAX_CACHE_BYTES`] for the shipped cap. Blocking filesystem work: see
+    /// [`super::media::MediaCache::prune`].
+    pub fn prune(&self, root: &Root, max_bytes: u64) -> Result<Pruned, Error> {
+        self.inner.prune(root, max_bytes)
     }
 }
 

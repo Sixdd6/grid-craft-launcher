@@ -264,6 +264,28 @@ fn config_set_root_twice_keeps_the_second_root() {
 }
 
 #[test]
+fn config_prune_cache_reports_both_media_caches() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let icons = dir.path().join("cache").join("icons");
+    std::fs::create_dir_all(&icons).expect("mkdir");
+    std::fs::write(icons.join("a.png"), b"icon bytes").expect("write");
+
+    let out = gcl(dir.path())
+        .args(["--json", "config", "prune-cache"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("stdout is json");
+    // Well under the 64 MiB cap, so the icon stays and both caches report no removals.
+    assert_eq!(parsed["icons"]["removed"], 0);
+    assert_eq!(parsed["icons"]["remaining_bytes"], 10);
+    assert_eq!(parsed["images"]["removed"], 0);
+    assert!(icons.join("a.png").exists());
+}
+
+#[test]
 fn java_list_exits_zero() {
     let dir = tempfile::tempdir().expect("tempdir");
     gcl(dir.path()).args(["java", "list"]).assert().success();
