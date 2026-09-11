@@ -60,13 +60,12 @@ impl Default for JvmDefaults {
     }
 }
 
-/// API keys and client ids. Environment variables win over these when reading via
-/// [`Config::curseforge_api_key`] and [`Config::msa_client_id`].
+/// Client ids. The `GCL_MSA_CLIENT_ID` environment variable wins over this when reading via
+/// [`Config::msa_client_id`]. The CurseForge key is not here: see
+/// [`Config::curseforge_api_key`].
 #[derive(Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct Keys {
-    /// CurseForge API key, if configured.
-    pub curseforge_api_key: Option<String>,
     /// Microsoft Entra (MSA) client id used for Microsoft account login.
     pub msa_client_id: Option<String>,
 }
@@ -77,7 +76,6 @@ impl std::fmt::Debug for Keys {
             if v.is_some() { "<set>" } else { "<unset>" }
         }
         f.debug_struct("Keys")
-            .field("curseforge_api_key", &state(&self.curseforge_api_key))
             .field("msa_client_id", &state(&self.msa_client_id))
             .finish()
     }
@@ -127,10 +125,12 @@ impl Config {
                 });
             }
         };
-        toml::from_str(&contents).map_err(|source| Error::Parse {
+        let config: Config = toml::from_str(&contents).map_err(|source| Error::Parse {
             path: path.to_path_buf(),
             source,
-        })
+        })?;
+        warn_on_stale_curseforge_key(path, &contents);
+        Ok(config)
     }
 
     /// Saves config to `path`, creating parent directories as needed.
@@ -148,13 +148,17 @@ impl Config {
         })
     }
 
-    /// The CurseForge API key: `CURSEFORGE_API_KEY` env var first, then the config file.
+    /// The CurseForge API key: the `CURSEFORGE_API_KEY` environment variable first, then the
+    /// key compiled into this build from `GCL_CURSEFORGE_API_KEY`.
     ///
-    /// An empty or blank value in either place counts as unset: `CURSEFORGE_API_KEY=`
-    /// in a shell or a `.env` must turn the source off, not send a blank key.
+    /// The environment variable is the development path, for the api-verifier agent and for
+    /// recording fixtures. A release build carries the key, so a user never enters one. The
+    /// config file is not read: a key there is ignored, and [`Config::load`] warns about it.
+    /// An empty or blank value in either place counts as unset: `CURSEFORGE_API_KEY=` in a
+    /// shell or a `.env` must turn the source off, not send a blank key.
     pub fn curseforge_api_key(&self) -> Option<String> {
         non_blank(std::env::var("CURSEFORGE_API_KEY").ok())
-            .or_else(|| non_blank(self.keys.curseforge_api_key.clone()))
+            .or_else(|| non_blank(option_env!("GCL_CURSEFORGE_API_KEY").map(str::to_string)))
     }
 
     /// The Microsoft account client id: `GCL_MSA_CLIENT_ID` env var first, then the config
@@ -162,6 +166,26 @@ impl Config {
     pub fn msa_client_id(&self) -> Option<String> {
         non_blank(std::env::var("GCL_MSA_CLIENT_ID").ok())
             .or_else(|| non_blank(self.keys.msa_client_id.clone()))
+    }
+}
+
+/// Warns once when a config file still carries the removed `keys.curseforge_api_key`.
+///
+/// The value is never read and never logged. `Keys` no longer has the field, so serde drops
+/// it silently; this reads the raw TOML to say so out loud.
+fn warn_on_stale_curseforge_key(path: &Path, contents: &str) {
+    let Ok(raw) = contents.parse::<toml::Value>() else {
+        return;
+    };
+    let present = raw
+        .get("keys")
+        .and_then(|keys| keys.get("curseforge_api_key"))
+        .is_some();
+    if present {
+        tracing::warn!(
+            path = %path.display(),
+            "config.toml: keys.curseforge_api_key is no longer read; CurseForge access ships with the build"
+        );
     }
 }
 
@@ -245,21 +269,19 @@ mod tests {
 
     #[test]
     fn keys_debug_redacts_secrets() {
-        let keys = Keys {
-            curseforge_api_key: Some("abc".to_string()),
-            msa_client_id: None,
+        let set = Keys {
+            msa_client_id: Some("abc".to_string()),
         };
-        let debug = format!("{keys:?}");
+        let debug = format!("{set:?}");
         assert!(!debug.contains("abc"));
         assert!(debug.contains("<set>"));
-        assert!(debug.contains("<unset>"));
+        assert!(format!("{:?}", Keys::default()).contains("<unset>"));
     }
 
     #[test]
-    fn curseforge_api_key_prefers_env() {
+    fn curseforge_api_key_comes_from_the_env() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let mut config = Config::default();
-        config.keys.curseforge_api_key = Some("from-file".to_string());
+        let config = Config::default();
         // SAFETY: guarded by ENV_LOCK, restored before returning.
         unsafe {
             std::env::set_var("CURSEFORGE_API_KEY", "from-env");
@@ -288,22 +310,31 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_file_when_env_unset() {
+    fn a_stale_key_in_the_file_still_loads_and_is_not_read() {
         let _guard = ENV_LOCK.lock().unwrap();
         // SAFETY: guarded by ENV_LOCK; ensures a clean slate for this process.
         unsafe {
             std::env::remove_var("CURSEFORGE_API_KEY");
         }
-        let mut config = Config::default();
-        config.keys.curseforge_api_key = Some("from-file".to_string());
-        assert_eq!(config.curseforge_api_key(), Some("from-file".to_string()));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "parallel_downloads = 5\n[keys]\ncurseforge_api_key = \"from-file\"\n",
+        )
+        .unwrap();
+
+        let loaded = Config::load(&path).unwrap();
+        assert_eq!(loaded.parallel_downloads, 5, "the rest of the file loaded");
+        // The build may carry a key on a developer machine; then the answer is that key,
+        // never the file's.
+        assert_ne!(loaded.curseforge_api_key(), Some("from-file".to_string()));
     }
 
     #[test]
     fn a_blank_key_counts_as_unset_in_the_env_and_in_the_file() {
         let _guard = ENV_LOCK.lock().unwrap();
         let mut config = Config::default();
-        config.keys.curseforge_api_key = Some("   ".to_string());
         config.keys.msa_client_id = Some(String::new());
 
         // SAFETY: guarded by ENV_LOCK; both variables are restored before the asserts.
@@ -317,11 +348,14 @@ mod tests {
             std::env::remove_var("CURSEFORGE_API_KEY");
             std::env::remove_var("GCL_MSA_CLIENT_ID");
         }
-        assert_eq!(curseforge, None, "a blank env var must not mask the file");
+        assert_eq!(
+            curseforge,
+            non_blank(option_env!("GCL_CURSEFORGE_API_KEY").map(str::to_string)),
+            "a blank env var must not count as a key"
+        );
         assert_eq!(msa, None);
 
         // A blank file value alone is unset too.
-        assert_eq!(config.curseforge_api_key(), None);
         assert_eq!(config.msa_client_id(), None);
     }
 

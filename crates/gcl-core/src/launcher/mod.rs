@@ -448,6 +448,9 @@ pub struct Launcher {
     /// Hosts an icon may be fetched from, on top of [`crate::download::icons::ALLOWED_HOSTS`].
     /// Empty everywhere but in a test.
     icon_hosts: Vec<String>,
+    /// CurseForge API key that wins over [`Config::curseforge_api_key`] when building the
+    /// sources. `None` everywhere but in a test.
+    curseforge_key: Option<String>,
     /// The project-icon cache behind [`Launcher::fetch_icon`].
     icons: IconCache,
     /// Hosts a description image may be plain HTTP at. There is no host allowlist for
@@ -556,6 +559,7 @@ impl Launcher {
             process_runner: None,
             pack_hosts: Vec::new(),
             icon_hosts: Vec::new(),
+            curseforge_key: None,
             icons: IconCache::new(),
             image_hosts: Vec::new(),
             images: ImageCache::new(),
@@ -1465,10 +1469,10 @@ impl Launcher {
     /// Every configured content source, in preference order.
     ///
     /// Modrinth is always present. CurseForge is present only when
-    /// [`Config::curseforge_api_key`] finds a key. The list is built on the first call and
-    /// kept; [`Launcher::update_config`] clears it, so an edit that adds or removes the key
-    /// takes effect on the next call. Two threads that race to build it get the same list,
-    /// and the last one written wins.
+    /// [`Config::curseforge_api_key`] finds a key, or [`Launcher::with_curseforge_key`] set
+    /// one. The list is built on the first call and kept; [`Launcher::update_config`] clears
+    /// it, so a config edit takes effect on the next call. Two threads that race to build it
+    /// get the same list, and the last one written wins.
     pub fn sources(&self) -> Vec<BoxSource> {
         if let Some(cached) = self
             .sources
@@ -1481,7 +1485,12 @@ impl Launcher {
         // The config guard is dropped at the end of this statement, before the write lock is
         // taken: `update_config` locks the config first and the sources second, and taking
         // them in the other order here could deadlock.
-        let built = build_sources(&self.http, &self.read_config(), &self.endpoints);
+        let built = build_sources(
+            &self.http,
+            &self.read_config(),
+            &self.endpoints,
+            self.curseforge_key.as_deref(),
+        );
         *self.sources.write().unwrap_or_else(|err| err.into_inner()) = Some(built.clone());
         built
     }
@@ -2635,12 +2644,20 @@ fn published_after(later: &str, earlier: &str) -> bool {
     }
 }
 
-fn build_sources(http: &HttpClient, config: &Config, endpoints: &Endpoints) -> Vec<BoxSource> {
+fn build_sources(
+    http: &HttpClient,
+    config: &Config,
+    endpoints: &Endpoints,
+    override_key: Option<&str>,
+) -> Vec<BoxSource> {
     let mut sources: Vec<BoxSource> = vec![Arc::new(Modrinth::with_base_url(
         http.clone(),
         endpoints.modrinth.clone(),
     ))];
-    match config.curseforge_api_key() {
+    let key = override_key
+        .map(str::to_string)
+        .or_else(|| config.curseforge_api_key());
+    match key {
         Some(key) => sources.push(Arc::new(CurseForge::with_base_url(
             http.clone(),
             key,
@@ -2800,6 +2817,20 @@ impl Launcher {
     #[must_use]
     pub fn with_icon_hosts(mut self, hosts: Vec<String>) -> Self {
         self.icon_hosts = hosts;
+        self
+    }
+
+    /// Test seam: builds the CurseForge source with `key`, whatever the environment says.
+    ///
+    /// [`Config::curseforge_api_key`] reads the `CURSEFORGE_API_KEY` environment variable and
+    /// the key compiled into the build, neither of which a test may set. Chain this onto
+    /// [`Launcher::open_with_endpoints`] to turn CurseForge on for one launcher, pointed at a
+    /// mock server. It clears the cached source list, so the next [`Launcher::sources`] call
+    /// builds with the key. It is `None` in a shipped launcher.
+    #[must_use]
+    pub fn with_curseforge_key(mut self, key: impl Into<String>) -> Self {
+        self.curseforge_key = Some(key.into());
+        self.sources = RwLock::new(None);
         self
     }
 
@@ -3021,19 +3052,22 @@ mod tests {
         assert_eq!(launcher.sources().len(), 1, "no key, so Modrinth only");
 
         launcher
-            .update_config(|config| {
-                config.keys.curseforge_api_key = Some("test-key".to_string());
-                config.parallel_downloads = 3;
-            })
+            .update_config(|config| config.parallel_downloads = 3)
             .expect("update config");
+        assert_eq!(
+            launcher.sources().len(),
+            1,
+            "the cache was cleared and rebuilt, still without a key"
+        );
 
-        let ids: Vec<SourceId> = launcher.sources().iter().map(|s| s.id()).collect();
+        let keyed = seamed(&dir).with_curseforge_key("test-key");
+        let ids: Vec<SourceId> = keyed.sources().iter().map(|s| s.id()).collect();
         assert_eq!(
             ids,
             vec![SourceId::Modrinth, SourceId::CurseForge],
-            "the cache was cleared, so the new key built a second source"
+            "the seam built a second source"
         );
-        assert!(launcher.source(SourceId::CurseForge).is_ok());
+        assert!(keyed.source(SourceId::CurseForge).is_ok());
 
         let (again, _rx) =
             Launcher::open_with_endpoints(dir.path().to_path_buf(), Endpoints::default())
@@ -3763,24 +3797,42 @@ mod tests {
     fn a_source_that_is_not_configured_is_disabled() {
         let _guard = clean_key();
         let http = HttpClient::new().expect("http");
-        let sources = build_sources(&http, &Config::default(), &Endpoints::default());
+        let sources = build_sources(&http, &Config::default(), &Endpoints::default(), None);
         assert_eq!(sources.len(), 1, "no key was configured");
         assert_eq!(sources[0].id(), SourceId::Modrinth);
     }
 
     #[test]
-    fn a_configured_key_adds_curseforge() {
+    fn an_overridden_key_adds_curseforge() {
+        let _guard = clean_key();
         let http = HttpClient::new().expect("http");
-        let config = Config {
-            keys: crate::config::Keys {
-                curseforge_api_key: Some("test-key".to_string()),
-                msa_client_id: None,
-            },
-            ..Config::default()
-        };
-        let sources = build_sources(&http, &config, &Endpoints::default());
+        let sources = build_sources(
+            &http,
+            &Config::default(),
+            &Endpoints::default(),
+            Some("test-key"),
+        );
         let ids: Vec<SourceId> = sources.iter().map(|s| s.id()).collect();
         assert_eq!(ids, vec![SourceId::Modrinth, SourceId::CurseForge]);
+    }
+
+    #[test]
+    fn the_curseforge_seam_clears_the_cached_sources() {
+        let _guard = clean_key();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let launcher = seamed(&dir);
+        assert_eq!(
+            launcher.sources().len(),
+            1,
+            "built and cached without a key"
+        );
+
+        let launcher = launcher.with_curseforge_key("test-key");
+        assert_eq!(
+            launcher.sources().len(),
+            2,
+            "the seam dropped the cached list"
+        );
     }
 
     #[test]
@@ -4123,12 +4175,7 @@ mod tests {
         };
         let (launcher, _rx) =
             Launcher::open_with_endpoints(dir.path().to_path_buf(), endpoints).expect("launcher");
-        launcher
-            .update_config(|config| {
-                config.keys.curseforge_api_key = Some("test-key".to_string());
-            })
-            .expect("save the key");
-        launcher
+        launcher.with_curseforge_key("test-key")
     }
 
     /// One search hit, with only the fields the resolver reads filled in.

@@ -187,18 +187,27 @@ fn config_set_jvm_is_written_and_shown() {
 #[test]
 fn config_show_redacts_keys() {
     let dir = tempfile::tempdir().expect("tempdir");
+    // A stale key in the file is no longer read, and must never be printed.
     std::fs::write(
         dir.path().join("config.toml"),
-        "[keys]\ncurseforge_api_key = \"super-secret\"\n",
+        "[keys]\ncurseforge_api_key = \"super-secret\"\nmsa_client_id = \"also-secret\"\n",
     )
     .expect("write config");
-    gcl(dir.path())
+    let assert = gcl(dir.path())
+        .env_remove("CURSEFORGE_API_KEY")
         .args(["config", "show"])
         .assert()
         .success()
         .stdout(
-            predicates::str::contains("<set>").and(predicates::str::contains("super-secret").not()),
+            predicates::str::contains("msa_client_id = \"<set>\"")
+                .and(predicates::str::contains("super-secret").not())
+                .and(predicates::str::contains("also-secret").not()),
         );
+    // A build that carries `GCL_CURSEFORGE_API_KEY` reports enabled whatever the environment
+    // says, so only a build without one can assert the off state.
+    if option_env!("GCL_CURSEFORGE_API_KEY").is_none() {
+        assert.stdout(predicates::str::contains("curseforge = \"disabled\""));
+    }
 }
 
 #[test]

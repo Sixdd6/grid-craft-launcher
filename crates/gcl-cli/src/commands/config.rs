@@ -69,7 +69,9 @@ struct RedactedJvm {
 /// Key states as printed. Never the values.
 #[derive(Serialize)]
 struct RedactedKeys {
-    curseforge_api_key: &'static str,
+    /// Whether this build can talk to CurseForge. There is no key for a user to set: it
+    /// comes from the build, or from `CURSEFORGE_API_KEY` on a developer machine.
+    curseforge: &'static str,
     msa_client_id: &'static str,
 }
 
@@ -90,7 +92,11 @@ impl RedactedConfig {
                     .map(|p| p.display().to_string()),
             },
             keys: RedactedKeys {
-                curseforge_api_key: state(config.curseforge_api_key().is_some()),
+                curseforge: if config.curseforge_api_key().is_some() {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
                 msa_client_id: state(config.msa_client_id().is_some()),
             },
             game_defaults: config.game_defaults.clone(),
@@ -203,10 +209,34 @@ mod tests {
     #[test]
     fn a_set_key_never_prints_its_value() {
         let mut config = Config::default();
-        config.keys.curseforge_api_key = Some("super-secret".to_string());
+        config.keys.msa_client_id = Some("super-secret".to_string());
         let text = toml::to_string_pretty(&RedactedConfig::new(&config)).expect("serialize");
-        assert!(text.contains("curseforge_api_key = \"<set>\""), "{text}");
+        assert!(text.contains("msa_client_id = \"<set>\""), "{text}");
         assert!(!text.contains("super-secret"), "{text}");
+    }
+
+    #[test]
+    fn curseforge_prints_enabled_or_disabled() {
+        // SAFETY: nextest runs every test in its own process, so nothing else reads the env.
+        unsafe {
+            std::env::set_var("CURSEFORGE_API_KEY", "super-secret");
+        }
+        let text =
+            toml::to_string_pretty(&RedactedConfig::new(&Config::default())).expect("serialize");
+        assert!(text.contains("curseforge = \"enabled\""), "{text}");
+        assert!(!text.contains("super-secret"), "{text}");
+
+        // SAFETY: same process, same reason.
+        unsafe {
+            std::env::remove_var("CURSEFORGE_API_KEY");
+        }
+        // A build that carries `GCL_CURSEFORGE_API_KEY` is enabled whatever the environment
+        // says, so only a build without one can assert the off state.
+        if option_env!("GCL_CURSEFORGE_API_KEY").is_none() {
+            let text = toml::to_string_pretty(&RedactedConfig::new(&Config::default()))
+                .expect("serialize");
+            assert!(text.contains("curseforge = \"disabled\""), "{text}");
+        }
     }
 
     #[test]

@@ -554,17 +554,6 @@ async fn project_details_costs_one_project_request() {
 
 /// A launcher over a fresh root with CurseForge pointed at `uri`, keyed, everything else dead.
 fn curseforge_launcher(dir: &tempfile::TempDir, uri: String) -> Launcher {
-    // The key is read once, when the launcher opens, so it goes into `config.toml` first.
-    let config = gcl_core::config::Config {
-        keys: gcl_core::config::Keys {
-            curseforge_api_key: Some("test-key".to_string()),
-            msa_client_id: None,
-        },
-        ..gcl_core::config::Config::default()
-    };
-    config
-        .save(&dir.path().join("config.toml"))
-        .expect("save config");
     let endpoints = Endpoints {
         mojang: "http://mojang.invalid".to_string(),
         modrinth: "http://modrinth.invalid".to_string(),
@@ -577,7 +566,8 @@ fn curseforge_launcher(dir: &tempfile::TempDir, uri: String) -> Launcher {
     };
     let (launcher, _rx) =
         Launcher::open_with_endpoints(dir.path().to_path_buf(), endpoints).expect("build launcher");
-    launcher
+    // The key never comes from a file or this machine's environment: the seam sets it.
+    launcher.with_curseforge_key("test-key")
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -670,18 +660,8 @@ async fn sources_hold_curseforge_only_when_a_key_is_configured() {
         assert_eq!(ids, vec![SourceId::Modrinth]);
         assert!(launcher.source(SourceId::CurseForge).is_err());
 
-        // The key is read once, when the launcher opens, so it goes into `config.toml` first.
-        let config = gcl_core::config::Config {
-            keys: gcl_core::config::Keys {
-                curseforge_api_key: Some("test-key".to_string()),
-                msa_client_id: None,
-            },
-            ..gcl_core::config::Config::default()
-        };
-        config
-            .save(&with_key.path().join("config.toml"))
-            .expect("save config");
-        let keyed = modrinth_launcher(&with_key, "http://modrinth.invalid".to_string());
+        let keyed = modrinth_launcher(&with_key, "http://modrinth.invalid".to_string())
+            .with_curseforge_key("test-key");
         let ids: Vec<SourceId> = keyed.sources().iter().map(|s| s.id()).collect();
         assert_eq!(ids, vec![SourceId::Modrinth, SourceId::CurseForge]);
         assert!(keyed.source(SourceId::CurseForge).is_ok());
