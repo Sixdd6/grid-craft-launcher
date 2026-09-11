@@ -216,6 +216,11 @@ rewrite for a caller holding only strings, and the CLI runs every `settings set`
 it. A token no choice holds is `Error::BadChoice`, whose message lists the bare tokens
 (`true, fast, false`).
 
+**`guiScale` is a choice, not a slider.** Its tokens are `0` (Auto) and `1` to `6`, labelled
+`1×` to `6×`, in numeric order so a picker still reads like the game's own control. `0` is
+not a scale below one, so a slider would have shown it as the smallest size; the catalog names
+it instead. A value outside the list is `Error::BadChoice`.
+
 **A slider's stored number is not always the number a user reads.** `Slider.display` is
 `Option<Display>`, and `Display { mul, add, decimals, unit }` gives `shown = stored * mul + add`.
 `fov` is the only key that uses it: 26.2 stores a float in `[-1.0, 1.0]` where `0.0` is 70

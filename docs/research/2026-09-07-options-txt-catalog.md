@@ -33,7 +33,7 @@ are pure state rather than settings (`version`, `startedCleanly`, `joinedFirstSe
 | fov | float | 0.0 | -1.0–1.0, step 0.025 (real 26.2) |
 | maxFps | int | 120 | 10–260 (260 = unlimited) |
 | gamma | float | 0.5 | 0.0–1.0 |
-| guiScale | int | 0 | 0 auto, 1–6 VERIFY |
+| guiScale | int | 0 | 0 auto, 1–6 VERIFY; catalog holds it as a choice (`0` Auto, `1`–`6` as `n×`) |
 | fullscreen | bool | false | |
 | enableVsync | bool | true | |
 | graphicsMode | int | 1 | 0 fast, 1 fancy, 2 fabulous |

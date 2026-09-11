@@ -169,7 +169,17 @@ pub const CATALOG: &[Setting] = &[
         key: "guiScale",
         label: "GUI Scale",
         group: Group::Video,
-        control: slider!(0.0, 6.0, 1.0, 0),
+        // A choice, not a slider: 0 means "Auto", not a scale below one. The tokens stay in
+        // numeric order, so the picker still reads the way the game's slider does.
+        control: Control::Choice(&[
+            ("0", "Auto"),
+            ("1", "1\u{d7}"),
+            ("2", "2\u{d7}"),
+            ("3", "3\u{d7}"),
+            ("4", "4\u{d7}"),
+            ("5", "5\u{d7}"),
+            ("6", "6\u{d7}"),
+        ]),
         default: "0",
     },
     Setting {
@@ -1022,6 +1032,31 @@ mod tests {
         let value = parse_value(setting, "\"left\"").expect("parse");
         assert_eq!(value, Value::Text("\"left\"".to_string()));
         assert_eq!(format_value(setting, &value), "\"left\"");
+    }
+
+    #[test]
+    fn gui_scale_is_a_choice_from_auto_to_six() {
+        let setting = find("guiScale").expect("catalog entry");
+        let Control::Choice(tokens) = setting.control else {
+            panic!("guiScale is a choice, got {:?}", setting.control);
+        };
+        assert_eq!(
+            tokens,
+            &[
+                ("0", "Auto"),
+                ("1", "1\u{d7}"),
+                ("2", "2\u{d7}"),
+                ("3", "3\u{d7}"),
+                ("4", "4\u{d7}"),
+                ("5", "5\u{d7}"),
+                ("6", "6\u{d7}"),
+            ]
+        );
+        let value = parse_value(setting, "3").expect("parse");
+        assert_eq!(value, Value::Text("3".to_string()));
+        assert_eq!(format_value(setting, &value), "3");
+        let err = parse_value(setting, "7").expect_err("out of the list");
+        assert!(matches!(err, Error::BadChoice { .. }), "{err:?}");
     }
 
     #[test]
