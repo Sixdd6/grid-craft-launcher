@@ -1,0 +1,39 @@
+{
+  // Press F5 (or pick a configuration in Run and Debug) to build and start a dev build.
+  // Uses the CodeLLDB extension (vadimcn.vscode-lldb). Each entry builds with cargo first.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "GUI (debug build)",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "-p", "gcl-ui", "--bin", "grid-craft-launcher"]
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "env": { "GCL_LOG": "info" }
+    },
+    {
+      "name": "GUI (debug build, verbose log)",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "-p", "gcl-ui", "--bin", "grid-craft-launcher"]
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "env": { "GCL_LOG": "debug,gcl_core=trace" }
+    },
+    {
+      "name": "CLI: gcl instance list (edit args below)",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "-p", "gcl-cli", "--bin", "gcl"]
+      },
+      "args": ["instance", "list"],
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

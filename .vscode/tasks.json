@@ -1,0 +1,28 @@
+{
+  // Terminal > Run Task. "Run GUI" is the default build task (Ctrl+Shift+B).
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run GUI",
+      "type": "shell",
+      "command": "just run-ui",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": ["$rustc"],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "just check",
+      "type": "shell",
+      "command": "just check",
+      "group": "test",
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "just ui-xtest",
+      "type": "shell",
+      "command": "just ui-xtest",
+      "group": "test",
+      "problemMatcher": []
+    }
+  ]
+}

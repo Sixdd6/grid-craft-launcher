@@ -40,6 +40,9 @@ just run-cli debug verify-source modrinth
 just run-ui
 ```
 
+In VS Code with the CodeLLDB extension, F5 builds and starts the GUI under the debugger
+(`.vscode/launch.json`); Ctrl+Shift+B runs `just run-ui` as a task (`.vscode/tasks.json`).
+
 ## Run the app
 
 ```bash
@@ -190,7 +193,10 @@ git tag vx.y.z
 git push origin vx.y.z
 ```
 
-The pushed tag runs the release workflow, which builds the Windows and macOS archives through
+GitHub Actions run only for a release tag: `ci.yml` (checks) and `release.yml` (build) both
+trigger on the tag push, and `ci.yml` can also be started by hand from the Actions tab. Pushes
+to `main` and pull requests run nothing; run `just check` locally. The pushed tag runs the
+release workflow, which builds the Windows and macOS archives through
 cargo-dist. cargo-dist does not build the AppImage; attach the file from `just appimage` to the
 GitHub release by hand.
 
