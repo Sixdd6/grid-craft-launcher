@@ -40,8 +40,8 @@ pub struct ConfigView {
     pub jvm_max: i32,
     /// Path to a specific `java`, empty when the launcher may choose one.
     pub java_path: String,
-    /// Whether a CurseForge API key is configured, from the file or the environment.
-    pub curseforge_key_set: bool,
+    /// Whether this build carries a CurseForge API key, from the file or the environment.
+    pub curseforge_enabled: bool,
     /// Whether a Microsoft client id is configured.
     pub msa_client_id_set: bool,
     /// `options.txt` keys preseeded into every new instance, in key order.
@@ -81,13 +81,6 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, editor: &Editor) {
                 max.as_str(),
                 java_path.as_str(),
             );
-        });
-    }
-
-    {
-        let (bridge, editor) = (bridge.clone(), editor.clone());
-        state.on_save_curseforge_key(move |key| {
-            save_key(&bridge, &editor, Key::CurseForge, key.as_str());
         });
     }
 
@@ -164,7 +157,7 @@ fn apply_view(window: &AppWindow, view: &ConfigView) {
     state.set_jvm_min(view.jvm_min);
     state.set_jvm_max(view.jvm_max);
     state.set_java_path(view.java_path.as_str().into());
-    state.set_curseforge_key_set(view.curseforge_key_set);
+    state.set_curseforge_enabled(view.curseforge_enabled);
     state.set_msa_client_id_set(view.msa_client_id_set);
     // Saving a client id here is what turns Microsoft sign-in on, so the other screen's
     // button, and the hint under it, are told at the same time rather than waiting for its
@@ -266,8 +259,6 @@ fn save_jvm(bridge: &Bridge, editor: &Editor, min: &str, max: &str, java_path: &
 /// Which secret a save is about.
 #[derive(Clone, Copy)]
 enum Key {
-    /// The CurseForge API key.
-    CurseForge,
     /// The Microsoft client id.
     MsaClientId,
 }
@@ -276,7 +267,6 @@ impl Key {
     /// What the status line calls this key.
     fn label(self) -> &'static str {
         match self {
-            Key::CurseForge => "CurseForge API key",
             Key::MsaClientId => "Microsoft client id",
         }
     }
@@ -292,7 +282,6 @@ fn save_key(bridge: &Bridge, editor: &Editor, key: Key, value: &str) {
         // than it takes to press the button.
         let state = window.global::<SettingsState>();
         match key {
-            Key::CurseForge => state.set_curseforge_key_input(SharedString::new()),
             Key::MsaClientId => state.set_msa_client_id_input(SharedString::new()),
         }
     }
@@ -302,7 +291,6 @@ fn save_key(bridge: &Bridge, editor: &Editor, key: Key, value: &str) {
         "Save key",
         move |launcher| {
             launcher.update_config(|config| match key {
-                Key::CurseForge => config.keys.curseforge_api_key = stored,
                 Key::MsaClientId => config.keys.msa_client_id = stored,
             })
         },
@@ -421,9 +409,11 @@ fn busy(bridge: &Bridge, busy: bool) {
 
 /// Builds the screen's view of a config, with the key values left out.
 ///
-/// The two key fields are booleans on purpose: the screen shows `<set>` or `<unset>` and can
-/// never show, log, or send back a saved secret. Both read the environment first, the same
-/// way every other caller does, so a key set outside the file still shows as set.
+/// `curseforge_enabled` reports whether this build carries a CurseForge key at all; there is
+/// no field to save one from the screen. `msa_client_id_set` is a boolean on purpose: the
+/// screen shows `<set>` or `<unset>` and can never show, log, or send back a saved secret. It
+/// reads the environment first, the same way every other caller does, so a key set outside the
+/// file still shows as set.
 pub fn config_view(config: &Config) -> ConfigView {
     ConfigView {
         root: config
@@ -440,7 +430,7 @@ pub fn config_view(config: &Config) -> ConfigView {
             .as_ref()
             .map(|path| path.display().to_string())
             .unwrap_or_default(),
-        curseforge_key_set: config.curseforge_api_key().is_some(),
+        curseforge_enabled: config.curseforge_api_key().is_some(),
         msa_client_id_set: config.msa_client_id().is_some(),
         game_defaults: config
             .game_defaults

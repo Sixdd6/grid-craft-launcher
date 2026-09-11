@@ -227,8 +227,7 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::memory_max_field` | `LineEdit` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::java_path_field` | `LineEdit` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::java_apply_button` | `Button` |
-| `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::curseforge_key_field` | `LineEdit` |
-| `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::curseforge_key_button` | `Button` |
+| `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::curseforge_status_text` | `Text` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::msa_client_id_field` | `LineEdit` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::msa_client_id_button` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::default_key_field` | `LineEdit` |
@@ -236,4 +235,4 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::default_add_button` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::verify_button` | `Button` |
 
-Total: 159 named elements.
+Total: 158 named elements.

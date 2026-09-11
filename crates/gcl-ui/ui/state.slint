@@ -279,12 +279,10 @@ export global SettingsState {
     in-out property <int> jvm_max: 0;
     // Path to a specific `java`, empty when the launcher may choose one.
     in-out property <string> java_path: "";
-    // Whether a CurseForge API key is configured, from the config file or the environment.
-    in-out property <bool> curseforge_key_set: false;
+    // Whether this build carries a CurseForge API key, from the config file or the environment.
+    in-out property <bool> curseforge_enabled: false;
     // Whether a Microsoft client id is configured.
     in-out property <bool> msa_client_id_set: false;
-    // What the user typed into the CurseForge key field. Cleared as soon as it is saved.
-    in-out property <string> curseforge_key_input: "";
     // What the user typed into the client id field. Cleared as soon as it is saved.
     in-out property <string> msa_client_id_input: "";
     // One line about the last thing that happened here.
@@ -302,8 +300,6 @@ export global SettingsState {
     callback save_downloads(int);
     // Save the JVM defaults. Carries min heap, max heap, and the java path, as typed.
     callback save_jvm(string /* min */, string /* max */, string /* java_path */);
-    // Save the CurseForge API key. An empty string clears it.
-    callback save_curseforge_key(string);
     // Save the Microsoft client id. An empty string clears it.
     callback save_msa_client_id(string);
     // Set one raw `options.txt` default, from the Advanced editor. Carries the key and the

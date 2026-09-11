@@ -199,37 +199,16 @@ export component SettingsScreen inherits Rectangle {
                 Card {
                     title: "Keys";
 
-                    HorizontalLayout {
-                        spacing: Theme.gap;
+                    curseforge_status_text := Text {
+                        text: SettingsState.curseforge_enabled
+                            ? "CurseForge: enabled"
+                            : "CurseForge: off (this build carries no key)";
+                        color: Theme.text-muted;
+                        font-size: Theme.font-size;
                         height: Theme.row-height;
-
-                        Text {
-                            text: "CurseForge API key " + (SettingsState.curseforge_key_set
-                                ? "<set>"
-                                : "<unset>");
-                            color: Theme.text-muted;
-                            font-size: Theme.font-size;
-                            vertical-alignment: center;
-                            horizontal-stretch: 0;
-                        }
-
-                        curseforge_key_field := LineEdit {
-                            placeholder-text: "paste a key, or leave empty to clear";
-                            input-type: password;
-                            text <=> SettingsState.curseforge_key_input;
-                            horizontal-stretch: 1;
-                        }
-
-                        curseforge_key_button := Button {
-                            text: SettingsState.curseforge_key_input == ""
-                                ? "Clear"
-                                : "Save";
-                            enabled: !SettingsState.busy;
-                            clicked => {
-                                SettingsState.save_curseforge_key(
-                                    SettingsState.curseforge_key_input);
-                            }
-                        }
+                        vertical-alignment: center;
+                        accessible-role: text;
+                        accessible-label: self.text;
                     }
 
                     HorizontalLayout {
