@@ -560,18 +560,27 @@ struct Loaded {
 /// navigates here or the shown slug changes; every refresh below goes through [`load`]
 /// instead, so a job that lands after the user walked back to the settings screen cannot
 /// drag the editor onto an instance layer, and a refresh cannot wipe the search box.
+///
+/// `launch_flow::finish` calls this same entry point (through `InstanceState.invoke_load`)
+/// once the game exits, to refresh the screen it is showing. That is a re-read of the
+/// instance already on screen, not a switch to a new one, so it must not retarget the
+/// editor: `take_over` tells the two apart, and only a genuine switch (or the editor
+/// pointing somewhere else, such as the settings screen's defaults layer) clears the search
+/// box and status line. [`load`] below still refreshes the editor's rows either way, through
+/// its own guarded `editor.reload`.
 fn open(bridge: &Bridge, run: &RunState, shared: &Shared, slug: &str) {
     // Another instance's data must not be on screen while this one is being read, and a
     // game log belongs to the game that wrote it. A re-read of the instance already shown
     // keeps both: the launch that just ended set the status line and filled the log.
-    if shared.take_over(slug)
-        && let Some(window) = bridge.weak().upgrade()
-    {
+    let switched = shared.take_over(slug);
+    if switched && let Some(window) = bridge.weak().upgrade() {
         clear_view(&window);
     }
-    shared
-        .editor
-        .open(bridge, EditTarget::Instance(slug.to_string()));
+    if switched || shared.editor.target() != EditTarget::Instance(slug.to_string()) {
+        shared
+            .editor
+            .open(bridge, EditTarget::Instance(slug.to_string()));
+    }
     load(bridge, run, shared, slug);
 }
 

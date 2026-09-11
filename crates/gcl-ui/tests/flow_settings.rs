@@ -12,7 +12,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gcl_core::instances::model::Loader;
-use gcl_ui::{AppWindow, SettingRowModel, SettingsEditorState};
+use gcl_ui::{AppWindow, InstanceState, SettingRowModel, SettingsEditorState};
 use slint::{ComponentHandle, Model};
 use support::TestApp;
 
@@ -35,8 +35,12 @@ fn the_settings_editor_saves_defaults_and_instance_overrides() {
         a_switch_saves_a_launcher_default(app).await;
         a_raw_default_save_keeps_the_editor_search(app).await;
         an_instance_overrides_a_default_and_resets_it(app).await;
+        a_game_exit_keeps_the_editor_search(app).await;
     });
 }
+
+/// How long a flow waits for the stand-in java to start and to be noticed as exited.
+const LAUNCH: Duration = Duration::from_secs(60);
 
 /// The visible editor lines.
 fn lines(window: &AppWindow) -> Vec<SettingRowModel> {
@@ -401,5 +405,42 @@ async fn an_instance_overrides_a_default_and_resets_it(app: &TestApp) {
         saved_default(app, "renderDistance"),
         line(&app.window, "renderDistance").map(|row| row.value.to_string()),
         "the row is back on the value the instance was preseeded with"
+    );
+}
+
+/// (e) A launch and exit refreshes the detail screen, but must not reopen the editor: the
+/// game-exit reload goes through the same guarded `editor.reload` path as every other
+/// refresh, so the filter typed into the search box survives it.
+async fn a_game_exit_keeps_the_editor_search(app: &TestApp) {
+    idle(app).await;
+    search(app, "renderDistance", "renderDistance").await;
+
+    app.click("InstanceScreen::launch_button");
+    app.wait_until(
+        "the game to be running",
+        |window| window.global::<InstanceState>().get_running(),
+        LAUNCH,
+    )
+    .await;
+
+    app.ask_java_to_stop();
+    app.wait_until(
+        "the game to exit on its own",
+        |window| !window.global::<InstanceState>().get_running(),
+        LAUNCH,
+    )
+    .await;
+
+    idle(app).await;
+    let state = app.window.global::<SettingsEditorState>();
+    assert_eq!(
+        state.get_search().to_string(),
+        "renderDistance",
+        "a game-exit reload must not reopen the editor and drop the search box"
+    );
+    assert_eq!(
+        state.get_layer_name().to_string(),
+        "override",
+        "and it must not retarget the editor away from this instance's layer either"
     );
 }
