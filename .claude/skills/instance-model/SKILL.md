@@ -40,7 +40,6 @@ max_mib = 4096
 java_path = ""                  # optional
 gc = "default"                  # seeded into every new instance
 [keys]
-curseforge_api_key = ""         # env wins
 msa_client_id = ""              # env wins
 [game_defaults]                 # options.txt preseed, key = value strings
 "renderDistance" = "12"

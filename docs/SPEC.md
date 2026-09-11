@@ -7,7 +7,9 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 - R1.1 The launcher stores everything under one root directory. Default: the platform data dir plus `grid-craft-launcher` (`~/.local/share/grid-craft-launcher` on Linux).
 - R1.2 The user can change the root in settings. The launcher moves nothing; it starts using the new root and tells the user the old one still exists.
 - R1.3 `config.toml` in the root holds: root path override, default JVM min and max memory, default Java path override, API keys when not in env, default game settings preseed.
-- R1.4 `CURSEFORGE_API_KEY` and `GCL_MSA_CLIENT_ID` come from env first, then `config.toml`.
+- R1.4 `GCL_MSA_CLIENT_ID` comes from env first, then `config.toml`. The CurseForge key comes
+  from the `CURSEFORGE_API_KEY` env var, else the `GCL_CURSEFORGE_API_KEY` compiled into the
+  build; `config.toml` never holds it.
 - R1.5 `GCL_ROOT` env overrides the root. Used by tests and e2e.
 - R1.6 `accounts.json` in the root holds the account list with cached short-lived tokens. Refresh tokens live in the OS keyring (R6.1).
 
@@ -57,7 +59,8 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 - R7.3 Install a chosen version into the right instance folder: mods, resourcepacks, shaderpacks, saves/<world>/datapacks, saves.
 - R7.4 Required dependencies are installed with the item.
 - R7.5 CurseForge files with no download URL show the file's web page and accept a manually dropped file, verified by fingerprint. CLI convention: a command that leaves one or more manual downloads pending (`content add`, `content update --apply`, `modpack install`, `modpack install-file`) exits with code 3, not 0, even though it installed everything it could. Text and JSON output both still list what was installed and what needs a hand download.
-- R7.6 Without `CURSEFORGE_API_KEY`, CurseForge is hidden and Modrinth works.
+- R7.6 With no CurseForge key — neither in the environment nor in the build — CurseForge is
+  hidden and Modrinth works. A user is never asked for a key.
 - R7.7 Update check: for each installed item, find the newest compatible version. The same pass fills in a missing display title on an installed item, at most 25 per run.
 
 ## R8 Modpacks
@@ -120,7 +123,7 @@ tests are there, but no live run has exercised it here).
 | R1.1 | Done | Root defaults to the platform data dir plus `grid-craft-launcher`. |
 | R1.2 | Done | `gcl config root <dir>` and the settings screen change it; nothing moves, and both say the old root stays. |
 | R1.3 | Done | `config.toml` holds the root, JVM defaults, Java path, API keys, and the `options.txt` preseed. |
-| R1.4 | Done | `Config::curseforge_api_key` and `msa_client_id` read env first, then `config.toml`. |
+| R1.4 | Done | `Config::msa_client_id` reads env first, then `config.toml`; `Config::curseforge_api_key` reads env, then the build-time key. |
 | R1.5 | Done | `GCL_ROOT` overrides the root; both e2e scripts run under it. |
 | R1.6 | Done | `accounts.json` holds accounts and cached tokens; refresh tokens go to the keyring. |
 | R2.1 | Done | `instance create --minecraft --loader --loader-version`; the GUI has the same dialog. |
@@ -152,7 +155,7 @@ tests are there, but no live run has exercised it here).
 | R7.3 | Done | Files land in `mods/`, `resourcepacks/`, `shaderpacks/`, `saves/<world>/datapacks/`, and `saves/`. |
 | R7.4 | Done | `content add` walks required dependencies breadth-first, depth 10. |
 | R7.5 | Not verified live | A file with no download URL becomes a pending manual download; `content import-file` verifies it and the command exits 3. Only CurseForge serves such files, so this path has no live run. |
-| R7.6 | Done | Without `CURSEFORGE_API_KEY`, CurseForge is hidden and Modrinth works. |
+| R7.6 | Done | With no key in the environment or the build, CurseForge is hidden and Modrinth works; nothing asks a user for one. |
 | R7.7 | Done | `content update` lists newer compatible versions; `--apply` installs them. The same pass backfills a missing entry title, at most 25 per run, and writes `instance.toml` once, only when something changed. |
 | R8.1 | Done | `.mrpack` imports from the catalog and from a file. `just e2e-modpack` imported Fabulously Optimized live today: 50 content entries. |
 | R8.2 | Not verified live | The CurseForge pack parser and importer are written and unit-tested against synthetic fixtures. No key here, so no live import. |

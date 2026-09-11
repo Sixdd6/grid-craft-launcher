@@ -5,6 +5,11 @@ All notable changes to GRID Craft Launcher are documented here. Format follows
 
 ## Unreleased
 
+- CurseForge access ships with the build. A release carries its own key, compiled in from a CI
+  secret, so there is nothing to enter and no key row in Settings. A developer build reads
+  `CURSEFORGE_API_KEY` from the environment instead. `config.toml` no longer holds a key: a
+  file that still has `keys.curseforge_api_key` loads, logs one warning, and the value is
+  ignored. `gcl config show` prints `curseforge = "enabled"` or `"disabled"`.
 - Browser: search and modpack results line up in columns — Name, Author, Downloads, Last
   updated, and the button — under a header row that names them and, over the button column,
   the Minecraft version and loader every row was checked against. The state line under a

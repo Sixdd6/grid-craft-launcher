@@ -123,17 +123,24 @@ collectors that build carries. `instance jvm <slug> --gc <preset>` saves one of 
 refuses one the Java lacks, naming what it does have. `config set-jvm --gc <preset>` sets the
 preset a newly created instance starts with; it is not read again at launch.
 
-CurseForge: without a `CURSEFORGE_API_KEY` in `.env`, `--source curseforge` is disabled and
-everything above still works against Modrinth. Put a key in `.env` to enable it.
+CurseForge: a release build carries its own CurseForge key, so `--source curseforge` works
+with nothing to set up. A build without one — a `cargo build` from this repo — disables that
+source, and everything above still works against Modrinth. To turn it on while developing,
+put your own key in `CURSEFORGE_API_KEY` in `.env`. `gcl config show` prints
+`curseforge = "enabled"` or `"disabled"`.
 
 ## Secrets
 
 Copy `.env.example` to `.env` and fill in:
 
-- `CURSEFORGE_API_KEY`: from the CurseForge for Studios console. Without it, CurseForge features are disabled and everything else works.
+- `CURSEFORGE_API_KEY`: your own key from the CurseForge for Studios console, for development
+  only. A release carries its key from `GCL_CURSEFORGE_API_KEY`, set at build time from a CI
+  secret, so a user has no key to enter and `config.toml` holds none. Without a key in either
+  place, CurseForge features are disabled and everything else works.
 - `GCL_MSA_CLIENT_ID`: an Azure app registration approved for the Minecraft API. Without it, Microsoft login is disabled and offline mode works.
 
-The launcher reads env first, then `config.toml` in its root directory.
+`GCL_MSA_CLIENT_ID` is read from the environment first, then `config.toml` in the root
+directory. The CurseForge key is never read from `config.toml`.
 
 ## Microsoft login
 

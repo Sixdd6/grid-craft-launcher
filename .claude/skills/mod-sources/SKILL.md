@@ -66,8 +66,24 @@ description behind `GET /mods/{id}/description`, so it still costs two there.
 Constructors: `Modrinth::new(http)` / `Modrinth::with_base_url(http, base)`,
 `CurseForge::new(http, api_key)` / `CurseForge::with_base_url(http, api_key, base)`.
 `Launcher::sources()` uses `new`/`with_base_url` against `Endpoints`, always with Modrinth and
-with CurseForge only when a key was found; the list is cached on the `Launcher`, so a later
-`config_mut()` change to the key does nothing until a new `Launcher` is opened.
+with CurseForge only when a key was found; the list is cached on the `Launcher`, and
+`update_config` clears that cache.
+
+## Where the CurseForge key comes from
+
+`Config::curseforge_api_key()` reads the `CURSEFORGE_API_KEY` environment variable first, then
+the `GCL_CURSEFORGE_API_KEY` compiled into `gcl-core` with `option_env!`. A release build
+carries the key from a CI secret, so a user never enters one; the environment variable is the
+development path, for the api-verifier agent and for recording fixtures. `config.toml` holds
+no key: `Config::load` warns once when an old file still carries `keys.curseforge_api_key`,
+and the value is ignored.
+
+A test cannot set either one, so it uses the seam
+`Launcher::with_curseforge_key("test-key")`, chained onto `Launcher::open_with_endpoints`. It
+overrides the resolver for that launcher and clears the cached source list. `build_sources`
+takes that override first and falls back to `Config::curseforge_api_key()`. A unit test that
+must see CurseForge off also removes `CURSEFORGE_API_KEY` from the environment, because `just`
+loads a `.env` before running the tests.
 
 ## Modrinth
 
