@@ -7,3 +7,6 @@
 /AppDir/
 /dist/
 /packaging/tools/
+
+# editor workspace files
+*.code-workspace
