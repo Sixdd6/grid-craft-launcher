@@ -13,6 +13,8 @@ installers = []
 targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc", "x86_64-apple-darwin", "aarch64-apple-darwin"]
 # Run only `dist plan` on pull requests
 pr-run-mode = "plan"
+# Extra steps for the build jobs: exports the CurseForge key from a repository secret.
+github-build-setup = "dist-build-setup.yml"
 
 # System libraries Slint (winit + FemtoVG) needs on the Linux runner.
 # Same package list as .github/workflows/ci.yml.

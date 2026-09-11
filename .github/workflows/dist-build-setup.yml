@@ -1,0 +1,17 @@
+# Steps dist inserts into every build-local-artifacts job (see `github-build-setup` in
+# dist-workspace.toml). The CurseForge key is compiled into gcl-core through
+# `option_env!("GCL_CURSEFORGE_API_KEY")`, so it must be in the environment before cargo
+# runs. Set the repository secret GCL_CURSEFORGE_API_KEY; without it the release builds
+# with CurseForge off and everything else works.
+- name: Export the CurseForge key for the build
+  shell: bash
+  env:
+    GCL_CURSEFORGE_API_KEY: ${{ secrets.GCL_CURSEFORGE_API_KEY }}
+  run: |
+    if [ -n "$GCL_CURSEFORGE_API_KEY" ]; then
+      echo "::add-mask::$GCL_CURSEFORGE_API_KEY"
+      echo "GCL_CURSEFORGE_API_KEY=$GCL_CURSEFORGE_API_KEY" >> "$GITHUB_ENV"
+      echo "CurseForge key: present"
+    else
+      echo "CurseForge key: absent, building with CurseForge off"
+    fi
