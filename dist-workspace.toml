@@ -14,7 +14,7 @@ targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc", "x86_64-apple-d
 # Do not run the release workflow on pull requests; only a release tag builds
 pr-run-mode = "skip"
 # Extra steps for the build jobs: exports the CurseForge key from a repository secret.
-github-build-setup = "dist-build-setup.yml"
+github-build-setup = "../dist-build-setup.yml"
 
 # System libraries Slint (winit + FemtoVG) needs on the Linux runner.
 # Same package list as .github/workflows/ci.yml.
