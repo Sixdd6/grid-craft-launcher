@@ -82,15 +82,40 @@ export component AccountsScreen inherits Rectangle {
         if AccountsState.rows.length > 0: keys := FocusScope {
             vertical-stretch: 1;
 
+            // Rows a PageUp/PageDown steps by: however many the list shows at once.
+            property <int> page: max(1, floor(self.height / Theme.row-height));
+
+            // Keeps the selected row inside the viewport after a key moves it.
+            function ensure-visible(index: int) {
+                if (index < 0) {
+                    return;
+                }
+                if (-list.viewport-y > index * Theme.row-height) {
+                    list.viewport-y = -index * Theme.row-height;
+                }
+                if (-list.viewport-y + list.visible-height < (index + 1) * Theme.row-height) {
+                    list.viewport-y = list.visible-height - (index + 1) * Theme.row-height;
+                }
+            }
+
             key-pressed(event) => {
                 if (event.text == Key.UpArrow) {
                     root.selected =
                         Shell.move_selection(root.selected, -1, AccountsState.rows.length);
+                    self.ensure-visible(root.selected);
                     return EventResult.accept;
                 }
                 if (event.text == Key.DownArrow) {
                     root.selected =
                         Shell.move_selection(root.selected, 1, AccountsState.rows.length);
+                    self.ensure-visible(root.selected);
+                    return EventResult.accept;
+                }
+                if (event.text == Key.Home || event.text == Key.End
+                    || event.text == Key.PageUp || event.text == Key.PageDown) {
+                    root.selected = Shell.jump(
+                        root.selected, event.text, self.page, AccountsState.rows.length);
+                    self.ensure-visible(root.selected);
                     return EventResult.accept;
                 }
                 if (event.text == Key.Return) {
@@ -103,7 +128,7 @@ export component AccountsScreen inherits Rectangle {
                 return EventResult.reject;
             }
 
-            ListView {
+            list := ListView {
             width: 100%;
             height: 100%;
 

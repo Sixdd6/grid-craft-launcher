@@ -93,9 +93,7 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, editor: &Editor) {
 
     {
         let (bridge, editor) = (bridge.clone(), editor.clone());
-        state.on_default_set(move |key, value| {
-            default_set(&bridge, &editor, key.as_str(), value.as_str());
-        });
+        state.on_choose_root(move || choose_root(&bridge, &editor));
     }
 
     {
@@ -171,6 +169,34 @@ fn apply_view(window: &AppWindow, view: &ConfigView) {
     });
 }
 
+/// Opens the OS folder picker for a new app root, starting at the root in use now.
+///
+/// The dialog itself runs in the job closure, off the UI thread, the same as any other
+/// `Bridge::run` call; `pick_folder` blocks the thread it runs on until the user answers. A
+/// picked path goes through [`save_root`], the one writer of the config's root. A cancelled
+/// picker, or a platform with no portal to answer it, comes back `None` and nothing happens:
+/// this is not an error, so no dialog opens for it.
+fn choose_root(bridge: &Bridge, editor: &Editor) {
+    let after = (bridge.clone(), editor.clone());
+    bridge.run(
+        "Choose app root",
+        |launcher| {
+            let current = launcher.root().path().to_path_buf();
+            let picked = rfd::FileDialog::new()
+                .set_title("Choose app root")
+                .set_directory(current)
+                .pick_folder();
+            Ok(picked)
+        },
+        move |_window, picked| {
+            let Some(path) = picked else {
+                return;
+            };
+            save_root(&after.0, &after.1, path.display().to_string().as_str());
+        },
+    );
+}
+
 /// Points the launcher at another app root. Nothing is moved.
 fn save_root(bridge: &Bridge, editor: &Editor, path: &str) {
     let path = path.trim().to_string();
@@ -188,9 +214,6 @@ fn save_root(bridge: &Bridge, editor: &Editor, path: &str) {
         },
         move |window, result| {
             if let Ok(old) = &result {
-                window
-                    .global::<SettingsState>()
-                    .set_new_root(SharedString::new());
                 window
                     .global::<SettingsState>()
                     .set_status(root_change_status(old).into());
@@ -299,43 +322,6 @@ fn save_key(bridge: &Bridge, editor: &Editor, key: Key, value: &str) {
                 window
                     .global::<SettingsState>()
                     .set_status(key_status(key.label(), cleared).into());
-            }
-            done(window, &after.0, &after.1, result.is_ok());
-        },
-    );
-}
-
-/// Adds or replaces one `options.txt` default.
-fn default_set(bridge: &Bridge, editor: &Editor, key: &str, value: &str) {
-    let Some(window) = bridge.weak().upgrade() else {
-        return;
-    };
-    let (key, value) = (key.trim().to_string(), value.to_string());
-    // A key with a `:` in it, or a line break in either half, would be read back as
-    // something else, so it is refused here rather than written out.
-    if let Err(err) = gcl_core::settings::validate_key(&key)
-        .and_then(|()| gcl_core::settings::validate_value(&value))
-    {
-        window
-            .global::<SettingsState>()
-            .set_status(error_chain(&err).into());
-        return;
-    }
-    let shown = key.clone();
-    let after = (bridge.clone(), editor.clone());
-    busy(bridge, true);
-    bridge.run_with_error(
-        "Save game default",
-        move |launcher| {
-            launcher.update_config(|config| {
-                config.game_defaults.insert(key.clone(), value.clone());
-            })
-        },
-        move |window, result| {
-            if result.is_ok() {
-                window
-                    .global::<SettingsState>()
-                    .set_status(format!("default {shown} saved").into());
             }
             done(window, &after.0, &after.1, result.is_ok());
         },

@@ -31,7 +31,7 @@ export component Dialog inherits Rectangle {
     callback confirm();
 
     visible: root.open;
-    background: Colors.black.with-alpha(0.55);
+    background: Theme.backdrop;
     forward-focus: keys;
 
     // The window mounts a dialog only while it is up, so the keyboard is taken on the way in,
@@ -66,9 +66,12 @@ export component Dialog inherits Rectangle {
         width: min(root.width - 4 * Theme.pad, root.wide ? Theme.dialog-width-wide : Theme.dialog-width);
         height: panel.preferred-height;
         background: Theme.surface;
-        border-radius: Theme.radius;
+        border-radius: Theme.radius-card;
         border-width: 1px;
         border-color: Theme.border;
+        drop-shadow-color: Theme.shadow-color;
+        drop-shadow-blur: Theme.shadow-blur;
+        drop-shadow-offset-y: Theme.shadow-offset-y;
 
         // Swallows clicks so they do not reach the overlay behind the panel.
         TouchArea {
@@ -89,13 +92,14 @@ export component Dialog inherits Rectangle {
             }
 
             panel := VerticalLayout {
-                padding: Theme.pad;
+                padding: Theme.pad-screen;
                 spacing: Theme.gap;
 
                 Text {
                     text: root.title;
                     color: Theme.text;
                     font-size: Theme.font-size-title;
+                    font-weight: Theme.font-weight-medium;
                 }
 
                 @children

@@ -48,6 +48,10 @@ struct Shared {
     candidates: Arc<Mutex<Vec<UpdateCandidate>>>,
     /// The manual downloads the loaded instance still needs, by project id.
     pending: Arc<Mutex<Vec<ManualDownload>>>,
+    /// Every installed row the last load read, before `content_filter` narrows it.
+    /// `InstanceState.content` is what `content_filter` leaves of this; a filter change
+    /// re-derives it from here, never from the (already narrowed) rows on screen.
+    content: Arc<Mutex<Vec<ContentRow>>>,
     /// The slug whose data is in `InstanceState` right now. It is what tells a fresh open
     /// from a re-read of the instance already on screen: only the first one throws away the
     /// game log and the status line, which no read from disk can fill again.
@@ -79,6 +83,19 @@ impl Shared {
     /// Replaces the pending manual downloads.
     fn set_pending(&self, list: Vec<ManualDownload>) {
         *self.pending.lock().unwrap_or_else(|err| err.into_inner()) = list;
+    }
+
+    /// Replaces the full, unfiltered content list a load just read.
+    fn set_content_rows(&self, rows: Vec<ContentRow>) {
+        *self.content.lock().unwrap_or_else(|err| err.into_inner()) = rows;
+    }
+
+    /// A copy of the full, unfiltered content list.
+    fn content_rows(&self) -> Vec<ContentRow> {
+        self.content
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone()
     }
 
     /// Marks `slug` as the instance on screen, and says whether that is a change.
@@ -134,9 +151,10 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState, editor: &Editor
 
     {
         let weak = bridge.weak().clone();
+        let shared = shared.clone();
         state.on_clear(move || {
             if let Some(window) = weak.upgrade() {
-                clear_view(&window);
+                clear_view(&window, &shared);
             }
         });
     }
@@ -230,6 +248,16 @@ pub fn wire(window: &AppWindow, bridge: &Bridge, run: &RunState, editor: &Editor
                     load(&bridge, &run, &shared, &slug);
                 },
             );
+        });
+    }
+
+    {
+        let weak = bridge.weak().clone();
+        let shared = shared.clone();
+        state.on_filter_changed(move || {
+            if let Some(window) = weak.upgrade() {
+                apply_content_filter(&window, &shared);
+            }
         });
     }
 
@@ -574,7 +602,7 @@ fn open(bridge: &Bridge, run: &RunState, shared: &Shared, slug: &str) {
     // keeps both: the launch that just ended set the status line and filled the log.
     let switched = shared.take_over(slug);
     if switched && let Some(window) = bridge.weak().upgrade() {
-        clear_view(&window);
+        clear_view(&window, shared);
     }
     if switched || shared.editor.target() != EditTarget::Instance(slug.to_string()) {
         shared
@@ -588,7 +616,8 @@ fn open(bridge: &Bridge, run: &RunState, shared: &Shared, slug: &str) {
 ///
 /// The prompt's labels are left alone: they are what the prompt says, not what an instance
 /// holds, and the prompt itself is closed here.
-fn clear_view(window: &AppWindow) {
+fn clear_view(window: &AppWindow, shared: &Shared) {
+    shared.set_content_rows(Vec::new());
     let state = window.global::<InstanceState>();
     state.set_name(SharedString::new());
     state.set_minecraft(SharedString::new());
@@ -597,6 +626,7 @@ fn clear_view(window: &AppWindow) {
     state.set_running(false);
     state.set_status_text(SharedString::new());
     state.set_tab(0);
+    state.set_content_filter(SharedString::new());
     state.set_content(ModelRc::new(VecModel::from(Vec::<ContentRow>::new())));
     state.set_pending(ModelRc::new(VecModel::from(Vec::<PendingRow>::new())));
     state.set_has_options(false);
@@ -662,7 +692,8 @@ fn load(bridge: &Bridge, run: &RunState, shared: &Shared, slug: &str) {
             let candidates = shared.candidates();
             let rows = content_rows(&loaded.content, &candidates);
             state.set_update_count(rows.iter().filter(|row| row.update_available).count() as i32);
-            state.set_content(ModelRc::new(VecModel::from(rows)));
+            shared.set_content_rows(rows);
+            apply_content_filter(window, &shared);
 
             let pending = loaded.summary.pending_manual.clone();
             state.set_pending(ModelRc::new(VecModel::from(pending_rows(&pending))));
@@ -807,6 +838,32 @@ pub fn jvm_valid(min: i32, max: i32) -> bool {
     (HEAP_MIN_MIB..=HEAP_MAX_MIB).contains(&min)
         && (HEAP_MIN_MIB..=HEAP_MAX_MIB).contains(&max)
         && min <= max
+}
+
+/// Re-derives `InstanceState.content` from the full row list `shared` holds and whatever
+/// `InstanceState.content_filter` holds right now. Called after every load and every time the
+/// search box changes, so a filtered list is never built from an already-narrowed one.
+fn apply_content_filter(window: &AppWindow, shared: &Shared) {
+    let state = window.global::<InstanceState>();
+    let all = shared.content_rows();
+    let filtered = filter_content_rows(&all, state.get_content_filter().as_str());
+    state.set_content(ModelRc::new(VecModel::from(filtered)));
+}
+
+/// Keeps the rows whose title or file name contains `filter`, ignoring case. An empty filter
+/// keeps every row.
+pub fn filter_content_rows(rows: &[ContentRow], filter: &str) -> Vec<ContentRow> {
+    let needle = filter.trim().to_lowercase();
+    if needle.is_empty() {
+        return rows.to_vec();
+    }
+    rows.iter()
+        .filter(|row| {
+            row.name.to_lowercase().contains(&needle)
+                || row.file_name.to_lowercase().contains(&needle)
+        })
+        .cloned()
+        .collect()
 }
 
 /// Builds the content rows, marking every entry a candidate names as updatable, sorted by the

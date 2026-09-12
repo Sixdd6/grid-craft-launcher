@@ -38,6 +38,14 @@ export global BrowserState {
     in-out property <int> kind_index: 0;
     // Minecraft version filter, empty for any.
     in-out property <string> minecraft: "";
+    // Minecraft versions the ComboBox offers, `"any"` first. Rust fills the rest in `open()`
+    // from the Mojang manifest, so the combo shows only `["any", <prefilled version>]` until
+    // that job answers.
+    in-out property <[string]> minecraft_options: [];
+    // Index into `minecraft_options`, kept in step with `minecraft` the same way `loader`
+    // and `loader_index` are: the ComboBox only moves its selection through `current-index`,
+    // and `minecraft` is what the search actually reads.
+    in-out property <int> minecraft_index: 0;
     // Loader filter: `any`, or one loader slug. Rust reads this one; the ComboBox drives
     // `loader_index`, and `screens/browser.rs` keeps the two in step.
     in-out property <string> loader: "";
@@ -131,6 +139,9 @@ export global BrowserState {
     callback set_target(int);
     // The loader ComboBox changed. Carries its new index into `loader_options`.
     callback set_loader(int);
+    // The Minecraft version ComboBox settled on an index, 500ms after the last change: sets
+    // `minecraft` (`"any"` maps to `""`) and `minecraft_index`, then runs the search.
+    callback set_minecraft(int);
     // A data pack row's Add button was pressed: ask which world it goes into. Carries the
     // project id and the row's own kind.
     callback pick_world(string /* project_id */, string /* kind */);
@@ -156,6 +167,12 @@ export component BrowserScreen inherits Rectangle {
     // Result row the keyboard is on, or -1 while nothing is chosen. Arrow keys move it and
     // Enter runs the same action as the row's primary button.
     in-out property <int> selected: -1;
+
+    // The index `mc_combo` last reported, held until `mc_commit` fires: a ComboBox reports
+    // every arrow step, not only the value the user settles on.
+    property <int> pending_minecraft: 0;
+    // How long `mc_combo` waits after the last change before it commits.
+    property <duration> commit_delay: 500ms;
 
     // A row's title was clicked: open its project details. Carries the row's own download
     // count and author, already formatted, since `Launcher::project_details` answers with
@@ -369,12 +386,31 @@ export component BrowserScreen inherits Rectangle {
                 horizontal-stretch: 0;
             }
 
-            mc_field := LineEdit {
-                width: 100px;
-                placeholder-text: "any";
-                text <=> BrowserState.minecraft;
-                accepted => {
-                    BrowserState.search();
+            mc_combo := ComboBox {
+                width: 140px;
+                model: BrowserState.minecraft_options;
+                // Two-way: `ComboBoxBase` assigns `current-index` itself (`reset-current`,
+                // on a model change and on `select()`), which severs a plain one-way binding
+                // the first time either happens. `<=>` is what lets a later
+                // `BrowserState.minecraft_index` write from Rust — a target change, or
+                // `load_minecraft_options` answering — still reach the widget afterwards.
+                current-index <=> BrowserState.minecraft_index;
+                selected => {
+                    // A ComboBox reports every arrow step, not only the value the user
+                    // settles on, so this only holds the pending index until `mc_commit`
+                    // fires — the same debounce shape `SettingRow`'s choice combo uses.
+                    root.pending_minecraft = self.current-index;
+                    mc_commit.running = true;
+                    mc_commit.restart();
+                }
+            }
+
+            mc_commit := Timer {
+                interval: root.commit_delay;
+                running: false;
+                triggered => {
+                    self.running = false;
+                    BrowserState.set_minecraft(root.pending_minecraft);
                 }
             }
 
@@ -389,7 +425,9 @@ export component BrowserScreen inherits Rectangle {
             loader_combo := ComboBox {
                 width: 120px;
                 model: BrowserState.loader_options;
-                current-index: BrowserState.loader_index;
+                // Two-way, the same reason `mc_combo` is: `ComboBoxBase` assigns
+                // `current-index` itself and a one-way binding does not survive that.
+                current-index <=> BrowserState.loader_index;
                 selected => {
                     BrowserState.set_loader(self.current-index);
                 }
@@ -409,7 +447,8 @@ export component BrowserScreen inherits Rectangle {
             if !BrowserState.fixed_target && !root.modpack_mode: target_combo := ComboBox {
                 width: 200px;
                 model: BrowserState.target_labels;
-                current-index: BrowserState.target_index;
+                // Two-way, the same reason `mc_combo` is.
+                current-index <=> BrowserState.target_index;
                 enabled: BrowserState.target_labels.length > 0;
                 selected => {
                     BrowserState.set_target(self.current-index);
@@ -747,15 +786,29 @@ export component BrowserScreen inherits Rectangle {
             vertical-stretch: root.modpack_mode || BrowserState.loading
                 || BrowserState.rows.length == 0 ? 0 : 1;
 
+            // Rows a PageUp/PageDown steps by: however many the list shows at once.
+            property <int> page: max(1, floor(self.height / Theme.row-height));
+            // The row a key press just chose, so the list (mounted or not) can scroll to it.
+            property <int> want-visible: -1;
+
             key-pressed(event) => {
                 if (event.text == Key.UpArrow) {
                     root.selected =
                         Shell.move_selection(root.selected, -1, BrowserState.rows.length);
+                    self.want-visible = root.selected;
                     return EventResult.accept;
                 }
                 if (event.text == Key.DownArrow) {
                     root.selected =
                         Shell.move_selection(root.selected, 1, BrowserState.rows.length);
+                    self.want-visible = root.selected;
+                    return EventResult.accept;
+                }
+                if (event.text == Key.Home || event.text == Key.End
+                    || event.text == Key.PageUp || event.text == Key.PageDown) {
+                    root.selected = Shell.jump(
+                        root.selected, event.text, self.page, BrowserState.rows.length);
+                    self.want-visible = root.selected;
                     return EventResult.accept;
                 }
                 if (event.text == Key.Return) {
@@ -766,9 +819,29 @@ export component BrowserScreen inherits Rectangle {
             }
 
             if !root.modpack_mode && !BrowserState.loading
-                && BrowserState.rows.length > 0: ListView {
+                && BrowserState.rows.length > 0: list := ListView {
                 width: 100%;
                 height: 100%;
+
+                // Keeps the selected row inside the viewport after a key moves it. Lives here
+                // rather than on the enclosing scope because a conditionally mounted element
+                // cannot be reached by id from outside its own `if`. Rows here are variable
+                // height (a wrapped title), so this is an approximation from `Theme.row-height`
+                // rather than the exact offset.
+                property <int> want-visible <=> keys.want-visible;
+                changed want-visible => {
+                    if (self.want-visible < 0) {
+                        return;
+                    }
+                    if (-self.viewport-y > self.want-visible * Theme.row-height) {
+                        self.viewport-y = -self.want-visible * Theme.row-height;
+                    }
+                    if (-self.viewport-y + self.visible-height
+                        < (self.want-visible + 1) * Theme.row-height) {
+                        self.viewport-y = self.visible-height
+                            - (self.want-visible + 1) * Theme.row-height;
+                    }
+                }
 
                 for row[i] in BrowserState.rows: row_open := ListRow {
                     title: row.title;
@@ -994,8 +1067,17 @@ export component PreviewBrowserScreen inherits BrowserScreen {
         BrowserState.query = "sodium";
         BrowserState.source_labels = ["modrinth", "curseforge"];
         BrowserState.minecraft = "1.20.1";
+        BrowserState.minecraft_options = ["any", "1.20.1", "1.19.4"];
+        // Not `minecraft_index`/`loader_index`: `mc_combo` and `loader_combo`'s own
+        // `current-index <=> BrowserState.x_index` has to be a two-way alias for the real
+        // app (the combo's own arrow-key selection has to win over the state behind it, the
+        // same reason `InstanceScreen`'s `gc_combo` is one). Assigning either index from here
+        // panics the interpreter ("accessing deleted parent", slint#6426): writing the alias
+        // from a component's own `init`, before its children have finished wiring up, tries
+        // to sync the other half of that alias before it exists. Both combos start on row 0
+        // ("any") in this preview instead; open a live `ui-preview` session and pick a row by
+        // hand to see either move.
         BrowserState.loader = "fabric";
-        BrowserState.loader_index = 1;
         // What `target_label()` actually reads: the target the (imagined) latest-version
         // job resolved against, kept in step with the filters above for the preview.
         BrowserState.latest_minecraft = "1.20.1";

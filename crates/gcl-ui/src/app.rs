@@ -10,7 +10,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::bridge::Bridge;
 use crate::events::start_forwarder;
-use crate::keys::{key_to_screen, move_selection};
+use crate::keys::{jump, key_to_screen, move_selection};
 use crate::state::RunState;
 use crate::{App, AppWindow, Screen, Shell, events, toasts};
 
@@ -79,6 +79,7 @@ pub fn build(
     // `App` is declared in `app.slint`, which imports the screens and so cannot be imported
     // back by one.
     shell.on_move_selection(move_selection);
+    shell.on_jump(|current, key, page, len| jump(&key, current, page, len).unwrap_or(-1));
 
     let weak = window.as_weak();
     app.on_dismiss_error(move || {

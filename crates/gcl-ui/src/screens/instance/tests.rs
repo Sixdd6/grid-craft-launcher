@@ -4,7 +4,7 @@ use gcl_core::content::{ManualDownload, UpdateCandidate};
 use gcl_core::instances::model::{ContentEntry, ContentKind, GcPreset};
 use gcl_core::sources::{ReleaseKind, SourceId, Version};
 
-use super::{content_rows, instance_jvm, jvm_valid, pending_rows};
+use super::{content_rows, filter_content_rows, instance_jvm, jvm_valid, pending_rows};
 
 /// An installed entry with only the fields these helpers read.
 fn entry(project_id: &str, file_name: &str) -> ContentEntry {
@@ -155,6 +155,56 @@ fn content_rows_marks_nothing_without_candidates() {
     let entries = vec![entry("sodium", "sodium-0.5.8.jar")];
     let rows = content_rows(&entries, &[]);
     assert!(!rows[0].update_available);
+}
+
+#[test]
+fn filter_content_rows_matches_the_title_case_insensitive() {
+    let entries = vec![
+        titled_entry("sodium", "sodium-0.5.8.jar", "Sodium"),
+        titled_entry("lithium", "l.jar", "Lithium"),
+    ];
+    let rows = content_rows(&entries, &[]);
+    let filtered = filter_content_rows(&rows, "sod");
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].project_id.as_str(), "sodium");
+
+    let filtered = filter_content_rows(&rows, "LITH");
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].project_id.as_str(), "lithium");
+}
+
+#[test]
+fn filter_content_rows_matches_the_file_name_case_insensitive() {
+    let entries = vec![
+        entry("sodium", "sodium-0.5.8.jar"),
+        entry("lithium", "lithium-mod.jar"),
+    ];
+    let rows = content_rows(&entries, &[]);
+    let filtered = filter_content_rows(&rows, "MOD");
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].project_id.as_str(), "lithium");
+}
+
+#[test]
+fn filter_content_rows_with_an_empty_filter_keeps_every_row() {
+    let entries = vec![
+        entry("sodium", "sodium-0.5.8.jar"),
+        entry("lithium", "lithium-mod.jar"),
+    ];
+    let rows = content_rows(&entries, &[]);
+    assert_eq!(filter_content_rows(&rows, "").len(), 2);
+    assert_eq!(
+        filter_content_rows(&rows, "   ").len(),
+        2,
+        "blank is empty too"
+    );
+}
+
+#[test]
+fn filter_content_rows_with_no_match_answers_no_rows() {
+    let entries = vec![entry("sodium", "sodium-0.5.8.jar")];
+    let rows = content_rows(&entries, &[]);
+    assert!(filter_content_rows(&rows, "nonexistent").is_empty());
 }
 
 #[test]

@@ -13,6 +13,7 @@ use gcl_core::content::{AddRequest, DependencyConflict};
 use gcl_core::instances::Instance;
 use gcl_core::instances::model::{ContentKind, Loader};
 use gcl_core::launcher::{InstallState, LatestVersion, VersionTarget};
+use gcl_core::mojang::manifest::{ManifestEntry, VersionType};
 use gcl_core::sources::{SearchHit, SearchQuery, SourceId};
 use slint::{
     ComponentHandle, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
@@ -288,6 +289,26 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
     {
         let bridge = bridge.clone();
         let shared = shared.clone();
+        state.on_set_minecraft(move |index| {
+            let Some(window) = bridge.weak().upgrade() else {
+                return;
+            };
+            let state = window.global::<BrowserState>();
+            let options: Vec<String> = state
+                .get_minecraft_options()
+                .iter()
+                .map(|o| o.to_string())
+                .collect();
+            state.set_minecraft_index(index);
+            state.set_minecraft(minecraft_string_at(&options, index).into());
+            set_page(&bridge, 0);
+            search(&bridge, &shared);
+        });
+    }
+
+    {
+        let bridge = bridge.clone();
+        let shared = shared.clone();
         state.on_set_target(move |index| {
             let Some(window) = bridge.weak().upgrade() else {
                 return;
@@ -452,6 +473,9 @@ struct Opened {
 /// from the rail — the screen offers a ComboBox of every instance instead.
 fn open(bridge: &Bridge, shared: &Shared) {
     let shared = shared.clone();
+    let bridge_for_search = bridge.clone();
+    let shared_for_search = shared.clone();
+    let bridge_for_manifest = bridge.clone();
     run_reporting(
         bridge,
         "Open browser",
@@ -495,7 +519,7 @@ fn open(bridge: &Bridge, shared: &Shared) {
                     .iter()
                     .map(|target| target.name.as_str().into())
                     .collect();
-                let index = clamp_index(state.get_target_index().max(0), opened.targets.len());
+                let index = target_index_for(state.get_target_index(), &slug, &opened.targets);
                 state.set_fixed_target(false);
                 state.set_target_labels(ModelRc::new(VecModel::from(names)));
                 state.set_target_index(index);
@@ -516,6 +540,29 @@ fn open(bridge: &Bridge, shared: &Shared) {
             }
 
             state.set_status(source_status(&opened.sources).into());
+
+            // The combo shows `["any", <prefilled version>]` at once; `load_minecraft_options`
+            // fills the rest once the manifest job answers.
+            let target_version = state.get_minecraft().to_string();
+            let placeholder = minecraft_options(&[], some_text(&target_version).as_deref());
+            let index = minecraft_index_for(&placeholder, &target_version);
+            state.set_minecraft_options(ModelRc::new(VecModel::from(
+                placeholder
+                    .iter()
+                    .map(|option| SharedString::from(option.as_str()))
+                    .collect::<Vec<_>>(),
+            )));
+            state.set_minecraft_index(index);
+
+            // A page of hits belongs to a search that ran. Coming back from the project
+            // screen already has one on screen (`returning`, handled above); every other
+            // open runs the current kind's search itself, with whatever query and filters
+            // are already on screen (normally none), so the browser never opens empty.
+            if !returning {
+                set_page(&bridge_for_search, 0);
+                search(&bridge_for_search, &shared_for_search);
+            }
+            load_minecraft_options(&bridge_for_manifest, target_version);
         },
     );
 }
@@ -943,6 +990,107 @@ pub fn loader_option_index(slug: &str) -> i32 {
         .unwrap_or(0) as i32
 }
 
+/// What the Minecraft version ComboBox shows for "do not filter".
+const ANY_MINECRAFT: &str = "any";
+
+/// The Minecraft version ComboBox rows: `"any"` first, then every release in `entries`, in
+/// the order the manifest already carries them (newest first). `target` is the version the
+/// instance being searched for actually runs; when it names one `entries` does not (a
+/// snapshot, or `entries` not loaded yet), it is inserted right after `"any"` so the row the
+/// filters are prefilled with is always on the list.
+pub fn minecraft_options(entries: &[ManifestEntry], target: Option<&str>) -> Vec<String> {
+    let mut options = vec![ANY_MINECRAFT.to_string()];
+    options.extend(
+        entries
+            .iter()
+            .filter(|entry| entry.kind == VersionType::Release)
+            .map(|entry| entry.id.clone()),
+    );
+    if let Some(version) = target
+        && !version.is_empty()
+        && !options.iter().any(|option| option == version)
+    {
+        options.insert(1, version.to_string());
+    }
+    options
+}
+
+/// The ComboBox row for one Minecraft version string (`""` is "any"). A version not on the
+/// list — the manifest job has not answered yet, or the version has vanished from it — reads
+/// as row 0, the same "any" fallback `loader_option_at` uses for an index outside its list.
+pub fn minecraft_index_for(options: &[String], value: &str) -> i32 {
+    if value.is_empty() {
+        return 0;
+    }
+    options
+        .iter()
+        .position(|option| option == value)
+        .map(|index| index as i32)
+        .unwrap_or(0)
+}
+
+/// Makes sure the Minecraft ComboBox has a row for `version`, inserting it right after "any"
+/// when it is missing, and answers with the row's index either way. A blank `version` ("any",
+/// or a target with none set) is row 0 and never grows the list.
+pub fn ensure_minecraft_option(options: &[String], version: &str) -> (Vec<String>, i32) {
+    if version.is_empty() {
+        return (options.to_vec(), 0);
+    }
+    if let Some(index) = options.iter().position(|option| option == version) {
+        return (options.to_vec(), index as i32);
+    }
+    let mut updated = options.to_vec();
+    let insert_at = if updated.is_empty() { 0 } else { 1 };
+    updated.insert(insert_at, version.to_string());
+    (updated, insert_at as i32)
+}
+
+/// The search string for one ComboBox row: `"any"` maps to `""`, the search filter's own
+/// spelling of "do not filter"; every other row is its own version id.
+pub fn minecraft_string_at(options: &[String], index: i32) -> String {
+    usize::try_from(index)
+        .ok()
+        .and_then(|index| options.get(index))
+        .map(|option| {
+            if option == ANY_MINECRAFT {
+                String::new()
+            } else {
+                option.clone()
+            }
+        })
+        .unwrap_or_default()
+}
+
+/// Fills `minecraft_options` from the Mojang manifest, a `Bridge` job of its own so it never
+/// holds up the search `open()` already ran with whatever the combo showed before it answers.
+/// `target_version` is the target instance's own version, captured when `open()` ran, so the
+/// snapshot-insertion rule above still applies once the full list is in.
+fn load_minecraft_options(bridge: &Bridge, target_version: String) {
+    bridge.run(
+        "Load Minecraft versions",
+        |launcher| launcher.list_versions(),
+        move |window, manifest| {
+            let state = window.global::<BrowserState>();
+            let target = some_text(&target_version);
+            let options = minecraft_options(&manifest.versions, target.as_deref());
+            let labels: Vec<SharedString> = options
+                .iter()
+                .map(|option| option.as_str().into())
+                .collect();
+            // The model always lands first: `mc_combo`'s own `current-index <=>
+            // BrowserState.minecraft_index` two-way binding runs `reset-current` on `changed
+            // model`, so setting the index before the model would have it clamped against the
+            // list this call is about to replace. And this reads `target_version` — the
+            // version `open()` captured before this job was even started — not
+            // `state.get_minecraft()`: the combo may have kept ticking through the debounce
+            // window while the manifest job was in flight, and the job answering must not
+            // stomp a pick the user already made.
+            state.set_minecraft_options(ModelRc::new(VecModel::from(labels)));
+            state.set_minecraft_index(minecraft_index_for(&options, &target_version));
+        },
+    );
+}
+
 /// Reads the loader filter. `any`, an empty field, and an unknown name all mean "do not
 /// filter", which is what the source sees as `None`.
 pub fn parse_loader(text: &str) -> Option<Loader> {
@@ -1004,6 +1152,24 @@ pub fn clamp_index(index: i32, len: usize) -> i32 {
     index.clamp(0, len as i32 - 1)
 }
 
+/// The target ComboBox row `open()` should land on.
+///
+/// `current_slug` is `App.current_slug`, the instance the shell already has open — the one the
+/// browser must default to when it is reached from the rail, not whichever row the ComboBox
+/// happened to hold from a previous visit. Its position in `targets` wins whenever it names one
+/// of them; an empty slug (nothing open) or a slug that has since vanished from the list falls
+/// back to `previous`, clamped into range the same way every other ComboBox index is.
+fn target_index_for(previous: i32, current_slug: &str, targets: &[Target]) -> i32 {
+    if !current_slug.is_empty()
+        && let Some(index) = targets
+            .iter()
+            .position(|target| target.slug == current_slug)
+    {
+        return index as i32;
+    }
+    clamp_index(previous.max(0), targets.len())
+}
+
 /// The instance's slug, name, and filters, as one possible target.
 fn target(instance: &Instance) -> Target {
     Target {
@@ -1027,7 +1193,31 @@ fn apply_target(state: &BrowserState<'_>, target: Option<&Target>) {
     state.set_target_slug(target.slug.as_str().into());
     state.set_target_name(target.name.as_str().into());
     state.set_minecraft(target.minecraft.as_str().into());
+    set_minecraft_filter(state, &target.minecraft);
     set_loader_filter(state, &target.loader);
+}
+
+/// Writes the Minecraft filter and the ComboBox row that shows it, so the two never disagree.
+///
+/// `minecraft_options` only ever gained the version the target held when the browser first
+/// opened: a target picked afterwards — through the ComboBox, or `open()` landing on a
+/// different instance from the rail — can name a version the manifest job never inserted,
+/// and the row that would show it does not exist yet. `ensure_minecraft_option` adds it, the
+/// same way `minecraft_options` seeds the placeholder list in `open()`.
+fn set_minecraft_filter(state: &BrowserState<'_>, version: &str) {
+    let options: Vec<String> = state
+        .get_minecraft_options()
+        .iter()
+        .map(|option| option.to_string())
+        .collect();
+    let (options, index) = ensure_minecraft_option(&options, version);
+    state.set_minecraft_options(ModelRc::new(VecModel::from(
+        options
+            .iter()
+            .map(|option| SharedString::from(option.as_str()))
+            .collect::<Vec<_>>(),
+    )));
+    state.set_minecraft_index(index);
 }
 
 /// Writes the loader filter and the ComboBox row that shows it, so the two never disagree.

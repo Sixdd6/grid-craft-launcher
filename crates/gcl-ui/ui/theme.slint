@@ -1,34 +1,50 @@
 // Design tokens. Dark first. Every screen reads colors, spacing, and font sizes from here,
-// never from literals.
+// never from literals. See docs/design/ui-standard.md for the standard this file implements.
 export global Theme {
     // Surfaces, darkest to lightest.
-    out property <color> bg: #121417;
-    out property <color> surface: #1b1e23;
-    out property <color> surface-raised: #23272e;
-    out property <color> surface-hover: #2b3038;
+    out property <color> bg: #07070f;
+    out property <color> surface: #14141f;
+    out property <color> surface-raised: #1c1c2b;
+    out property <color> surface-hover: #ffffff11;
     // The odd-row tint in a dense list, one step off `surface`: subtle enough that a row's
     // own hover and selection colors still read clearly over it.
-    out property <color> surface-alt: #1f2228;
-    out property <color> border: #2e333b;
+    out property <color> surface-alt: #ffffff08;
+    out property <color> border: #22223a;
 
     // Text.
-    out property <color> text: #e6e8eb;
-    out property <color> text-muted: #9aa1ab;
+    out property <color> text: #ffffff;
+    out property <color> text-muted: #c8c8dc;
 
     // Accents and status.
-    out property <color> accent: #5ac8fa;
-    out property <color> accent-text: #0b1014;
-    out property <color> danger: #ff5c5c;
-    out property <color> success: #5ad18a;
-    out property <color> warning: #f0b429;
-    out property <color> focus: #7fd8ff;
+    out property <color> accent: #8b74e8;
+    // Hover tint for a primary button and a `ComboBox` debounce highlight.
+    out property <color> accent-hover: #a18fff;
+    // Pressed tint for a primary button.
+    out property <color> accent-pressed: #6043c8;
+    out property <color> accent-text: #ffffff;
+    out property <color> danger: #ff5050;
+    out property <color> success: #4ade80;
+    out property <color> warning: #fbbf24;
+    out property <color> focus: accent-hover;
+    // The one shadow level, on dialogs and toasts only: black at 35 % alpha.
+    out property <color> shadow-color: #00000059;
+    // The dialog backdrop: black at 55 % alpha.
+    out property <color> backdrop: #0000008c;
 
     // Metrics.
-    out property <length> radius: 6px;
+    // Control radius: buttons, fields, combo boxes. Kept as `radius` so existing files
+    // compile; new code names the specific radius token below.
+    out property <length> radius: 4px;
+    // Radius for chips, badges, and icon buttons.
+    out property <length> radius-chip: 6px;
+    // Radius for list rows, rail entries, and toasts.
+    out property <length> radius-row: 8px;
+    // Radius for cards and dialog panels.
+    out property <length> radius-card: 14px;
     out property <length> gap: 8px;
     out property <length> pad: 12px;
     out property <length> row-height: 34px;
-    out property <length> rail-width: 200px;
+    out property <length> rail-width: 220px;
     // Height of the collapsed task strip at the bottom of the window.
     out property <length> strip-height: 34px;
     // Height of a determinate progress bar.
@@ -45,8 +61,15 @@ export global Theme {
     out property <length> status-width: 56px;
     // Width of a determinate bar sitting inside a row.
     out property <length> bar-width: 200px;
-    // Width of the colored edge that says what kind a toast is.
+    // Width of the colored edge that says what kind a toast is, and of a `TabBar`'s active
+    // underline.
     out property <length> accent-stripe: 3px;
+    // Blur radius of the one shadow level, on dialogs and toasts.
+    out property <length> shadow-blur: 32px;
+    // Vertical offset of the one shadow level.
+    out property <length> shadow-offset-y: 12px;
+    // Smallest a `SearchBox` may get before its field starts to crowd the toolbar.
+    out property <length> search-min-width: 240px;
     // Side of a project icon tile in a search row. The details header shows no icon.
     out property <length> icon-size: 48px;
     // Gap between the columns of a search row and the header above it. Wider than
@@ -62,15 +85,32 @@ export global Theme {
     // Width of a search row's button column: the primary button, plus the state line
     // beneath it.
     out property <length> col-action: 170px;
+    // Padding around a screen's content, inside the rail.
+    out property <length> pad-screen: 24px;
+    // Horizontal padding inside a rail entry.
+    out property <length> pad-entry: 10px;
+    // Gap between controls in a screen's toolbar row (search box, filters).
+    out property <length> gap-toolbar: 12px;
+
+    // Motion.
+    // Duration of a hover or selection tint change.
+    out property <duration> motion-fast: 150ms;
+    // Duration of a panel open/close or a toast entering.
+    out property <duration> motion-base: 220ms;
 
     // Type scale.
-    out property <length> font-size: 14px;
-    out property <length> font-size-small: 12px;
+    out property <length> font-size: 13px;
+    out property <length> font-size-small: 11px;
     out property <length> font-size-title: 20px;
     out property <length> font-size-h1: 24px;
+    // Group heading size: paired with `font-weight-medium`-and-up styling, uppercase,
+    // 0.1em letter-spacing, set by the caller.
+    out property <length> font-size-section: 10px;
 
     // Font weight and family, for a description block styled by heading level or kind.
     out property <int> font-weight-regular: 400;
+    // Weight for titles, the active rail entry, toast text, and chips.
+    out property <int> font-weight-medium: 600;
     out property <int> font-weight-bold: 700;
     out property <string> font-family-mono: "monospace";
 }

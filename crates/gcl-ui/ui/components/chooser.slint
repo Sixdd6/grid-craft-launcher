@@ -1,0 +1,60 @@
+import { Theme } from "../theme.slint";
+import { Button } from "button.slint";
+
+// A read-only value plus a button that opens the OS folder picker. Used for the app root: a
+// picker can point at a path, but never types one, so the value line only ever shows what
+// Rust already picked or read.
+//
+// Pure layout: `choose` is the only thing the caller does, in `src/screens/*.rs`, off the UI
+// thread through `Bridge`.
+export component Chooser inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    // One line about the last choice, empty when there is nothing to say.
+    in property <string> status;
+    callback choose();
+
+    background: Theme.surface;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    VerticalLayout {
+        padding: Theme.pad;
+        spacing: Theme.gap;
+
+        Text {
+            text: root.label;
+            color: Theme.text-muted;
+            font-size: Theme.font-size-small;
+        }
+
+        HorizontalLayout {
+            spacing: Theme.gap;
+
+            Text {
+                text: root.value;
+                color: Theme.text;
+                font-size: Theme.font-size;
+                horizontal-stretch: 1;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+
+            choose_button := Button {
+                text: "Choose…";
+                kind: "secondary";
+                clicked => {
+                    root.choose();
+                }
+            }
+        }
+
+        if root.status != "": Text {
+            text: root.status;
+            color: Theme.text-muted;
+            font-size: Theme.font-size-small;
+            wrap: word-wrap;
+        }
+    }
+}

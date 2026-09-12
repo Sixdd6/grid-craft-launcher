@@ -13,9 +13,11 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use gcl_core::content::AddRequest;
+use gcl_core::sources::SourceId;
 use gcl_ui::{App, AppWindow, InstanceState, InstancesState, Screen};
 use slint::{ComponentHandle, Model};
-use support::TestApp;
+use support::{Mocks, TestApp};
 
 /// How long a flow waits for a job that only touches the mock host or the disk.
 const QUICK: Duration = Duration::from_secs(20);
@@ -29,7 +31,9 @@ const EXTRA_ARG: &str = "-Dgcl.flow=1";
 #[test]
 fn the_instances_screen_creates_launches_and_removes_an_instance() {
     support::init_backend();
-    let app = Rc::new(TestApp::new());
+    // `Mocks::modrinth()` over `plain()`: the content search step installs two rows into
+    // Fabric through the mock Modrinth host, on top of the offline account `plain()` gives.
+    let app = Rc::new(TestApp::with(Mocks::modrinth()));
     let driver = Rc::clone(&app);
     support::run(async move {
         let app = &driver;
@@ -37,6 +41,7 @@ fn the_instances_screen_creates_launches_and_removes_an_instance() {
         creating_a_vanilla_instance_adds_a_row(app).await;
         a_never_launched_instance_has_an_empty_log(app).await;
         creating_a_fabric_instance_installs_the_loader(app).await;
+        typing_into_the_content_search_narrows_the_list(app).await;
         launching_a_row_runs_the_game_until_stop(app).await;
         the_jvm_tab_picks_a_garbage_collector(app).await;
         a_launch_that_cannot_start_opens_the_error_dialog(app).await;
@@ -345,6 +350,79 @@ async fn creating_a_fabric_instance_installs_the_loader(app: &TestApp) {
         instance.config.loader_version.as_deref(),
         Some(support::FABRIC)
     );
+}
+
+/// (c2) Typing into the Content tab's search box narrows the row list to what matches, and
+/// clearing it shows everything installed again.
+async fn typing_into_the_content_search_narrows_the_list(app: &TestApp) {
+    app.launcher
+        .add_content(
+            "fabric",
+            AddRequest {
+                source: SourceId::Modrinth,
+                project: support::MOD_PROJECT.to_string(),
+                version: None,
+                kind: None,
+                world: None,
+            },
+        )
+        .expect("install sodium into fabric");
+    app.launcher
+        .add_content(
+            "fabric",
+            AddRequest {
+                source: SourceId::Modrinth,
+                project: support::CURRENT_PROJECT.to_string(),
+                version: Some(support::CURRENT_VERSION_ID.to_string()),
+                kind: None,
+                world: None,
+            },
+        )
+        .expect("install reese's sodium options into fabric");
+
+    let index = row_index(&app.window, "Fabric");
+    app.click_nth("InstancesScreen::row_open", index);
+    app.wait_until(
+        "the detail screen to show Fabric",
+        |window| {
+            window.global::<App>().get_screen() == Screen::Instance
+                && window.global::<InstanceState>().get_name() == "Fabric"
+        },
+        QUICK,
+    )
+    .await;
+    app.wait_until(
+        "both installed rows to load",
+        |window| window.global::<InstanceState>().get_content().row_count() == 2,
+        QUICK,
+    )
+    .await;
+
+    app.type_into("SearchBox::search_field", "Reese");
+    support::pump();
+    app.wait_until(
+        "the filter to narrow the list to the one match",
+        |window| window.global::<InstanceState>().get_content().row_count() == 1,
+        QUICK,
+    )
+    .await;
+
+    app.type_into("SearchBox::search_field", "");
+    support::pump();
+    app.wait_until(
+        "clearing the filter to show both rows again",
+        |window| window.global::<InstanceState>().get_content().row_count() == 2,
+        QUICK,
+    )
+    .await;
+
+    app.click("InstanceScreen::back_button");
+    app.wait_until(
+        "the list to come back",
+        |window| window.global::<App>().get_screen() == Screen::Instances,
+        QUICK,
+    )
+    .await;
 }
 
 /// (d) Launch the vanilla row, then stop it from the detail screen.

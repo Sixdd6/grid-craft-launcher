@@ -92,6 +92,7 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/components/button.slint` | `Button::touch` | `TouchArea` |
 | `crates/gcl-ui/ui/components/choice-dialog.slint` | `ChoiceDialog::choice_row` | `Rectangle` |
 | `crates/gcl-ui/ui/components/choice-dialog.slint` | `ChoiceDialog::touch` | `TouchArea` |
+| `crates/gcl-ui/ui/components/chooser.slint` | `Chooser::choose_button` | `Button` |
 | `crates/gcl-ui/ui/components/create-instance-dialog.slint` | `CreateInstanceDialog::name_field` | `LineEdit` |
 | `crates/gcl-ui/ui/components/create-instance-dialog.slint` | `CreateInstanceDialog::version_combo` | `ComboBox` |
 | `crates/gcl-ui/ui/components/create-instance-dialog.slint` | `CreateInstanceDialog::snapshots_check` | `CheckBox` |
@@ -134,6 +135,7 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/accounts.slint` | `AccountsScreen::add_offline_button` | `Button` |
 | `crates/gcl-ui/ui/screens/accounts.slint` | `AccountsScreen::sign_in_button` | `Button` |
 | `crates/gcl-ui/ui/screens/accounts.slint` | `AccountsScreen::keys` | `FocusScope` |
+| `crates/gcl-ui/ui/screens/accounts.slint` | `AccountsScreen::list` | `ListView` |
 | `crates/gcl-ui/ui/screens/accounts.slint` | `AccountsScreen::row_open` | `ListRow` |
 | `crates/gcl-ui/ui/screens/accounts.slint` | `AccountsScreen::badge` | `Text` |
 | `crates/gcl-ui/ui/screens/accounts.slint` | `AccountsScreen::row_select` | `Button` |
@@ -143,7 +145,7 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::search_button` | `Button` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::source_combo` | `ComboBox` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::kind_combo` | `ComboBox` |
-| `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::mc_field` | `LineEdit` |
+| `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::mc_combo` | `ComboBox` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::loader_combo` | `ComboBox` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::target_combo` | `ComboBox` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::install_pack_button` | `Button` |
@@ -175,7 +177,9 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::check_updates_button` | `Button` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::apply_updates_button` | `Button` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::add_content_button` | `Button` |
+| `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::content_search_box` | `SearchBox` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::keys` | `FocusScope` |
+| `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::list` | `ListView` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::row_open` | `ListRow` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::row_source_button` | `Button` |
 | `crates/gcl-ui/ui/screens/instance.slint` | `InstanceScreen::row_toggle` | `Button` |
@@ -206,6 +210,7 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/instances.slint` | `InstancesScreen::create_button` | `Button` |
 | `crates/gcl-ui/ui/screens/instances.slint` | `InstancesScreen::refresh_button` | `Button` |
 | `crates/gcl-ui/ui/screens/instances.slint` | `InstancesScreen::keys` | `FocusScope` |
+| `crates/gcl-ui/ui/screens/instances.slint` | `InstancesScreen::list` | `ListView` |
 | `crates/gcl-ui/ui/screens/instances.slint` | `InstancesScreen::row_open` | `ListRow` |
 | `crates/gcl-ui/ui/screens/instances.slint` | `InstancesScreen::row_launch` | `Button` |
 | `crates/gcl-ui/ui/screens/instances.slint` | `InstancesScreen::row_delete` | `Button` |
@@ -219,8 +224,7 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::version_kind_badge` | `Text` |
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::version_notes_button` | `Button` |
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::version_install_button` | `Button` |
-| `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::root_path_field` | `LineEdit` |
-| `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::root_change_button` | `Button` |
+| `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::root_chooser` | `Chooser` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::parallel_spin` | `SpinBox` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::parallel_apply_button` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::memory_min_field` | `LineEdit` |
@@ -230,9 +234,6 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::curseforge_status_text` | `Text` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::msa_client_id_field` | `LineEdit` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::msa_client_id_button` | `Button` |
-| `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::default_key_field` | `LineEdit` |
-| `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::default_value_field` | `LineEdit` |
-| `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::default_add_button` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::verify_button` | `Button` |
 
-Total: 158 named elements.
+Total: 159 named elements.

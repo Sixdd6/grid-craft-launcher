@@ -21,6 +21,7 @@ path = "src/main.rs"
 gcl-core.workspace = true
 image.workspace = true
 png.workspace = true
+rfd.workspace = true
 slint.workspace = true
 time.workspace = true
 tokio.workspace = true

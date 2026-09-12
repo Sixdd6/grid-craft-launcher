@@ -51,6 +51,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 bytes = "1"
 futures-util = "0.3"
 nix = { version = "0.31", features = ["signal"] }
+rfd = { version = "0.16", default-features = false, features = ["xdg-portal", "tokio"] }
 
 # A debug build (F5, `just run-ui`) keeps our crates unoptimized for the debugger but builds
 # every dependency with optimizations: the Slint runtime and FemtoVG do the rendering, and

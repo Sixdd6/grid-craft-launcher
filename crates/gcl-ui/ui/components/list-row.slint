@@ -14,7 +14,8 @@ export component ListRow inherits Rectangle {
     callback clicked();
 
     height: Theme.row-height;
-    border-radius: Theme.radius;
+    border-radius: Theme.radius-row;
+    clip: true;
     background: root.selected
         ? Theme.accent.with-alpha(0.18)
         : (row_touch.has-hover
@@ -34,6 +35,16 @@ export component ListRow inherits Rectangle {
         clicked => {
             root.clicked();
         }
+    }
+
+    // The selection bar: a 3px accent edge on the left, clipped to the row's own rounded
+    // corners by `clip: true` above.
+    if root.selected: Rectangle {
+        x: 0;
+        y: 0;
+        width: Theme.accent-stripe;
+        height: parent.height;
+        background: Theme.accent;
     }
 
     HorizontalLayout {

@@ -18,15 +18,26 @@ export component TabBar inherits Rectangle {
             horizontal-stretch: 0;
             min-width: label.preferred-width + 2 * Theme.pad;
             background: index == root.current
-                ? Theme.surface-raised
+                ? Colors.transparent
                 : (touch.has-hover ? Theme.surface-hover : Colors.transparent);
 
             label := Text {
                 text: tab;
                 color: index == root.current ? Theme.text : Theme.text-muted;
                 font-size: Theme.font-size;
+                font-weight: index == root.current ? Theme.font-weight-medium : Theme.font-weight-regular;
                 vertical-alignment: center;
                 horizontal-alignment: center;
+            }
+
+            // The active tab's underline: an accent bar the width of the label, not the
+            // whole entry, so it reads as pointing at the text.
+            if index == root.current: Rectangle {
+                x: (parent.width - label.preferred-width) / 2;
+                y: parent.height - Theme.accent-stripe;
+                width: label.preferred-width;
+                height: Theme.accent-stripe;
+                background: Theme.accent;
             }
 
             accessible-role: button;

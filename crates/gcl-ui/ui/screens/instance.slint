@@ -4,6 +4,7 @@ import { InstanceState, Shell } from "../state.slint";
 import { Button } from "../components/button.slint";
 import { EmptyState } from "../components/empty-state.slint";
 import { ListRow } from "../components/list-row.slint";
+import { SearchBox } from "../components/search-box.slint";
 import { SettingsEditor } from "../components/settings-editor.slint";
 import { TabBar } from "../components/tab-bar.slint";
 
@@ -206,30 +207,66 @@ export component InstanceScreen inherits Rectangle {
                 }
             }
 
+            content_search_box := SearchBox {
+                placeholder: "Search content";
+                text <=> InstanceState.content_filter;
+                edited(value) => {
+                    // The list may have just shrunk under whatever row the keyboard was on.
+                    root.selected = -1;
+                    InstanceState.filter_changed();
+                }
+                moved_down => {
+                    keys.focus();
+                }
+            }
+
             if InstanceState.content.length == 0: EmptyState {
                 vertical-stretch: 1;
-                title: "Nothing installed";
-                message: "Add a mod, a resource pack, or a world from the browser.";
+                title: InstanceState.content_filter == ""
+                    ? "Nothing installed"
+                    : "No content matches";
+                message: InstanceState.content_filter == ""
+                    ? "Add a mod, a resource pack, or a world from the browser."
+                    : "Clear the search to see everything installed.";
             }
 
             // Arrow keys move the selection, Enter flips the chosen file between enabled and
             // disabled. Removing still needs the button: it deletes a file.
             //
-            // The scope never takes focus by itself: the JVM and settings tabs are full of
-            // fields, and a dialog opens over this screen, so grabbing focus on `init` would
-            // pull the keyboard out of whatever the user was typing in.
-            if InstanceState.content.length > 0: keys := FocusScope {
-                vertical-stretch: 1;
+            // The scope is always mounted, even while the filtered list is empty, so the
+            // search box above can send the keyboard here by id. It never takes focus by
+            // itself: the JVM and settings tabs are full of fields, and a dialog opens over
+            // this screen, so grabbing focus on `init` would pull the keyboard out of
+            // whatever the user was typing in.
+            keys := FocusScope {
+                // Nothing inside while the filtered list is empty, so it claims no room and
+                // the empty state above is the one that stretches.
+                vertical-stretch: InstanceState.content.length == 0 ? 0 : 1;
+
+                // Rows a PageUp/PageDown steps by: however many the list shows at once.
+                property <int> page: max(1,
+                    floor(self.height / (2 * Theme.font-size + Theme.gap + Theme.pad)));
+                // The row a key press just chose, so the list (mounted or not) can scroll to it.
+                property <int> want-visible: -1;
 
                 key-pressed(event) => {
                     if (event.text == Key.UpArrow) {
                         root.selected =
                             Shell.move_selection(root.selected, -1, InstanceState.content.length);
+                        self.want-visible = root.selected;
                         return EventResult.accept;
                     }
                     if (event.text == Key.DownArrow) {
                         root.selected =
                             Shell.move_selection(root.selected, 1, InstanceState.content.length);
+                        self.want-visible = root.selected;
+                        return EventResult.accept;
+                    }
+                    if (event.text == Key.Home || event.text == Key.End
+                        || event.text == Key.PageUp || event.text == Key.PageDown) {
+                        root.selected = Shell.jump(
+                            root.selected, event.text, self.page, InstanceState.content.length);
+                        self.want-visible = root.selected;
                         return EventResult.accept;
                     }
                     if (event.text == Key.Return) {
@@ -244,9 +281,28 @@ export component InstanceScreen inherits Rectangle {
                     return EventResult.reject;
                 }
 
-                ListView {
+                if InstanceState.content.length > 0: list := ListView {
                 width: 100%;
                 height: 100%;
+
+                // Keeps the selected row inside the viewport after a key moves it. Lives here
+                // rather than on the enclosing scope because a conditionally mounted element
+                // cannot be reached by id from outside its own `if`.
+                property <int> want-visible <=> keys.want-visible;
+                property <length> row-h: 2 * Theme.font-size + Theme.gap + Theme.pad;
+                changed want-visible => {
+                    if (self.want-visible < 0) {
+                        return;
+                    }
+                    if (-self.viewport-y > self.want-visible * self.row-h) {
+                        self.viewport-y = -self.want-visible * self.row-h;
+                    }
+                    if (-self.viewport-y + self.visible-height
+                        < (self.want-visible + 1) * self.row-h) {
+                        self.viewport-y = self.visible-height
+                            - (self.want-visible + 1) * self.row-h;
+                    }
+                }
 
                     for row[i] in InstanceState.content: row_open := ListRow {
                         title: row.name;
@@ -539,11 +595,20 @@ export component InstanceScreen inherits Rectangle {
                 font-size: Theme.font-size-small;
             }
 
+            // A `<=>` alias here, straight to a std-widget's `value`, panics the interpreter
+            // ("accessing deleted parent", slint#6426) the moment `PreviewInstanceScreen`'s
+            // `init` sets `InstanceState.name` and this JVM-tab container is created in the
+            // same pass. A one-way binding plus a writeback on `edited` keeps the same
+            // behaviour (the field always shows what `InstanceState` holds, and every edit is
+            // saved straight back into it) without the alias.
             memory_min_spin := SpinBox {
                 minimum: root.heap_min;
                 maximum: root.heap_max;
                 step-size: 256;
-                value <=> InstanceState.jvm_min;
+                value: InstanceState.jvm_min;
+                edited(value) => {
+                    InstanceState.jvm_min = value;
+                }
             }
 
             Text {
@@ -556,7 +621,10 @@ export component InstanceScreen inherits Rectangle {
                 minimum: root.heap_min;
                 maximum: root.heap_max;
                 step-size: 256;
-                value <=> InstanceState.jvm_max;
+                value: InstanceState.jvm_max;
+                edited(value) => {
+                    InstanceState.jvm_max = value;
+                }
             }
 
             Text {
@@ -626,7 +694,10 @@ export component InstanceScreen inherits Rectangle {
 
             jvm_args_field := LineEdit {
                 placeholder-text: "-XX:+UseG1GC";
-                text <=> InstanceState.jvm_extra;
+                text: InstanceState.jvm_extra;
+                edited(value) => {
+                    InstanceState.jvm_extra = value;
+                }
             }
 
             Text {
@@ -637,7 +708,10 @@ export component InstanceScreen inherits Rectangle {
 
             java_path_field := LineEdit {
                 placeholder-text: "leave empty to let the launcher choose";
-                text <=> InstanceState.java_path;
+                text: InstanceState.java_path;
+                edited(value) => {
+                    InstanceState.java_path = value;
+                }
             }
 
             HorizontalLayout {
@@ -751,6 +825,9 @@ export component InstanceScreen inherits Rectangle {
 // instance with no content and no log. This component fills the global with the sample
 // values it used to carry as its defaults. Nothing in the app instantiates it.
 export component PreviewInstanceScreen inherits InstanceScreen {
+    width: 1200px;
+    height: 760px;
+
     init => {
         InstanceState.name = "Fabric Performance";
         InstanceState.minecraft = "1.20.1";
@@ -768,7 +845,15 @@ export component PreviewInstanceScreen inherits InstanceScreen {
             { token: "zgc", label: "ZGC", description: "ZGC: low pause times, needs more memory" },
         ];
         InstanceState.gc_labels = ["Launcher default", "G1", "ZGC"];
-        InstanceState.gc_selected_index = 1;
+        // Not `gc_selected_index`: `gc_combo`'s `current-index <=> InstanceState.gc_selected_index`
+        // has to be a two-way alias for the real app (the combo's own arrow-key/click
+        // selection has to win over the state behind it, not just mirror it — see
+        // `flow_instances`'s `the_jvm_tab_picks_a_garbage_collector`). Assigning the global
+        // from here, before the JVM tab's container has ever been instantiated (the preview
+        // opens on the Content tab), makes the interpreter try to sync the still-nonexistent
+        // other half of that alias and panic ("accessing deleted parent", slint#6426). The
+        // JVM tab isn't shown by this screenshot either way; open it by hand in a live
+        // `ui-preview` session to see the combo, which starts on "Launcher default" there.
         InstanceState.gc_status = "Java 21.0.4 from the Mojang runtime";
         InstanceState.update_count = 1;
         InstanceState.content = [

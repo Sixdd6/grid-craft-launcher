@@ -3,6 +3,7 @@ import { Theme } from "../theme.slint";
 import { SettingsEditorState, SettingsState } from "../state.slint";
 import { Button } from "../components/button.slint";
 import { Card } from "../components/card.slint";
+import { Chooser } from "../components/chooser.slint";
 import { SettingsEditor } from "../components/settings-editor.slint";
 
 // Launcher-wide settings: root, downloads, JVM defaults, API keys, game defaults, and the
@@ -10,18 +11,12 @@ import { SettingsEditor } from "../components/settings-editor.slint";
 //
 // Pure layout. Every value comes from the [`SettingsState`] global and every action is
 // reported through it, so `src/screens/settings.rs` is the only place that knows what any of
-// this means. The heap fields and the new-default fields are typed text, so they are held
-// here and parsed in Rust.
+// this means. The heap fields are typed text, so they are held here and parsed in Rust.
 export component SettingsScreen inherits Rectangle {
     // Minimum heap as typed, seeded from the saved value.
     property <string> min_text: SettingsState.jvm_min + "";
     // Maximum heap as typed, seeded from the saved value.
     property <string> max_text: SettingsState.jvm_max + "";
-    // Key of the game default being added.
-    property <string> new_key: "";
-    // Value of the game default being added.
-    property <string> new_value: "";
-
     background: Theme.bg;
 
     VerticalLayout {
@@ -48,13 +43,6 @@ export component SettingsScreen inherits Rectangle {
                     title: "App root";
 
                     Text {
-                        text: SettingsState.root_path;
-                        color: Theme.text;
-                        font-size: Theme.font-size;
-                        wrap: word-wrap;
-                    }
-
-                    Text {
                         text: "A new root is used the next time the launcher starts. Instances, "
                             + "caches, and accounts stay where they are; move them by hand if "
                             + "you want them in the new root.";
@@ -63,25 +51,13 @@ export component SettingsScreen inherits Rectangle {
                         wrap: word-wrap;
                     }
 
-                    HorizontalLayout {
-                        spacing: Theme.gap;
-                        height: Theme.row-height;
-
-                        root_path_field := LineEdit {
-                            placeholder-text: "Path to another app root";
-                            text <=> SettingsState.new_root;
-                            horizontal-stretch: 1;
-                            accepted(path) => {
-                                SettingsState.save_root(path);
-                            }
-                        }
-
-                        root_change_button := Button {
-                            text: "Change";
-                            enabled: SettingsState.new_root != "" && !SettingsState.busy;
-                            clicked => {
-                                SettingsState.save_root(SettingsState.new_root);
-                            }
+                    root_chooser := Chooser {
+                        label: "App root";
+                        value: SettingsState.root_path;
+                        status: SettingsState.status;
+                        width: 100%;
+                        choose => {
+                            SettingsState.choose_root();
                         }
                     }
                 }
@@ -265,40 +241,6 @@ export component SettingsScreen inherits Rectangle {
                     }
 
                     SettingsEditor { }
-
-                    Text {
-                        text: "Advanced: add a key the catalog does not know";
-                        color: Theme.text-muted;
-                        font-size: Theme.font-size-small;
-                    }
-
-                    HorizontalLayout {
-                        spacing: Theme.gap;
-                        height: Theme.row-height;
-
-                        default_key_field := LineEdit {
-                            placeholder-text: "key, e.g. renderDistance";
-                            text <=> root.new_key;
-                            width: 180px;
-                        }
-
-                        default_value_field := LineEdit {
-                            placeholder-text: "value";
-                            text <=> root.new_value;
-                            horizontal-stretch: 1;
-                        }
-
-                        default_add_button := Button {
-                            text: "Add";
-                            kind: "primary";
-                            enabled: root.new_key != "" && !SettingsState.busy;
-                            clicked => {
-                                SettingsState.default_set(root.new_key, root.new_value);
-                                root.new_key = "";
-                                root.new_value = "";
-                            }
-                        }
-                    }
                 }
 
                 // The one thing on this screen that talks to the network, and only on click.
@@ -358,6 +300,9 @@ export component SettingsScreen inherits Rectangle {
 // it, and it is the only place the editor's sample rows live — the instance screen's
 // Settings tab mounts the same editor over the same global.
 export component PreviewSettingsScreen inherits SettingsScreen {
+    width: 1200px;
+    height: 760px;
+
     init => {
         SettingsState.root_path = "/home/steve/.local/share/grid-craft-launcher";
         SettingsState.parallel = 8;

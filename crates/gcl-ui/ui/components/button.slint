@@ -1,6 +1,6 @@
 import { Theme } from "../theme.slint";
 
-// Text button. `kind` picks the palette: primary, secondary, or danger.
+// Text button. `kind` picks the palette: primary, secondary, danger, or ghost.
 export component Button inherits Rectangle {
     in property <string> text: "Button";
     in property <string> kind: "secondary";
@@ -11,17 +11,27 @@ export component Button inherits Rectangle {
     in property <string> access_label: "";
     callback clicked();
 
-    property <color> base: root.kind == "primary"
-        ? Theme.accent
-        : (root.kind == "danger" ? Theme.danger : Theme.surface-raised);
-    property <color> label-color: root.kind == "secondary" ? Theme.text : Theme.accent-text;
+    // Resting background: `primary` is filled, every other kind is transparent so the
+    // screen behind shows through until hover or press.
+    property <color> base: root.kind == "primary" ? Theme.accent : Colors.transparent;
+    // Hover tint. `danger` gets its own color at low alpha rather than `surface-hover`, so a
+    // destructive row action still reads as dangerous on hover.
+    property <color> hover-fill: root.kind == "primary"
+        ? Theme.accent-hover
+        : (root.kind == "danger" ? Theme.danger.with-alpha(0.12) : Theme.surface-hover);
+    property <color> pressed-fill: root.kind == "primary" ? Theme.accent-pressed : root.hover-fill;
+    property <color> label-color: root.kind == "primary"
+        ? Theme.accent-text
+        : (root.kind == "danger" ? Theme.danger : (root.kind == "ghost" ? Theme.text-muted : Theme.text));
 
     height: Theme.row-height;
     min-width: label.preferred-width + 2 * Theme.pad;
     horizontal-stretch: 0;
     border-radius: Theme.radius;
-    border-width: 1px;
-    border-color: root.kind == "secondary" ? Theme.border : root.base;
+    border-width: root.kind == "ghost" ? 0px : 1px;
+    border-color: root.kind == "primary"
+        ? Theme.accent
+        : (root.kind == "danger" ? Theme.danger : (root.kind == "ghost" ? Colors.transparent : Theme.border));
     background: root.base;
     opacity: root.enabled ? 1.0 : 0.5;
 
@@ -57,10 +67,10 @@ export component Button inherits Rectangle {
 
     states [
         pressed when touch.pressed: {
-            background: root.base.darker(0.2);
+            background: root.pressed-fill;
         }
         hover when touch.has-hover: {
-            background: root.base.brighter(0.15);
+            background: root.hover-fill;
         }
     ]
 

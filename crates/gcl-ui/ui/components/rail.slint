@@ -1,17 +1,19 @@
 import { Theme } from "../theme.slint";
 import { Screen } from "../types.slint";
 
-// One rail entry: a keyboard shortcut number and a label.
+// One rail entry: a label. The active entry gets a filled background, bold weight, and an
+// accent bar on its left edge; a digit still switches to it (see `keys::key_to_screen`) but
+// the digit is not printed.
 component Entry inherits Rectangle {
-    in property <string> index-text;
     in property <string> label;
     in property <bool> active: false;
     callback clicked();
 
     height: Theme.row-height;
-    border-radius: Theme.radius;
+    border-radius: Theme.radius-row;
+    clip: true;
     background: root.active
-        ? Theme.accent.with-alpha(0.18)
+        ? Theme.surface-hover
         : (touch.has-hover ? Theme.surface-hover : Colors.transparent);
 
     accessible-role: button;
@@ -24,28 +26,29 @@ component Entry inherits Rectangle {
         clicked => { root.clicked(); }
     }
 
-    HorizontalLayout {
-        padding-left: Theme.gap;
-        padding-right: Theme.gap;
-        spacing: Theme.gap;
+    // Accent bar on the active entry's left edge.
+    Rectangle {
+        x: 0;
+        width: Theme.accent-stripe;
+        height: 100%;
+        background: Theme.accent;
+        visible: root.active;
+    }
 
-        Text {
-            text: root.index-text;
-            color: Theme.text-muted;
-            font-size: Theme.font-size-small;
-            vertical-alignment: center;
-            width: 12px;
-        }
+    HorizontalLayout {
+        padding-left: Theme.pad-entry;
+        padding-right: Theme.pad-entry;
 
         Text {
             text: root.label;
             color: root.active ? Theme.text : Theme.text-muted;
             font-size: Theme.font-size;
+            font-weight: root.active ? Theme.font-weight-medium : Theme.font-weight-regular;
             vertical-alignment: center;
         }
     }
 
-    animate background { duration: 100ms; }
+    animate background { duration: Theme.motion-fast; }
 }
 
 // Left navigation rail. One entry per screen; the active entry is highlighted.
@@ -69,36 +72,39 @@ export component Rail inherits Rectangle {
         }
 
         rail_instances := Entry {
-            index-text: "1";
             label: "Instances";
             active: root.current == Screen.instances;
             clicked => { root.navigate(Screen.instances); }
         }
         rail_instance := Entry {
-            index-text: "2";
             label: "Instance";
             active: root.current == Screen.instance;
             clicked => { root.navigate(Screen.instance); }
         }
         rail_browser := Entry {
-            index-text: "3";
             label: "Browse";
             active: root.current == Screen.browser;
             clicked => { root.navigate(Screen.browser); }
         }
         rail_accounts := Entry {
-            index-text: "4";
             label: "Accounts";
             active: root.current == Screen.accounts;
             clicked => { root.navigate(Screen.accounts); }
         }
         rail_settings := Entry {
-            index-text: "5";
             label: "Settings";
             active: root.current == Screen.settings;
             clicked => { root.navigate(Screen.settings); }
         }
 
         Rectangle { }
+    }
+
+    // 1px right border.
+    Rectangle {
+        x: parent.width - 1px;
+        width: 1px;
+        height: 100%;
+        background: Theme.border;
     }
 }

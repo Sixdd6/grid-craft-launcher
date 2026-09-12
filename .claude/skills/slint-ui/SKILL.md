@@ -17,7 +17,9 @@ crates/gcl-ui/
                                 its Confirm/Prompt/Choice/DeviceCode/CreateInstance variants,
                                 BlockList (renders a `Block` list, shared by the Description tab
                                 and NotesDialog), NotesDialog (a version's changelog in a modal
-                                built on `Dialog`)
+                                built on `Dialog`), Chooser (a read-only value plus a "Choose…"
+                                button; `components/chooser.slint`, used by the settings screen's
+                                app-root row)
   ui/screens/                  instances.slint, instance.slint, browser.slint, accounts.slint,
                                 settings.slint, project.slint
   src/lib.rs                   `slint::include_modules!()` plus every module, so tests can
@@ -203,11 +205,17 @@ the list row have to be reloaded.
 
 A focused element sees a key first; the `FocusScope` in `app.slint` only gets what bubbles up, and
 only calls `App.key_pressed` while `any_dialog_open` is false. `keys::key_to_screen` maps digits 1
-to 5 to the five screens, matching the rail's own numbers. `keys::move_selection(current, delta,
-len)` is the pure function behind every arrow-navigable list: clamps to `[0, len)` rather than
-wrapping, so holding an arrow stops at an end; `-1` means no selection and a first press lands on
-the near end. Both are ordinary Rust, unit-tested with no Slint instance. The `.slint` wiring that
-calls them is checked by compiling the crate, not by a test that drives real key events.
+to 5 to the five screens, matching the rail's own numbers; the rail itself prints no digit.
+`keys::move_selection(current, delta, len)` is the pure function behind every arrow-navigable
+list: clamps to `[0, len)` rather than wrapping, so holding an arrow stops at an end; `-1` means
+no selection and a first press lands on the near end. `keys::jump(key, current, page, len)` is
+the same shape for Home, End, PageUp, and PageDown: Home and End go to `0` and `len - 1`,
+PageUp/PageDown move `page` rows and clamp the same way `move_selection` does. `Shell.jump`
+(`state.slint`) is the `.slint`-side call every list scope wires beside `Shell.move_selection`, so
+all four keys reach every arrow-navigable list, not just the browser or the instances list. Both
+`keys::move_selection` and `keys::jump` are ordinary Rust, unit-tested with no Slint instance. The
+`.slint` wiring that calls them is checked by compiling the crate, not by a test that drives real
+key events.
 
 No list scope ever calls `focus()` on `init`. A conditional element is rebuilt whenever its
 condition changes, and an `init` handler that grabs focus would pull the keyboard out of a field
@@ -264,6 +272,10 @@ addresses it as `<Component>::<name>`: `ElementHandle::find_by_element_id(&app,
   takes the nth handle in list order.
 - Rail entries: `rail_instances`, `rail_instance`, `rail_browser`, `rail_accounts`,
   `rail_settings`. Tab entries: `tab_entry` on `TabBar`, one per tab.
+- `Chooser` (`components/chooser.slint`) carries `Chooser::choose_button`, so the settings
+  screen's `root_chooser` (`SettingsScreen::root_chooser`) opens the folder dialog through
+  `Chooser::choose_button`, not a screen-level id. `BrowserScreen::mc_combo` is the Minecraft
+  version dropdown; `InstanceScreen::content_search_box` is the Content tab's search field.
 
 `Button`, `ListRow`, the rail entry, the tab entry, and the task panel's chevron each set
 `accessible-role: button`, `accessible-label`, and `accessible-action-default`, so a test presses
@@ -359,12 +371,13 @@ saw in your report.
 
 ## Visual direction
 
-- Dark first: `Theme.bg` is a dark background; the shell, rail, and screens follow it. Dense
-  rows, sized from `Theme.row-height` (32 to 36 px). Left rail (`components/rail.slint`) for
-  navigation, screen content on the right.
-- One accent color for primary actions and selection. A separate danger color marks only
-  destructive actions (remove, delete).
-- Text over icons. No gradients; shadows kept to one level; corner radius from `Theme.radius`.
+The written standard is `docs/design/ui-standard.md`: palette, shape, motion, type, layout,
+and control rules, all as `Theme` tokens. Read it before styling anything. `Theme` in
+`ui/theme.slint` is the only place a value is written — a screen or component reads a token,
+never a literal color, spacing, radius, duration, or font size.
+
+Rules that are code-facing, not just visual:
+
 - A dense list stripes: `ListRow`'s `alt` paints `Theme.surface-alt` on odd rows (hover and
   selection still win), and it reads back through the row's `accessible-description` so a flow
   test can assert the stripe. A list with columns sizes them from `Theme.col-author`,
@@ -374,8 +387,9 @@ saw in your report.
 - Show state in place: a task's progress bar lives in `ProgressPanel`, in the row for that task,
   not in a modal. The instance list and detail screen mark a running game in place, through
   `RunState`, rather than a separate "now playing" panel.
-- Every list is arrow-navigable through `Shell.move_selection`; Enter activates a selected row;
-  Escape closes the open dialog. See "Keyboard" above.
+- Every list is arrow-navigable through `Shell.move_selection` and `Shell.jump` (Up, Down, Home,
+  End, PageUp, PageDown); Enter activates a selected row; Escape closes the open dialog. See
+  "Keyboard" above and the standard's keyboard table.
 - `std-widgets` controls follow the dark shell through `Palette.color-scheme =
   ColorScheme.dark`, set in `AppWindow`'s `init` — combo boxes, text fields and spin boxes
   render dark, not in the `fluent` style's light palette.
@@ -391,10 +405,12 @@ saw in your report.
 - **No clipboard**: Slint 1.17 has no clipboard call reachable from a button here. Anywhere a user
   might want to copy text (the error dialog's body, for one) uses a read-only, selectable
   `TextEdit` instead — Ctrl+C on a selection is the whole copy story.
-- **No file picker**: a modpack archive on disk is named by typing its path into a `LineEdit`,
-  the same way a hand-downloaded file is named on the detail screen. Modpack *search* works —
-  the browser's modpack kind lists packs through `Launcher::search_packs`, with an Install
-  button per row, next to the by-id and by-file panels.
+- **File picker: app root only**: the settings screen's app root is a `Chooser`, backed by
+  `rfd` (the `xdg-portal` and `tokio` features) running on a `Bridge` thread, so the native
+  folder dialog never blocks the UI thread. Every other path — a modpack archive on disk, a
+  hand-downloaded file on the detail screen, the Java path — is still named by typing it into a
+  `LineEdit`. Modpack *search* works — the browser's modpack kind lists packs through
+  `Launcher::search_packs`, with an Install button per row, next to the by-id and by-file panels.
 - **A debounce timer cannot be driven from a flow test**: `TestApp::pump` hands the loop no
   time, and the system-time backend refuses `mock_elapsed_time` with a real duration. A flow
   test drags the slider instead (`TestApp::drag_slider`), which saves on release, and asserts

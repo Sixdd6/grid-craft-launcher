@@ -47,6 +47,18 @@ const LATEST_INSTANCE: &str = "Latest Test";
 /// Its directory name.
 const LATEST_SLUG: &str = "latest-test";
 
+/// A third instance with its own Minecraft version and loader, so a target change gives the
+/// filter combos a value to actually follow. [`INSTANCE`] and [`LATEST_INSTANCE`] are both
+/// `support::MC`/Fabric, which is not enough to catch a combo that stopped tracking the
+/// target and settled on the wrong instance's own value instead.
+const QUILT_INSTANCE: &str = "Quilt Test";
+
+/// Its Minecraft version, deliberately not `support::MC`.
+const QUILT_MC: &str = "1.19.4";
+
+/// Its loader version. Never installed, so any string does.
+const QUILT_LOADER_VERSION: &str = "0.20.0";
+
 #[test]
 fn the_browser_adds_content_and_installs_a_modpack() {
     support::init_backend();
@@ -78,6 +90,18 @@ fn the_browser_adds_content_and_installs_a_modpack() {
         .expect("create the instance the latest-version flow measures against");
     add_pinned(&app, support::OLDER_PROJECT, support::OLDER_INSTALLED_ID);
     add_pinned(&app, support::CURRENT_PROJECT, support::CURRENT_VERSION_ID);
+    // Setup only: a target for the combo-follows-the-target flow, with its own version and
+    // loader so a stale combo reads as wrong rather than as a coincidence.
+    app.launcher
+        .instances()
+        .create(
+            QUILT_INSTANCE,
+            QUILT_MC,
+            Loader::Quilt,
+            Some(QUILT_LOADER_VERSION.to_string()),
+            &BTreeMap::new(),
+        )
+        .expect("create the instance the combo-follows-the-target flow targets");
 
     let driver = Rc::clone(&app);
     support::run(async move {
@@ -88,6 +112,8 @@ fn the_browser_adds_content_and_installs_a_modpack() {
         installing_a_modpack_from_the_pack_search(app).await;
         installing_a_modpack_from_a_file(app).await;
         rows_show_the_latest_version_and_what_is_installed(app).await;
+        combos_follow_a_target_change_even_after_being_touched(app).await;
+        browsing_from_the_rail_follows_the_active_instance(app).await;
         the_content_list_stripes_its_rows(app).await;
     });
 }
@@ -192,10 +218,13 @@ async fn open_the_instance(app: &TestApp) {
 
 /// Waits until the browser has finished loading its sources and its instance list.
 ///
-/// The status line is the last thing one open writes, and it can only hold one of these
-/// three afterwards, so it is the signal that the whole load has landed.
+/// `open()` writes one of [`OPENED_NO_SEARCH`], then — unless it is coming back from the
+/// project screen — runs the current kind's search itself, which can finish before this even
+/// gets to check, overwriting it with `"Searching…"` or a result count. A status the screen
+/// left on before this navigation (an add's `"installed 1"`, say) matches none of these, so
+/// this only reports "open" once one of them actually lands.
 async fn wait_for_browser(app: &TestApp) {
-    const OPENED: [&str; 3] = [
+    const OPENED_NO_SEARCH: [&str; 3] = [
         "Ready to search",
         "CurseForge disabled: set CURSEFORGE_API_KEY",
         "No content source is enabled",
@@ -203,8 +232,15 @@ async fn wait_for_browser(app: &TestApp) {
     app.wait_until(
         "the browser to open",
         |window| {
-            window.global::<App>().get_screen() == Screen::Browser
-                && OPENED.contains(&window.global::<BrowserState>().get_status().as_str())
+            if window.global::<App>().get_screen() != Screen::Browser {
+                return false;
+            }
+            let status = window.global::<BrowserState>().get_status().to_string();
+            OPENED_NO_SEARCH.contains(&status.as_str())
+                || status == "Searching…"
+                || status == "Searching modpacks…"
+                || status == "No results"
+                || status.ends_with("result(s)")
         },
         QUICK,
     )
@@ -222,14 +258,20 @@ async fn searching_and_adding_a_mod_installs_its_file(app: &TestApp) {
         "",
         "the browser opens on an empty query: nobody has searched for anything yet"
     );
-    assert!(
-        row_titles(&app.window).is_empty(),
-        "and on no hits. A sample row would be Sodium under the same project id as the \
-         fixture, so it would pass the search assertions below without a search having run"
+    app.wait_until(
+        "the browser to search on its own, with no query typed",
+        |window| !row_titles(window).is_empty(),
+        QUICK,
+    )
+    .await;
+    assert_eq!(
+        row_titles(&app.window).first().map(String::as_str),
+        Some(support::MOD_TITLE),
+        "the first row is the first hit of the recorded search, run with an empty query"
     );
     assert!(
-        !app.has("BrowserScreen::results_header"),
-        "and on no column header: there are no rows for it to sit over yet"
+        app.has("BrowserScreen::results_header"),
+        "the column header comes up with the rows it labels"
     );
     assert_eq!(
         app.window
@@ -240,6 +282,8 @@ async fn searching_and_adding_a_mod_installs_its_file(app: &TestApp) {
         "Add content names the instance it was pressed on as the target"
     );
 
+    changing_the_minecraft_combo_commits_after_the_debounce(app).await;
+
     // Enter in the field runs the search, the same as pressing the button: a real click
     // focuses it first, since a flow's `type_into` sets the value through an accessible
     // action rather than a keystroke.
@@ -249,7 +293,10 @@ async fn searching_and_adding_a_mod_installs_its_file(app: &TestApp) {
     app.press_key(slint::platform::Key::Return);
     app.wait_until(
         "the search results to arrive",
-        |window| !row_titles(window).is_empty(),
+        // Rows are already on screen from the auto-search on open, so `row_titles` alone
+        // would pass on the stale page the moment this search sets `loading`; `!loading` is
+        // what says the new page (not just new data) has actually landed and redrawn.
+        |window| !window.global::<BrowserState>().get_loading() && !row_titles(window).is_empty(),
         QUICK,
     )
     .await;
@@ -286,6 +333,40 @@ async fn searching_and_adding_a_mod_installs_its_file(app: &TestApp) {
         mod_file(app, false).is_file(),
         "the mod's file is in the instance's mods folder"
     );
+}
+
+/// (a1) The Minecraft version combo starts on the target instance's own version, and picking
+/// `any` commits to `BrowserState.minecraft` once the debounce timer fires.
+///
+/// `mc_commit` is a real `Timer`, and `TestApp::wait_until` yields real time, so the commit
+/// really lands here the way `InstanceScreen::gc_combo`'s own debounced save does — this is
+/// not the slider case the `slint-ui` skill's known-limitations note is about.
+async fn changing_the_minecraft_combo_commits_after_the_debounce(app: &TestApp) {
+    app.wait_until(
+        "the Minecraft version job to list the instance's own version",
+        |window| {
+            let options = window.global::<BrowserState>().get_minecraft_options();
+            (0..options.row_count()).any(|i| options.row_data(i).is_some_and(|v| v == support::MC))
+        },
+        QUICK,
+    )
+    .await;
+    assert_eq!(
+        app.window
+            .global::<BrowserState>()
+            .get_minecraft()
+            .to_string(),
+        support::MC,
+        "the combo starts on the target instance's own version"
+    );
+
+    app.select_combo("BrowserScreen::mc_combo", 0);
+    app.wait_until(
+        "the debounced pick to commit to `any`",
+        |window| window.global::<BrowserState>().get_minecraft().is_empty(),
+        QUICK,
+    )
+    .await;
 }
 
 /// (a2) A row shows the whole of a long title and folds a description's line breaks away.
@@ -718,6 +799,131 @@ async fn adding_leaves_the_row_reading_installed(app: &TestApp) {
     assert!(
         !state_texts(app).iter().any(|text| text == CHECKING),
         "and no row went back to `{CHECKING}`: only the row that changed was rewritten"
+    );
+}
+
+/// (f5) `mc_combo` and `loader_combo` keep following the target after the user has already
+/// touched them once.
+///
+/// A `ComboBox` assigns its own `current-index` — on a model change, and on `select()` — which
+/// severs a plain one-way `current-index: BrowserState.x_index` binding the first time either
+/// happens: a step `mc_combo` reports for its own debounce, or a search's manifest job
+/// replacing `minecraft_options`, both do exactly that before this flow even reaches this
+/// function. Without the two-way `<=>` fix, every write `browser.rs` makes to `minecraft_index`
+/// or `loader_index` after that point lands in the global and nowhere else, and the widget goes
+/// on showing whatever it last decided on its own.
+async fn combos_follow_a_target_change_even_after_being_touched(app: &TestApp) {
+    // Touch the Minecraft combo by hand, the same way a real session already has by the time
+    // anyone changes targets: this is what severs a plain one-way binding.
+    app.select_combo("BrowserScreen::mc_combo", 0);
+    app.wait_until(
+        "the touched pick to commit",
+        |window| window.global::<BrowserState>().get_minecraft().is_empty(),
+        QUICK,
+    )
+    .await;
+
+    select_target(app, QUILT_INSTANCE).await;
+    app.wait_until(
+        "the filters to catch up with the new target",
+        |window| {
+            let state = window.global::<BrowserState>();
+            state.get_minecraft() == QUILT_MC && state.get_loader() == "quilt"
+        },
+        QUICK,
+    )
+    .await;
+
+    assert_eq!(
+        app.el("BrowserScreen::mc_combo")
+            .accessible_value()
+            .map(|value| value.to_string()),
+        Some(QUILT_MC.to_string()),
+        "the Minecraft combo shows the new target's own version, not whatever the user \
+         last picked or the widget settled on by itself"
+    );
+    assert_eq!(
+        app.el("BrowserScreen::loader_combo")
+            .accessible_value()
+            .map(|value| value.to_string()),
+        Some("quilt".to_string()),
+        "the loader combo follows the new target too"
+    );
+
+    // Leave the target on the instance the rest of the flow expects.
+    select_target(app, INSTANCE).await;
+}
+
+/// (f6) Part B: opening the browser from the rail defaults to the instance the shell already
+/// has open (`App.current_slug`), not whichever row the target ComboBox last happened to
+/// hold.
+async fn browsing_from_the_rail_follows_the_active_instance(app: &TestApp) {
+    // Point the browser's own target at a different instance first. The old fallback kept
+    // this exact index (clamped into range), so leaving it here is what makes the fix
+    // observable rather than a coincidence of both landing on the same row.
+    select_target(app, QUILT_INSTANCE).await;
+
+    // Not `open_the_instance`: this is not the flow's first navigation to the instance list,
+    // and the rows reach `InstancesState.rows` one turn before the repeater has built an
+    // element for each of them (see `the_content_list_stripes_its_rows`), so a `click_nth`
+    // straight after `wait_until` sees the names can race an empty element tree.
+    app.click("Rail::rail_instances");
+    app.click("InstancesScreen::refresh_button");
+    app.wait_until(
+        "the instance list to show the setup instance",
+        |window| instance_names(window).iter().any(|name| name == INSTANCE),
+        QUICK,
+    )
+    .await;
+    app.wait_until(
+        "the list to have drawn a row per instance",
+        |_| app.all("InstancesScreen::row_open").len() == instance_names(&app.window).len(),
+        QUICK,
+    )
+    .await;
+    let index = instance_names(&app.window)
+        .iter()
+        .position(|name| name == INSTANCE)
+        .expect("the setup instance is in the list");
+    app.click_nth("InstancesScreen::row_open", index);
+    app.wait_until(
+        "the detail screen to show the instance",
+        |window| {
+            window.global::<App>().get_screen() == Screen::Instance
+                && window.global::<InstanceState>().get_name() == INSTANCE
+        },
+        QUICK,
+    )
+    .await;
+
+    app.click("Rail::rail_browser");
+    // Not `wait_for_browser`: its status check can pass before `open()`'s job has actually
+    // landed, when the status the screen already carried (from the target-follow flow just
+    // above) happens to match one of the strings that check accepts on its own. Waiting for
+    // the target name itself is what `open()` actually decides, so this only reports once the
+    // real answer is in.
+    app.wait_until(
+        "the browser to settle on the active instance as its target",
+        |window| window.global::<BrowserState>().get_target_name() == INSTANCE,
+        QUICK,
+    )
+    .await;
+
+    assert_eq!(
+        app.window
+            .global::<BrowserState>()
+            .get_target_name()
+            .to_string(),
+        INSTANCE,
+        "the browser opens on the instance the shell already has open, not the row the \
+         target ComboBox happened to be on last"
+    );
+    assert_eq!(
+        app.el("BrowserScreen::mc_combo")
+            .accessible_value()
+            .map(|value| value.to_string()),
+        Some(support::MC.to_string()),
+        "and its own Minecraft version comes with it"
     );
 }
 

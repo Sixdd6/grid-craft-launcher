@@ -109,13 +109,27 @@ export component InstancesScreen inherits Rectangle {
             // state below is the one that stretches.
             vertical-stretch: root.loading || root.rows.length == 0 ? 0 : 1;
 
+            // Rows a PageUp/PageDown steps by: however many the list shows at once.
+            property <int> page: max(1, floor(self.height / (Theme.row-height + Theme.gap)));
+            // The row a key press just chose, so the list (mounted or not) can scroll to it.
+            property <int> want-visible: -1;
+
             key-pressed(event) => {
                 if (event.text == Key.UpArrow) {
                     root.selected = Shell.move_selection(root.selected, -1, root.rows.length);
+                    self.want-visible = root.selected;
                     return EventResult.accept;
                 }
                 if (event.text == Key.DownArrow) {
                     root.selected = Shell.move_selection(root.selected, 1, root.rows.length);
+                    self.want-visible = root.selected;
+                    return EventResult.accept;
+                }
+                if (event.text == Key.Home || event.text == Key.End
+                    || event.text == Key.PageUp || event.text == Key.PageDown) {
+                    root.selected =
+                        Shell.jump(root.selected, event.text, self.page, root.rows.length);
+                    self.want-visible = root.selected;
                     return EventResult.accept;
                 }
                 if (event.text == Key.Return) {
@@ -127,9 +141,27 @@ export component InstancesScreen inherits Rectangle {
                 return EventResult.reject;
             }
 
-            if !root.loading && root.rows.length > 0: ListView {
+            if !root.loading && root.rows.length > 0: list := ListView {
                 width: 100%;
                 height: 100%;
+
+                // Keeps the selected row inside the viewport after a key moves it. Lives here
+                // rather than on the enclosing scope because a conditionally mounted element
+                // cannot be reached by id from outside its own `if`.
+                property <int> want-visible <=> keys.want-visible;
+                changed want-visible => {
+                    if (self.want-visible < 0) {
+                        return;
+                    }
+                    if (-self.viewport-y > self.want-visible * (Theme.row-height + Theme.gap)) {
+                        self.viewport-y = -self.want-visible * (Theme.row-height + Theme.gap);
+                    }
+                    if (-self.viewport-y + self.visible-height
+                        < (self.want-visible + 1) * (Theme.row-height + Theme.gap)) {
+                        self.viewport-y = self.visible-height
+                            - (self.want-visible + 1) * (Theme.row-height + Theme.gap);
+                    }
+                }
 
                 for row[i] in root.rows: row_open := ListRow {
                     title: row.name;

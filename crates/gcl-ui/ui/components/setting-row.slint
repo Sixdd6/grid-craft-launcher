@@ -171,20 +171,6 @@ export component SettingRow inherits Rectangle {
             }
         }
 
-        // Where the shown value comes from: default, preseed, file, or override.
-        VerticalLayout {
-            alignment: center;
-            width: 3 * Theme.status-width / 2;
-
-            Text {
-                text: root.entry.source;
-                color: root.entry.inherited ? Theme.text-muted : Theme.accent;
-                font-size: Theme.font-size-small;
-                horizontal-alignment: right;
-                overflow: elide;
-            }
-        }
-
         VerticalLayout {
             alignment: center;
             width: 5 * Theme.status-width / 4;

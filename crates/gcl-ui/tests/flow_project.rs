@@ -168,8 +168,14 @@ fn version_index(window: &AppWindow, number: &str) -> usize {
 }
 
 /// Waits until the browser has finished loading its sources and its instance list.
+///
+/// `open()` writes one of [`OPENED_NO_SEARCH`], then — unless it is coming back from the
+/// project screen — runs the current kind's search itself, which can finish before this even
+/// gets to check, overwriting it with `"Searching…"` or a result count. A status the screen
+/// left on before this navigation matches none of these, so this only reports "open" once
+/// one of them actually lands.
 async fn wait_for_browser(app: &TestApp) {
-    const OPENED: [&str; 3] = [
+    const OPENED_NO_SEARCH: [&str; 3] = [
         "Ready to search",
         "CurseForge disabled: set CURSEFORGE_API_KEY",
         "No content source is enabled",
@@ -177,8 +183,15 @@ async fn wait_for_browser(app: &TestApp) {
     app.wait_until(
         "the browser to open",
         |window| {
-            window.global::<App>().get_screen() == Screen::Browser
-                && OPENED.contains(&window.global::<BrowserState>().get_status().as_str())
+            if window.global::<App>().get_screen() != Screen::Browser {
+                return false;
+            }
+            let status = window.global::<BrowserState>().get_status().to_string();
+            OPENED_NO_SEARCH.contains(&status.as_str())
+                || status == "Searching…"
+                || status == "Searching modpacks…"
+                || status == "No results"
+                || status.ends_with("result(s)")
         },
         QUICK,
     )
@@ -231,13 +244,27 @@ async fn searching_shows_a_decoded_icon(app: &TestApp) {
     open_the_instance(app).await;
     app.click("InstanceScreen::add_content_button");
     wait_for_browser(app).await;
+    app.wait_until(
+        "the browser to search on its own, with no query typed",
+        |window| !row_titles(window).is_empty(),
+        QUICK,
+    )
+    .await;
+    assert_eq!(
+        row_titles(&app.window).first().map(String::as_str),
+        Some(support::MOD_TITLE),
+        "the first row is the first hit of the recorded search, run with an empty query"
+    );
 
     app.type_into("SearchBox::search_field", "sodium");
     support::pump();
     app.click("BrowserScreen::search_button");
     app.wait_until(
         "the search results to arrive",
-        |window| !row_titles(window).is_empty(),
+        // Rows are already on screen from the auto-search on open, so `row_titles` alone
+        // would pass on the stale page the moment this click sets `loading`; `!loading` is
+        // what says the new page (not just new data) has actually landed and redrawn.
+        |window| !window.global::<BrowserState>().get_loading() && !row_titles(window).is_empty(),
         QUICK,
     )
     .await;

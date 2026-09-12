@@ -75,7 +75,7 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 - R9.1 The launcher holds a default `options.txt` preseed as key-value pairs in `config.toml`.
 - R9.2 New instances get the preseed written to `options.txt`.
 - R9.3 Each instance holds an override map of `options.txt` keys. On launch, the launcher writes those keys into the instance's `options.txt`, replacing existing lines with the same key and appending missing ones. Other lines are untouched.
-- R9.4 The user can edit the preseed and per-instance overrides in the UI and CLI. Delivered: a typed editor over `settings::catalog` — a slider, switch, choice box, or text field per known key, grouped and searchable, with the layer each value came from and a Reset on a value this layer holds. Layers rank override, `options.txt`, preseed, catalog default. A key the catalog does not know keeps a raw row and is never dropped. `Launcher::set_game_default` / `set_instance_override` validate every write, so `gcl settings set` rejects what the editor rejects.
+- R9.4 The user can edit the preseed and per-instance overrides in the UI and CLI. Delivered: a typed editor over `settings::catalog` — a slider, switch, choice box, or text field per known key, grouped and searchable, with a Reset that shows on a value this layer holds. Layers rank override, `options.txt`, preseed, catalog default. A key the catalog does not know keeps a raw row and is never dropped. `Launcher::set_game_default` / `set_instance_override` validate every write, so `gcl settings set` rejects what the editor rejects.
 
 ## R10 JVM settings
 
@@ -101,9 +101,9 @@ Each requirement has an id. Tests and plans cite ids. "Must" means MVP. "Later" 
 - R13.1 Screens: instances list, instance detail (content, settings, JVM, logs), content browser (search across sources with type and version filters), accounts, launcher settings. All five are delivered (`crates/gcl-ui`). A sixth screen, project details, sits behind the browser and the instance content list: it shows the description and a Versions tab, and returns to whichever screen opened it.
 - R13.2 Progress for downloads and installs is visible per task. Delivered: `App.tasks` shows one row per active task with a fraction and status, in the bottom panel.
 - R13.3 Dark theme by default. Native window, no web view. Delivered through `winit` + `renderer-femtovg`. `std-widgets` controls (combo boxes, text fields, spin boxes) follow the dark shell as well: `AppWindow`'s `init` sets `Palette.color-scheme = ColorScheme.dark`.
-- R13.4 Keyboard: every list is arrow-navigable, Enter activates a row, Escape closes the open dialog, digits 1-5 jump to a screen. Delivered and unit-tested at the pure-function level (`gcl-ui/src/keys.rs`); the `.slint` wiring is verified by compiling, not by a keyboard-driving test.
+- R13.4 Keyboard: every list is arrow-navigable, Enter activates a row, Escape closes the open dialog, digits 1-5 jump to a screen. Home, End, PageUp, and PageDown move the selection on every list, and the rail shows no digits. Delivered and unit-tested at the pure-function level (`gcl-ui/src/keys.rs`); the `.slint` wiring is verified by compiling, not by a keyboard-driving test.
 - R13.5 Every screen is driven end to end by a headless flow test: `crates/gcl-ui/tests/flow_{instances,settings,content,accounts,project}.rs` build the real `AppWindow` over a real `Launcher` on a temp root and click through create, install, launch, stop, the settings editor, content add and remove, modpack search and install, and the account flows. The GUI writes `<root>/logs/gui.log.<date>`, and `--screenshot <path>` saves a PNG of the window.
-- Known gaps: there is no file picker — a pack archive on disk is named by typing its path. The CurseForge search and a real Microsoft sign-in are unverified against the live services on this machine; both are driven against mocks by the flow tests.
+- Known gaps: the file picker is now partly there — the app root has a folder chooser, through `rfd` and the desktop portal; a pack archive on disk and a Java path are still named by typing. The CurseForge search and a real Microsoft sign-in are unverified against the live services on this machine; both are driven against mocks by the flow tests.
 
 ## Later
 
@@ -163,7 +163,7 @@ tests are there, but no live run has exercised it here).
 | R9.1 | Done | `config.toml` holds the preseed as key-value pairs. |
 | R9.2 | Done | A new instance gets the preseed written to `options.txt`. |
 | R9.3 | Done | Launch writes the instance's overrides into `options.txt`, replacing matching keys and appending the rest. |
-| R9.4 | Done | A typed editor over `settings::catalog` — slider, switch, choice box, or text field per key, grouped and searchable, showing the winning layer and offering Reset. `settings set` and `settings defaults set` route through the same validating `Launcher` methods. The catalog is checked against a real 26.2 Fabric `options.txt`: `fov` shows in degrees over a stored float, choice tokens keep the quotes the file writes, and `gcl settings set` accepts a bare choice token. |
+| R9.4 | Done | A typed editor over `settings::catalog` — slider, switch, choice box, or text field per key, grouped and searchable, offering Reset on a value this layer holds. `settings set` and `settings defaults set` route through the same validating `Launcher` methods. The catalog is checked against a real 26.2 Fabric `options.txt`: `fov` shows in degrees over a stored float, choice tokens keep the quotes the file writes, and `gcl settings set` accepts a bare choice token. |
 | R10.1 | Done | `config jvm --min --max` sets the launcher-wide heap bounds. |
 | R10.2 | Done | Per-instance min and max override the defaults; the JVM tab edits them. |
 | R10.3 | Done | `instance.toml` carries extra JVM arguments per instance. |
@@ -177,7 +177,7 @@ tests are there, but no live run has exercised it here).
 | R13.1 | Done | All five screens ship: instances, instance detail, browser, accounts, settings. A project details screen (Description and Versions tabs) opens from a search row's title and from an installed row's source button, and returns to whichever screen opened it. |
 | R13.2 | Done | The bottom panel shows one row per task with a fraction and a status. |
 | R13.3 | Done | The shell is dark and native (winit + FemtoVG), and `std-widgets` controls follow it: `Palette.color-scheme = ColorScheme.dark` in `AppWindow`'s `init`. |
-| R13.4 | Done | Digits 1-5, arrows, Enter, and Escape are wired; `keys.rs` is unit-tested. The wiring is verified by compile and Slint's documented event routing, not by a live keyboard. |
+| R13.4 | Done | Digits 1-5, arrows, Home, End, PageUp, PageDown, Enter, and Escape are wired; the rail shows no digits. `keys.rs` is unit-tested. The wiring is verified by compile and Slint's documented event routing, not by a live keyboard. |
 | R13.5 | Done | Five headless flow binaries drive the real window over a real launcher: instances (create, install, launch, stop, rename, delete), settings, content, accounts, and project (search, open details, install a version over another one). Each click goes through real pointer hit-testing rather than an accessible action. The GUI logs to `<root>/logs/gui.log.<date>`; `--screenshot <path>` saves a PNG. `just ui-xtest` drives the built app with real X input under Xvfb; verified: create via the dialog, a never-launched instance's Logs tab starts empty, a click after closing a dialog with Escape still lands, a number-key shortcut works after a screen change past a text field, the browser starts empty on open, and a search row's title opens the project details screen. |
 
 ### Known limitations

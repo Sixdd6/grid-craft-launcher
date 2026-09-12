@@ -14,10 +14,13 @@ export component Toast inherits Rectangle {
 
     width: Theme.toast-width;
     height: body.preferred-height + 2 * Theme.gap;
-    background: Theme.surface-raised;
-    border-radius: Theme.radius;
+    background: Theme.surface;
+    border-radius: Theme.radius-row;
     border-width: 1px;
-    border-color: root.edge;
+    border-color: Theme.border;
+    drop-shadow-color: Theme.shadow-color;
+    drop-shadow-blur: Theme.shadow-blur;
+    drop-shadow-offset-y: Theme.shadow-offset-y;
 
     // Left edge stripe, so the kind is readable without reading the border.
     Rectangle {
@@ -33,8 +36,9 @@ export component Toast inherits Rectangle {
         y: Theme.gap;
         width: parent.width - 2 * Theme.pad;
         text: root.text;
-        color: Theme.text;
-        font-size: Theme.font-size-small;
+        color: root.kind == "error" ? Theme.danger : Theme.text;
+        font-size: Theme.font-size;
+        font-weight: Theme.font-weight-medium;
         wrap: word-wrap;
     }
 }

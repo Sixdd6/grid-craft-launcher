@@ -243,23 +243,22 @@ async fn a_switch_saves_a_launcher_default(app: &TestApp) {
 
 /// (c2) A save from the settings screen itself refreshes the editor without retargeting it.
 ///
-/// The screen's Add row writes a raw `options.txt` default, which reloads the whole screen.
-/// That reload re-reads the editor's rows, but it must not reopen the editor: reopening
-/// empties the search box under the user.
+/// A raw `options.txt` key the catalog does not know is set through the core, the same way
+/// the CLI would, since the screen no longer offers a field for it. Any other save on this
+/// screen (here, re-applying the download count) reloads the whole screen, which re-reads the
+/// editor's rows, but it must not reopen the editor: reopening empties the search box under
+/// the user.
 async fn a_raw_default_save_keeps_the_editor_search(app: &TestApp) {
     search(app, "gamma", "gamma").await;
 
     idle(app).await;
-    app.scroll_to("SettingsScreen::default_key_field");
-    app.type_into("SettingsScreen::default_key_field", "guiScale");
-    app.type_into("SettingsScreen::default_value_field", "2");
-    app.click("SettingsScreen::default_add_button");
-    app.wait_until(
-        "the raw default to reach config.toml",
-        |_| saved_default(app, "guiScale") == Some("2".to_string()),
-        QUICK,
-    )
-    .await;
+    app.launcher
+        .set_game_default("guiScale", "2")
+        .expect("seed a raw default outside the catalog");
+    assert_eq!(saved_default(app, "guiScale"), Some("2".to_string()));
+
+    app.scroll_to("SettingsScreen::parallel_apply_button");
+    app.click("SettingsScreen::parallel_apply_button");
     // The screen's own busy flag is not the editor's: clearing it is what marks the point
     // where the save's `done` ran and asked the editor to refresh. Only then is the editor's
     // flag worth waiting on.

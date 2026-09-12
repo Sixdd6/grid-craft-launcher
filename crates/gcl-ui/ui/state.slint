@@ -9,6 +9,13 @@ export global Shell {
     // Where a list's selection lands after an arrow key. Carries the current index (-1 when
     // nothing is chosen), the step, and the row count, and returns the new index.
     callback move_selection(int /* current */, int /* delta */, int /* len */) -> int;
+    // Where a list's selection lands after Home, End, PageUp, or PageDown. Carries the
+    // current index, the key's own `event.text`, the page size (rows a page steps by), and
+    // the row count. Answers -1 both for "the jump landed on no row" (an empty list) and for
+    // "this key is not a jump key" — a scope tests the key against `Key.Home` and friends
+    // itself before calling this, the same way `src/keys.rs::jump` tells the two apart with
+    // `Option`.
+    callback jump(int /* current */, string /* key */, int /* page */, int /* len */) -> int;
 }
 
 // Everything the typed game-settings editor reads and reports.
@@ -81,8 +88,12 @@ export global InstanceState {
     // Which tab is shown: 0 content, 1 settings, 2 jvm, 3 logs.
     in-out property <int> tab: 0;
 
-    // Installed content, in install order.
+    // Installed content, in install order. Already filtered by `content_filter`; the full
+    // list lives in `src/screens/instance.rs`'s own `Shared` state, not here.
     in-out property <[ContentRow]> content: [];
+    // What the Content tab's search box holds. Matches a row's title or file name,
+    // case-insensitive. `""` shows every row.
+    in-out property <string> content_filter: "";
     // Downloads the user still has to fetch by hand.
     in-out property <[PendingRow]> pending: [];
     // Whether this instance has an `options.txt` yet. The read-only list of what it holds
@@ -176,6 +187,8 @@ export global InstanceState {
     callback content_toggle(string /* project_id */, bool /* enabled */);
     // A row's Remove button was pressed. Carries the project id.
     callback content_remove(string);
+    // `content_filter` changed: re-filter the full row list and set `content`.
+    callback filter_changed();
     // Look for newer versions of everything installed.
     callback check_updates();
     // Install every update the last check found.
@@ -269,8 +282,6 @@ export global AccountsState {
 export global SettingsState {
     // The app root in use right now.
     in-out property <string> root_path: "";
-    // Root typed into the Change field, empty until the user types one.
-    in-out property <string> new_root: "";
     // Maximum number of concurrent downloads.
     in-out property <int> parallel: 0;
     // Default minimum heap, in MiB.
@@ -294,17 +305,17 @@ export global SettingsState {
 
     // The screen was shown: read the config.
     callback open();
-    // Point the launcher at another app root. Carries the path typed.
+    // Point the launcher at another app root. Carries the path chosen.
     callback save_root(string);
+    // Opens the OS folder picker for a new app root. `Some` picked path goes through
+    // `save_root`; a cancelled picker does nothing.
+    callback choose_root();
     // Change the download concurrency. Carries the new count.
     callback save_downloads(int);
     // Save the JVM defaults. Carries min heap, max heap, and the java path, as typed.
     callback save_jvm(string /* min */, string /* max */, string /* java_path */);
     // Save the Microsoft client id. An empty string clears it.
     callback save_msa_client_id(string);
-    // Set one raw `options.txt` default, from the Advanced editor. Carries the key and the
-    // value. Everything the catalog knows is set through `SettingsEditorState` instead.
-    callback default_set(string /* key */, string /* value */);
     // Check every configured source and the Mojang manifest. Talks to the network.
     callback verify_sources();
 }
