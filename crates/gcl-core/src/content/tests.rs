@@ -160,6 +160,7 @@ fn project(id: &str, kind: ContentKind) -> Project {
         description: String::new(),
         kind,
         page_url: format!("https://modrinth.com/mod/{id}"),
+        gallery: Vec::new(),
     }
 }
 

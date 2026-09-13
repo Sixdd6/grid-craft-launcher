@@ -195,6 +195,22 @@ export struct Block {
     image_state: string,
 }
 
+// One thumbnail on the project details screen's Gallery tab, and the full-size image the
+// viewer overlay shows for the same entry.
+//
+// `title`/`description` are empty when the source gave none; `BlockList`'s image kind is the
+// closest existing shape, but a gallery entry is never a description block, so this is its own
+// struct. `image`/`image_state` follow the same split `Block` uses for a description image:
+// `src/screens/project.rs` fetches and decodes off the UI thread and writes them onto this
+// row in place, `""` until it starts, then `"loading"`, `"ready"`, or `"failed"`.
+export struct GalleryImageRow {
+    url: string,
+    title: string,
+    description: string,
+    image: image,
+    image_state: string,
+}
+
 // One version row on the project details screen's Versions tab.
 //
 // `game_versions` and `loaders` are pre-joined for display, the same way other rows in this

@@ -1178,3 +1178,56 @@ async fn a_hit_without_a_date_modified_has_an_empty_updated() {
 
     assert_eq!(page.hits[0].updated, "");
 }
+
+#[tokio::test]
+async fn project_gallery_maps_screenshots() {
+    let server = MockServer::start().await;
+    mount_classes(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/v1/mods/394468"))
+        .and(header("x-api-key", KEY))
+        .respond_with(ResponseTemplate::new(200).set_body_string(MOD))
+        .mount(&server)
+        .await;
+
+    let project = source(&server).project("394468").await.expect("project");
+
+    assert_eq!(project.gallery.len(), 1);
+    let shot = &project.gallery[0];
+    assert_eq!(
+        shot.url,
+        "https://media.forgecdn.net/attachments/411/223/sodium_comparison.png"
+    );
+    assert_eq!(
+        shot.thumbnail_url.as_deref(),
+        Some(
+            "https://media.forgecdn.net/attachments/thumbnails/411/223/310/172/sodium_comparison.png"
+        )
+    );
+    assert_eq!(shot.title.as_deref(), Some("sodium_comparison.png"));
+    // The fixture's description is empty, and CurseForge publishes no featured flag.
+    assert_eq!(shot.description, None);
+    assert!(!shot.featured);
+}
+
+#[tokio::test]
+async fn project_without_screenshots_has_an_empty_gallery() {
+    let mut body: serde_json::Value = serde_json::from_str(MOD).expect("fixture parses");
+    body["data"]
+        .as_object_mut()
+        .expect("data is an object")
+        .remove("screenshots");
+    let body = body.to_string();
+
+    let server = MockServer::start().await;
+    mount_classes(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/v1/mods/394468"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .mount(&server)
+        .await;
+
+    let project = source(&server).project("394468").await.expect("project");
+
+    assert!(project.gallery.is_empty(), "got {:?}", project.gallery);
+}

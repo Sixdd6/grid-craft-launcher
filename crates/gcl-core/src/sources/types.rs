@@ -152,6 +152,26 @@ pub struct Project {
     pub kind: ContentKind,
     /// Browser link to the project's page at the source.
     pub page_url: String,
+    /// Images the source publishes with the project, in display order.
+    pub gallery: Vec<GalleryImage>,
+}
+
+/// One image a source publishes with a project.
+///
+/// Modrinth calls these `gallery` entries and orders them by `ordering`; CurseForge
+/// calls them `screenshots` and publishes neither an order nor a featured flag.
+#[derive(Debug, Clone, Serialize)]
+pub struct GalleryImage {
+    /// Full-size image URL.
+    pub url: String,
+    /// Smaller version of the same image, when the source serves one.
+    pub thumbnail_url: Option<String>,
+    /// Caption, when the source has one.
+    pub title: Option<String>,
+    /// Longer caption, when the source has one.
+    pub description: Option<String>,
+    /// Whether the source marks this image as the project's featured one.
+    pub featured: bool,
 }
 
 /// Release channel of a version, ordered `Alpha < Beta < Release`.

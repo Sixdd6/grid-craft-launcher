@@ -12,11 +12,11 @@ use gcl_core::instances::model::{ContentEntry, GcPreset};
 use gcl_core::launcher::{InstallState, LatestVersion};
 use gcl_core::loaders::LoaderVersion;
 use gcl_core::mojang::manifest::ManifestEntry;
-use gcl_core::sources::SearchHit;
+use gcl_core::sources::{GalleryImage, SearchHit};
 
 use crate::{
-    AccountRow, ContentRow, GcPresetRow, InstanceRow, LoaderVersionRow, PendingRow, SearchRow,
-    SettingRow, VersionRow,
+    AccountRow, ContentRow, GalleryImageRow, GcPresetRow, InstanceRow, LoaderVersionRow,
+    PendingRow, SearchRow, SettingRow, VersionRow,
 };
 
 pub mod settings;
@@ -234,6 +234,29 @@ pub fn decode_description_image(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), Str
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
     Ok((width, height, rgba.into_raw()))
+}
+
+/// Builds the Gallery tab's row for one gallery image.
+///
+/// `url` carries whatever `src/screens/project.rs` should fetch for the *thumbnail*:
+/// `thumbnail_url` when the source served one, else the full-size `url` — Modrinth serves no
+/// separate thumbnail, so its rows always fall back to the full image, per `GalleryImage`'s
+/// own doc comment. The viewer overlay fetches the full-size image separately, from the same
+/// `GalleryImage` list `src/screens/project.rs` keeps alongside this row's index; this
+/// converter has no `image`/`image_state` to fill, the same split `block_row` uses for a
+/// description image.
+pub fn gallery_row(image: &GalleryImage) -> GalleryImageRow {
+    GalleryImageRow {
+        url: image
+            .thumbnail_url
+            .as_deref()
+            .unwrap_or(image.url.as_str())
+            .into(),
+        title: image.title.as_deref().unwrap_or_default().into(),
+        description: image.description.as_deref().unwrap_or_default().into(),
+        image: Default::default(),
+        image_state: "".into(),
+    }
 }
 
 /// Builds the accounts row for one saved account. `active` marks the launch default.

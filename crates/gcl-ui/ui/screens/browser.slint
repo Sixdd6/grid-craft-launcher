@@ -90,8 +90,14 @@ export global BrowserState {
     in-out property <int> page_size: 20;
     // Whether the source has hits past this page.
     in-out property <bool> has_more: false;
-    // True while a search or an install is running.
+    // True while a search is running. Gates the results list, its header, and the keyboard
+    // scope: nothing else may unmount them.
     in-out property <bool> loading: false;
+    // True while an install (`add`, `pick_world`'s world lookup, or `install_pack`) is
+    // running. Disables the action buttons and feeds the status line; it never gates the
+    // results list, its header, or the keyboard scope, so a row an install is running on
+    // stays on screen.
+    in-out property <bool> busy: false;
     // One line about the last thing that happened here.
     in-out property <string> status: "";
     // Set by `ProjectState.back()` just before it returns here, so `open()` (which every
@@ -221,9 +227,25 @@ export component BrowserScreen inherits Rectangle {
 
     // The keyboard version. It repeats the button's `enabled` rule, so Enter does nothing
     // where the button would be greyed out.
+    //
+    // In `modpack_mode`, the selection runs over `BrowserState.pack_rows` instead, and Enter
+    // opens the selected pack's details the same way clicking its row does: a pack is
+    // installed as its own instance, not added to one, so there is no primary action to
+    // repeat here, only `open_project`.
     function activate_selected() {
+        if (root.modpack_mode) {
+            if (root.selected >= 0 && root.selected < BrowserState.pack_rows.length) {
+                root.open_project(
+                    BrowserState.pack_rows[root.selected].source,
+                    BrowserState.pack_rows[root.selected].project_id,
+                    BrowserState.pack_rows[root.selected].downloads,
+                    BrowserState.pack_rows[root.selected].author,
+                );
+            }
+            return;
+        }
         if (root.selected >= 0 && root.selected < BrowserState.rows.length
-            && !BrowserState.loading
+            && !BrowserState.loading && !BrowserState.busy
             && (BrowserState.rows[root.selected].kind == "modpack"
                 || (root.has_target && BrowserState.rows[root.selected].state != "installed"
                     && BrowserState.rows[root.selected].state != "none"))) {
@@ -235,6 +257,12 @@ export component BrowserScreen inherits Rectangle {
                 BrowserState.rows[root.selected].latest_id,
             );
         }
+    }
+
+    // How many rows the keyboard scope currently steers: `pack_rows` in `modpack_mode`, the
+    // content `rows` otherwise. Up/Down/Home/End/PageUp/PageDown all clamp to this.
+    function result_count() -> int {
+        return root.modpack_mode ? BrowserState.pack_rows.length : BrowserState.rows.length;
     }
 
     // "1.20.1 fabric", or empty when the target the latest-version job resolved against
@@ -331,7 +359,7 @@ export component BrowserScreen inherits Rectangle {
             search_button := Button {
                 text: "Search";
                 kind: "primary";
-                enabled: !BrowserState.loading;
+                enabled: !BrowserState.loading && !BrowserState.busy;
                 clicked => {
                     root.run_search();
                 }
@@ -601,7 +629,16 @@ export component BrowserScreen inherits Rectangle {
                 // Content-driven, same as `row_open` above: `pack_layout`'s preferred height
                 // already reflects however many lines the wrapped title takes.
                 height: max(pack_layout.preferred-height, pack_action.preferred-height);
+                selected: i == root.selected;
                 alt: mod(i, 2) == 1;
+                clicked => {
+                    // Clicking anywhere on the row but a button opens the details, the same
+                    // as `row_open` above. Clicking a row is also how the keyboard gets
+                    // here: the scope never grabs focus on its own.
+                    keys.focus();
+                    root.selected = i;
+                    root.open_project(row.source, row.project_id, row.downloads, row.author);
+                }
 
                 Rectangle {
                     y: Theme.gap;
@@ -628,11 +665,29 @@ export component BrowserScreen inherits Rectangle {
                     spacing: Theme.gap / 2;
                     horizontal-stretch: 1;
 
-                    Text {
-                        text: row.title;
-                        color: Theme.text;
-                        font-size: Theme.font-size;
-                        wrap: word-wrap;
+                    // Not interactive on its own: it carries the accessible action for a
+                    // screen reader, the same shape `row_title` uses above. Clicking
+                    // anywhere on the row, including here, opens details through
+                    // `pack_row`'s own `clicked` above.
+                    pack_title := Rectangle {
+                        height: pack_title_text.preferred-height;
+
+                        accessible-role: button;
+                        accessible-label: row.title;
+                        accessible-action-default => {
+                            keys.focus();
+                            root.selected = i;
+                            root.open_project(row.source, row.project_id, row.downloads, row.author);
+                        }
+
+                        pack_title_text := Text {
+                            text: row.title;
+                            color: Theme.text;
+                            font-size: Theme.font-size;
+                            horizontal-alignment: left;
+                            width: 100%;
+                            wrap: word-wrap;
+                        }
                     }
 
                     Text {
@@ -794,20 +849,20 @@ export component BrowserScreen inherits Rectangle {
             key-pressed(event) => {
                 if (event.text == Key.UpArrow) {
                     root.selected =
-                        Shell.move_selection(root.selected, -1, BrowserState.rows.length);
+                        Shell.move_selection(root.selected, -1, root.result_count());
                     self.want-visible = root.selected;
                     return EventResult.accept;
                 }
                 if (event.text == Key.DownArrow) {
                     root.selected =
-                        Shell.move_selection(root.selected, 1, BrowserState.rows.length);
+                        Shell.move_selection(root.selected, 1, root.result_count());
                     self.want-visible = root.selected;
                     return EventResult.accept;
                 }
                 if (event.text == Key.Home || event.text == Key.End
                     || event.text == Key.PageUp || event.text == Key.PageDown) {
                     root.selected = Shell.jump(
-                        root.selected, event.text, self.page, BrowserState.rows.length);
+                        root.selected, event.text, self.page, root.result_count());
                     self.want-visible = root.selected;
                     return EventResult.accept;
                 }
@@ -989,7 +1044,7 @@ export component BrowserScreen inherits Rectangle {
                                 ? "No version for this instance"
                                 : "";
                             kind: row.state == "installed" ? "secondary" : "primary";
-                            enabled: !BrowserState.loading
+                            enabled: !BrowserState.loading && !BrowserState.busy
                                 && (row.kind == "modpack"
                                     || (root.has_target && row.state != "installed"
                                         && row.state != "none"));
@@ -1019,7 +1074,7 @@ export component BrowserScreen inherits Rectangle {
 
             prev_button := Button {
                 text: "Prev";
-                enabled: BrowserState.page > 0 && !BrowserState.loading;
+                enabled: BrowserState.page > 0 && !BrowserState.loading && !BrowserState.busy;
                 clicked => {
                     BrowserState.prev_page();
                 }
@@ -1027,7 +1082,7 @@ export component BrowserScreen inherits Rectangle {
 
             next_button := Button {
                 text: "Next";
-                enabled: BrowserState.has_more && !BrowserState.loading;
+                enabled: BrowserState.has_more && !BrowserState.loading && !BrowserState.busy;
                 clicked => {
                     BrowserState.next_page();
                 }

@@ -854,3 +854,59 @@ async fn a_hit_without_a_date_modified_has_an_empty_updated() {
 
     assert_eq!(page.hits[0].updated, "");
 }
+
+#[tokio::test]
+async fn project_gallery_is_sorted_by_ordering() {
+    // The fixture already lists its gallery in `ordering` order, so the body is served
+    // reversed: the client, not the server, decides the order.
+    let mut body: serde_json::Value = serde_json::from_str(PROJECT_SODIUM).expect("fixture parses");
+    let gallery = body["gallery"]
+        .as_array_mut()
+        .expect("fixture has a gallery");
+    gallery.reverse();
+    let body = body.to_string();
+
+    let server = MockServer::start().await;
+    let source = serve(&server, "/project/sodium", &body).await;
+
+    let project = source.project("sodium").await.expect("project succeeds");
+
+    let titles: Vec<&str> = project
+        .gallery
+        .iter()
+        .map(|g| g.title.as_deref().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        titles,
+        vec![
+            "Underwater Lighting Improvements",
+            "Biome Blending Improvements",
+            "Fluid Rendering Improvements",
+            "Block Shading Improvements",
+            "Sodium 0.5.2",
+            "Sodium 0.4.1",
+        ]
+    );
+    let first = &project.gallery[0];
+    assert_eq!(
+        first.url,
+        "https://cdn.modrinth.com/data/AANobbMI/images/d84313e6f57dc9e7896961dbd2dfc2689d482758_350.webp"
+    );
+    // Modrinth serves no separate thumbnail.
+    assert_eq!(first.thumbnail_url, None);
+    assert!(!first.featured);
+    assert_eq!(
+        first.description.as_deref(),
+        Some("Sodium fixes many graphical issues with smooth lighting while underwater.")
+    );
+}
+
+#[tokio::test]
+async fn project_without_gallery_has_an_empty_one() {
+    let server = MockServer::start().await;
+    let source = serve(&server, "/project/sodium", PROJECT_DESCRIPTION).await;
+
+    let project = source.project("sodium").await.expect("project succeeds");
+
+    assert!(project.gallery.is_empty(), "got {:?}", project.gallery);
+}

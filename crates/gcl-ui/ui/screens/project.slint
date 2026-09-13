@@ -1,6 +1,6 @@
 import { CheckBox, ListView, ScrollView, TextEdit } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
-import { Block, ContentVersionRow, Screen } from "../types.slint";
+import { Block, ContentVersionRow, GalleryImageRow, Screen } from "../types.slint";
 import { BlockList } from "../components/block-list.slint";
 import { Button } from "../components/button.slint";
 import { EmptyState } from "../components/empty-state.slint";
@@ -44,7 +44,7 @@ export global ProjectState {
     // Slug of the instance a version installs into, empty when none was picked.
     in-out property <string> target_slug: "";
 
-    // Which tab is shown: 0 description, 1 versions.
+    // Which tab is shown: 0 description, 1 versions, 2 gallery.
     in-out property <int> tab: 0;
     // The description, one block per heading, paragraph, bullet, or code run.
     in-out property <[Block]> blocks: [];
@@ -53,6 +53,24 @@ export global ProjectState {
     in-out property <[ContentVersionRow]> versions: [];
     // Whether the version list ignores the target instance's Minecraft version and loader.
     in-out property <bool> show_all_versions: false;
+
+    // The project's gallery images, in the order the source publishes them, capped at 20.
+    // `image`/`image_state` are filled in place by `src/screens/project.rs` once each
+    // thumbnail's fetch lands, the same shape `Block`'s image kind uses for a description
+    // image.
+    in-out property <[GalleryImageRow]> gallery: [];
+    // Whether the full-size viewer overlay is open.
+    in-out property <bool> viewer_open: false;
+    // Which `gallery` row the viewer shows. `-1` while the viewer is closed.
+    in-out property <int> viewer_index: -1;
+    // The open row's title, empty when the source gave none.
+    in-out property <string> viewer_title: "";
+    // The open row's longer caption, empty when the source gave none.
+    in-out property <string> viewer_description: "";
+    // The open row's full-size image, decoded off the UI thread. Empty until it lands.
+    in-out property <image> viewer_image;
+    // "" until the viewer opens on a row, then "loading", "ready", or "failed".
+    in-out property <string> viewer_image_state: "";
 
     // True while the description, the versions, or an install is loading.
     in-out property <bool> loading: false;
@@ -90,6 +108,14 @@ export global ProjectState {
     callback open_notes(string /* version_id */, string /* number */);
     // The Notes modal was closed.
     callback close_notes();
+    // A thumbnail was pressed. Carries its index into `gallery`.
+    callback open_viewer(int /* index */);
+    // The viewer's Close button, or Escape while it is open.
+    callback close_viewer();
+    // The viewer's Next button, or Right Arrow while it is open.
+    callback viewer_next();
+    // The viewer's Prev button, or Left Arrow while it is open.
+    callback viewer_prev();
 }
 
 // The project details screen: a header, a Description/Versions `TabBar`, and the tab body.
@@ -113,6 +139,22 @@ export component ProjectScreen inherits Rectangle {
 
     keys := FocusScope {
         key-pressed(event) => {
+            if (ProjectState.viewer_open) {
+                // Escape closes the viewer first; a second Escape (once the viewer is
+                // already gone) is what falls through to `back()` below.
+                if (event.text == Key.Escape) {
+                    ProjectState.close_viewer();
+                    return EventResult.accept;
+                }
+                if (event.text == Key.LeftArrow) {
+                    ProjectState.viewer_prev();
+                    return EventResult.accept;
+                }
+                if (event.text == Key.RightArrow) {
+                    ProjectState.viewer_next();
+                    return EventResult.accept;
+                }
+            }
             if (event.text == Key.Escape) {
                 ProjectState.back();
                 return EventResult.accept;
@@ -201,7 +243,7 @@ export component ProjectScreen inherits Rectangle {
         }
 
         tabs := TabBar {
-            tabs: ["Description", "Versions"];
+            tabs: ["Description", "Versions", "Gallery"];
             current <=> ProjectState.tab;
         }
 
@@ -358,6 +400,117 @@ export component ProjectScreen inherits Rectangle {
             }
         }
 
+        // Gallery tab: a wrapping grid of thumbnails, fixed-height cards with `image-fit:
+        // cover` and a title caption. Pressing one opens the full-size viewer below.
+        // Unmounted while the viewer is open: its `ScrollView::flickable` would otherwise
+        // sit, unrelated, under the full-window overlay below, and geometrically overlap
+        // whichever of the overlay's own controls happen to fall past its clipped edge.
+        if ProjectState.tab == 2 && !ProjectState.viewer_open: ScrollView {
+            vertical-stretch: 1;
+
+            gallery_body := VerticalLayout {
+                padding: Theme.pad;
+                spacing: Theme.gap;
+                alignment: start;
+
+                // How many cards fit one row, and the fixed size each one gets. A card
+                // taller than it is wide keeps the grid dense without measuring every
+                // thumbnail's own aspect ratio.
+                property <int> cols: 4;
+                property <length> cell-width: 220px;
+                property <length> cell-height: 160px;
+
+                if ProjectState.gallery.length == 0 && !ProjectState.loading: EmptyState {
+                    title: "No images";
+                }
+
+                for row_index in (ProjectState.gallery.length + gallery_body.cols - 1) / gallery_body.cols: HorizontalLayout {
+                    spacing: Theme.gap;
+
+                    // Every row gets `cols` fixed-size slots, whether or not this last row
+                    // has that many images: an empty slot beyond the gallery's length just
+                    // stays blank, which keeps the grid columns aligned. `for` cannot take
+                    // a conditional element as its own body, so the slot is a plain
+                    // `Rectangle` and the real card is its one conditional child.
+                    for col_index in gallery_body.cols: Rectangle {
+                        property <int> item-index: row_index * gallery_body.cols + col_index;
+
+                        width: gallery_body.cell-width;
+                        height: gallery_body.cell-height;
+                        horizontal-stretch: 0;
+
+                        if item-index < ProjectState.gallery.length: gallery_thumbnail := Rectangle {
+                            property <GalleryImageRow> item: ProjectState.gallery[item-index];
+
+                            width: 100%;
+                            height: 100%;
+                            background: Theme.surface;
+                            border-radius: Theme.radius-card;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            clip: true;
+
+                            accessible-role: button;
+                            accessible-label: item.title == "" ? "Image " + (item-index + 1) : item.title;
+                            accessible-action-default => {
+                                // A plain click does not move the keyboard by itself (see the
+                                // `slint-ui` skill's keyboard section), and the Notes modal's
+                                // own close can leave it on `nav` rather than this screen's
+                                // `keys`; without reclaiming it here, Escape and the arrow
+                                // keys the viewer answers to would go to the rail instead.
+                                keys.focus();
+                                ProjectState.open_viewer(item-index);
+                            }
+
+                            VerticalLayout {
+                                thumb_image := Image {
+                                    source: item.image;
+                                    image-fit: cover;
+                                    vertical-stretch: 1;
+                                }
+
+                                if item.title != "": Text {
+                                    text: item.title;
+                                    color: Theme.text;
+                                    font-size: Theme.font-size-small;
+                                    horizontal-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+
+                            if item.image_state == "loading" || item.image_state == "": Text {
+                                text: "Loading…";
+                                color: Theme.text-muted;
+                                font-size: Theme.font-size-small;
+                                width: 100%;
+                                height: 100%;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            if item.image_state == "failed": Text {
+                                text: "Could not load image";
+                                color: Theme.text-muted;
+                                font-size: Theme.font-size-small;
+                                width: 100%;
+                                height: 100%;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                            }
+
+                            TouchArea {
+                                clicked => {
+                                    keys.focus();
+                                    ProjectState.open_viewer(item-index);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         Text {
             text: ProjectState.loading ? "Loading…" : ProjectState.status;
             color: Theme.text-muted;
@@ -366,6 +519,112 @@ export component ProjectScreen inherits Rectangle {
             vertical-alignment: center;
             overflow: elide;
         }
+        }
+    }
+
+    // Full-size image viewer. Mounted only while `ProjectState.viewer_open`, over the whole
+    // screen: Prev/Next step through `gallery`, Close (and Escape, handled above by `keys`)
+    // return to the grid.
+    if ProjectState.viewer_open: viewer := Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        background: Theme.backdrop;
+
+        // Swallows clicks so a press over the backdrop does not reach the grid behind it.
+        TouchArea { }
+
+        VerticalLayout {
+            padding: Theme.pad-screen;
+            spacing: Theme.gap;
+
+            HorizontalLayout {
+                height: Theme.row-height;
+                spacing: Theme.gap;
+
+                Text {
+                    text: ProjectState.viewer_title == "" ? "Image" : ProjectState.viewer_title;
+                    color: Theme.text;
+                    font-size: Theme.font-size-title;
+                    font-weight: Theme.font-weight-medium;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+
+                gallery_viewer_close_button := Button {
+                    text: "Close";
+                    kind: "secondary";
+                    clicked => {
+                        ProjectState.close_viewer();
+                    }
+                }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                background: Theme.surface;
+                border-radius: Theme.radius-card;
+                clip: true;
+
+                Image {
+                    source: ProjectState.viewer_image;
+                    image-fit: contain;
+                    width: 100%;
+                    height: 100%;
+                }
+
+                if ProjectState.viewer_image_state == "loading" || ProjectState.viewer_image_state == "": Text {
+                    text: "Loading…";
+                    color: Theme.text-muted;
+                    width: 100%;
+                    height: 100%;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                if ProjectState.viewer_image_state == "failed": Text {
+                    text: "Could not load image";
+                    color: Theme.text-muted;
+                    width: 100%;
+                    height: 100%;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            if ProjectState.viewer_description != "": Text {
+                text: ProjectState.viewer_description;
+                color: Theme.text-muted;
+                font-size: Theme.font-size-small;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                height: Theme.row-height;
+                spacing: Theme.gap;
+                alignment: center;
+
+                gallery_viewer_prev_button := Button {
+                    text: "Prev";
+                    kind: "secondary";
+                    enabled: ProjectState.viewer_index > 0;
+                    clicked => {
+                        ProjectState.viewer_prev();
+                    }
+                }
+
+                gallery_viewer_next_button := Button {
+                    text: "Next";
+                    kind: "secondary";
+                    enabled: ProjectState.viewer_index >= 0
+                        && ProjectState.viewer_index < ProjectState.gallery.length - 1;
+                    clicked => {
+                        ProjectState.viewer_next();
+                    }
+                }
+            }
         }
     }
 }
@@ -461,14 +720,57 @@ export component PreviewProjectScreen inherits ProjectScreen {
         // `NotesDialog` is mounted in `app.slint`, not here, but the preview shows it anyway
         // so a change to it can be checked without running the whole app: see the `notes_open`
         // below and the `NotesDialog` instance this component adds, wired the same way
-        // `app.slint`'s own copy is.
+        // `app.slint`'s own copy is. It starts closed so the Gallery sample below is what
+        // shows on open; set `notes_open` to `true` by hand while previewing that dialog.
         ProjectState.notes_title = "0.6.13";
         ProjectState.notes_blocks = [
             { kind: "heading3", text: "0.6.13" },
             { kind: "bullet", text: "Fixed a crash on some AMD drivers", depth: 0 },
             { kind: "bullet", text: "Improved chunk build throughput", depth: 0 },
         ];
-        ProjectState.notes_open = true;
+        ProjectState.notes_open = false;
+
+        // Gallery tab sample: five thumbnails (one with no title, one still "loading", one
+        // "failed"), and the viewer opened on the first, so both the grid and the overlay
+        // show in one preview.
+        ProjectState.tab = 2;
+        ProjectState.gallery = [
+            {
+                url: "https://example.invalid/gallery/underwater.png",
+                title: "Underwater Lighting Improvements",
+                description: "Sodium fixes many graphical issues with smooth lighting while underwater.",
+                image_state: "ready",
+            },
+            {
+                url: "https://example.invalid/gallery/biome.png",
+                title: "Biome Blending Improvements",
+                description: "Sodium improves biome blending to use gradients across each block.",
+                image_state: "ready",
+            },
+            {
+                url: "https://example.invalid/gallery/fluid.png",
+                title: "",
+                description: "",
+                image_state: "loading",
+            },
+            {
+                url: "https://example.invalid/gallery/shading.png",
+                title: "Block Shading Improvements",
+                description: "",
+                image_state: "failed",
+            },
+            {
+                url: "https://example.invalid/gallery/0-5-2.png",
+                title: "Sodium 0.5.2",
+                description: "",
+                image_state: "ready",
+            },
+        ];
+        ProjectState.viewer_open = true;
+        ProjectState.viewer_index = 0;
+        ProjectState.viewer_title = ProjectState.gallery[0].title;
+        ProjectState.viewer_description = ProjectState.gallery[0].description;
+        ProjectState.viewer_image_state = "ready";
     }
 
     if ProjectState.notes_open: NotesDialog {

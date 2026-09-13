@@ -1021,6 +1021,7 @@ async fn mock_modrinth(server: &MockServer, project: bool) {
     serve(server, OLD_MOD_FILE_PATH, OLD_MOD_JAR.to_vec()).await;
     serve(server, ICON_PATH, ICON_PNG.to_vec()).await;
     serve(server, DESC_IMAGE_PATH, ICON_PNG.to_vec()).await;
+    serve(server, GALLERY_IMAGE_PATH, ICON_PNG.to_vec()).await;
 
     if project {
         // A version's changelog comes from the single-version endpoint, which the version
@@ -1102,6 +1103,12 @@ async fn mock_modrinth(server: &MockServer, project: bool) {
     }
 
     let pack = mrpack_bytes(&base, PACK_NAME);
+    serve(
+        server,
+        &format!("/project/{PACK_PROJECT}"),
+        race_project(&base, PACK_PROJECT, PACK_TITLE).into_bytes(),
+    )
+    .await;
     serve(
         server,
         &format!("/project/{PACK_PROJECT}/version"),
@@ -1188,6 +1195,25 @@ const ICON_PNG: &[u8] = &[
 /// server rather than a CDN: a body left as recorded would fetch a real banner over the real
 /// internet.
 const DESC_IMAGE_PATH: &str = "/images/banner.png";
+
+/// Path the mock serves every gallery image at. The recorded fixture's six entries all point
+/// here once rewritten, so one mock covers the whole gallery rather than one per entry — a
+/// gallery flow only needs to prove the count and the viewer, not that six different images
+/// decode to six different pixels.
+const GALLERY_IMAGE_PATH: &str = "/images/gallery.png";
+
+/// How many `gallery` entries the recorded fixture carries, and so how many thumbnails the
+/// Gallery tab must show.
+pub const MOD_GALLERY_COUNT: usize = 6;
+
+/// The first gallery entry's title, in `ordering` order — `map_gallery`
+/// (`gcl-core/src/sources/modrinth.rs`) sorts by it, and the recorded fixture's first entry is
+/// already `ordering: 0`.
+pub const MOD_GALLERY_FIRST_TITLE: &str = "Underwater Lighting Improvements";
+
+/// The second gallery entry's title in that same order (`ordering: 1`), which is what Next
+/// must show after the first.
+pub const MOD_GALLERY_SECOND_TITLE: &str = "Biome Blending Improvements";
 
 /// The description the mock serves for that project.
 ///
@@ -1529,6 +1555,12 @@ fn race_project(base: &str, id: &str, title: &str) -> String {
     project["title"] = serde_json::json!(title);
     project["icon_url"] = serde_json::json!(format!("{base}{ICON_PATH}"));
     project["body"] = serde_json::json!(format!("# {title}\n"));
+    // `ProjectState.open` fetches every gallery thumbnail regardless of which tab is showing,
+    // and the recorded fixture's gallery still names `cdn.modrinth.com`: left in place, opening
+    // any of these (the generation-guard race, or a modpack's project page) would reach the
+    // real internet. Nothing here tests the Gallery tab, so the gallery is dropped instead of
+    // rewritten.
+    project["gallery"] = serde_json::json!([]);
     project.to_string()
 }
 
@@ -1593,6 +1625,16 @@ fn mod_project(base: &str) -> String {
         serde_json::from_str(MODRINTH_PROJECT).expect("read the recorded project");
     project["icon_url"] = serde_json::json!(format!("{base}{ICON_PATH}"));
     project["body"] = serde_json::json!(mod_body(base));
+    // The recorded fixture names `cdn.modrinth.com` for every gallery entry, so a flow left
+    // as recorded would fetch real screenshots over the real internet, the same reason the
+    // icon and the description's own image are rewritten above.
+    let gallery = project["gallery"]
+        .as_array_mut()
+        .expect("the recorded project carries a gallery");
+    for image in gallery.iter_mut() {
+        image["url"] = serde_json::json!(format!("{base}{GALLERY_IMAGE_PATH}"));
+        image["raw_url"] = serde_json::json!(format!("{base}{GALLERY_IMAGE_PATH}"));
+    }
     project.to_string()
 }
 

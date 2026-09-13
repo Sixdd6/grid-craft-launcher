@@ -165,6 +165,19 @@ loads a `.env` before running the tests.
   id, for `modpacks::fetch_pack` — `Source::project` refuses a modpack outright, since a modpack
   is not a `ContentKind`.
 
+## Project gallery
+
+`Project.gallery: Vec<GalleryImage>` carries the images a source publishes with a project.
+`GalleryImage { url, thumbnail_url, title, description, featured }`. Modrinth maps `gallery`
+from `GET /project/{id}`, sorted by each entry's `ordering`, with `thumbnail_url: None` — it
+serves the smaller `url` and the full-size `raw_url`, not a thumbnail pair, and this parser
+takes `url`. CurseForge maps `screenshots` from `GET /v1/mods/{id}` in response order, with
+`thumbnail_url: Some(..)` and `featured: false` always: it publishes neither an order nor a
+featured flag. An empty `title` or `description` becomes `None` on both sides, and a response
+with no gallery key parses to an empty `Vec`, never an error. **VERIFY: the CurseForge
+`screenshots` shape is unconfirmed live** — no `CURSEFORGE_API_KEY` on this machine, the same
+caveat `description` and `changelog` carry.
+
 ## Latest version and install state (`Launcher`)
 
 `latest_versions(source, hits, target)` and `latest_versions_each(source, hits, target,

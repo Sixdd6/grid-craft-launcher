@@ -20,7 +20,7 @@ use std::time::Duration;
 use gcl_core::content::AddRequest;
 use gcl_core::instances::model::Loader;
 use gcl_core::sources::SourceId;
-use gcl_ui::{App, AppWindow, BrowserState, InstanceState, InstancesState, Screen};
+use gcl_ui::{App, AppWindow, BrowserState, InstanceState, InstancesState, ProjectState, Screen};
 use slint::{ComponentHandle, Model};
 use support::{Mocks, TestApp};
 
@@ -109,6 +109,7 @@ fn the_browser_adds_content_and_installs_a_modpack() {
         searching_and_adding_a_mod_installs_its_file(app).await;
         disabling_and_enabling_renames_the_file(app).await;
         removing_deletes_the_file(app).await;
+        clicking_a_modpack_row_opens_its_details(app).await;
         installing_a_modpack_from_the_pack_search(app).await;
         installing_a_modpack_from_a_file(app).await;
         rows_show_the_latest_version_and_what_is_installed(app).await;
@@ -480,6 +481,50 @@ async fn removing_deletes_the_file(app: &TestApp) {
     );
 }
 
+/// (c2) Clicking a modpack row opens that project's details, the same way clicking a mod row
+/// does.
+///
+/// A mod row's `clicked` calls `BrowserScreen.open_project`, which `app.slint` wires to
+/// `ProjectState.open` plus `App.navigate(Screen.project)`. This asserts the modpack list
+/// behaves the same. Navigation is synchronous, so nothing here depends on the details fetch.
+async fn clicking_a_modpack_row_opens_its_details(app: &TestApp) {
+    app.click("Rail::rail_browser");
+    wait_for_browser(app).await;
+
+    let kinds = app.window.global::<BrowserState>().get_kind_labels();
+    let modpack = (0..kinds.row_count())
+        .find(|i| kinds.row_data(*i).is_some_and(|label| label == "modpack"))
+        .expect("Modrinth offers the modpack kind");
+    app.select_combo("BrowserScreen::kind_combo", modpack);
+    app.wait_until(
+        "the modpack panel to come up",
+        |_| app.has("BrowserScreen::install_pack_button"),
+        QUICK,
+    )
+    .await;
+
+    app.type_into("SearchBox::search_field", "fabulously");
+    support::pump();
+    app.click("BrowserScreen::search_button");
+    app.wait_until(
+        "the modpack results to arrive",
+        |window| !pack_titles(window).is_empty(),
+        QUICK,
+    )
+    .await;
+
+    app.click_nth("BrowserScreen::pack_row", 0);
+    app.wait_until(
+        "the project details screen to open for the modpack",
+        |window| {
+            window.global::<App>().get_screen() == Screen::Project
+                && window.global::<ProjectState>().get_project_id() == support::PACK_PROJECT
+        },
+        QUICK,
+    )
+    .await;
+}
+
 /// (d) The modpack kind searches for packs, and Install makes a new instance.
 async fn installing_a_modpack_from_the_pack_search(app: &TestApp) {
     app.click("Rail::rail_browser");
@@ -726,6 +771,7 @@ async fn rows_show_the_latest_version_and_what_is_installed(app: &TestApp) {
     updating_replaces_the_older_file(app).await;
     changing_the_target_re_answers_every_row(app).await;
     adding_leaves_the_row_reading_installed(app).await;
+    the_results_stay_on_screen_while_an_install_runs(app);
 }
 
 /// (f4) A plain Add answers the same way an Update does: the row it was pressed on says the
@@ -799,6 +845,36 @@ async fn adding_leaves_the_row_reading_installed(app: &TestApp) {
     assert!(
         !state_texts(app).iter().any(|text| text == CHECKING),
         "and no row went back to `{CHECKING}`: only the row that changed was rewritten"
+    );
+}
+
+/// (f7) An install must not wipe the page of hits off the screen.
+///
+/// `install` (`src/screens/browser.rs`) sets `BrowserState.busy` before it runs the add, and
+/// it stays set until the job answers. The results list, its column header, and the empty
+/// state are all gated on `!BrowserState.loading` in `ui/screens/browser.slint` — a search
+/// flag `install` never touches — so while an install runs the list must stay mounted.
+/// `busy` is set here by hand rather than raced against a real click, because the flag is
+/// exactly what the install sets and the rows must survive it either way.
+fn the_results_stay_on_screen_while_an_install_runs(app: &TestApp) {
+    let rows_before = app.all("BrowserScreen::row_open").len();
+    assert!(
+        rows_before > 0,
+        "the page of hits is on screen to begin with"
+    );
+
+    let state = app.window.global::<BrowserState>();
+    state.set_busy(true);
+    support::pump();
+
+    let rows_during = app.all("BrowserScreen::row_open").len();
+    state.set_busy(false);
+    support::pump();
+
+    assert_eq!(
+        rows_during, rows_before,
+        "the results stay on screen while an install runs: `busy` disables the buttons, \
+         it does not unmount the list"
     );
 }
 

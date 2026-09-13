@@ -59,6 +59,7 @@ fn the_details_screen_installs_a_chosen_version() {
         the_versions_tab_installs_the_older_version(app).await;
         the_notes_button_shows_the_changelog(app).await;
         a_changelog_the_source_refuses_shows_the_error(app).await;
+        the_gallery_tab_shows_thumbnails_and_the_viewer_steps_and_closes(app).await;
         the_content_list_shows_the_title_over_the_file_name(app).await;
         checking_updates_backfills_the_title_and_keeps_the_mark(app).await;
         the_source_button_reopens_the_details(app).await;
@@ -546,6 +547,82 @@ async fn a_changelog_the_source_refuses_shows_the_error(app: &TestApp) {
         QUICK,
     )
     .await;
+}
+
+/// (c4) The Gallery tab shows one thumbnail per recorded entry, a thumbnail opens the viewer,
+/// Next steps to the following image, and Escape closes the viewer without leaving the tab —
+/// a second Escape is what `escape_does_what_back_does` (further down) proves goes to `back()`.
+async fn the_gallery_tab_shows_thumbnails_and_the_viewer_steps_and_closes(app: &TestApp) {
+    app.click_nth("TabBar::tab_entry", 2);
+    app.wait_until(
+        "the gallery tab to list every recorded entry",
+        |window| {
+            window.global::<ProjectState>().get_tab() == 2
+                && app.all("ProjectScreen::gallery_thumbnail").len() == support::MOD_GALLERY_COUNT
+        },
+        QUICK,
+    )
+    .await;
+
+    app.wait_until(
+        "the first thumbnail's image to be decoded",
+        |window| {
+            window
+                .global::<ProjectState>()
+                .get_gallery()
+                .row_data(0)
+                .map(|row| row.image_state.to_string())
+                == Some("ready".to_string())
+        },
+        QUICK,
+    )
+    .await;
+
+    app.click_nth("ProjectScreen::gallery_thumbnail", 0);
+    app.wait_until(
+        "the viewer to open on the first image and decode it",
+        |window| {
+            let state = window.global::<ProjectState>();
+            state.get_viewer_open()
+                && state.get_viewer_index() == 0
+                && state.get_viewer_image_state() == "ready"
+        },
+        QUICK,
+    )
+    .await;
+    assert_eq!(
+        app.window.global::<ProjectState>().get_viewer_title(),
+        support::MOD_GALLERY_FIRST_TITLE,
+        "the viewer's title is the gallery entry's own caption, not the project's"
+    );
+
+    app.click("ProjectScreen::gallery_viewer_next_button");
+    app.wait_until(
+        "Next to step to the second image",
+        |window| {
+            let state = window.global::<ProjectState>();
+            state.get_viewer_index() == 1 && state.get_viewer_image_state() == "ready"
+        },
+        QUICK,
+    )
+    .await;
+    assert_eq!(
+        app.window.global::<ProjectState>().get_viewer_title(),
+        support::MOD_GALLERY_SECOND_TITLE
+    );
+
+    app.press_key(slint::platform::Key::Escape);
+    app.wait_until(
+        "Escape to close the viewer",
+        |window| !window.global::<ProjectState>().get_viewer_open(),
+        QUICK,
+    )
+    .await;
+    assert_eq!(
+        app.window.global::<ProjectState>().get_tab(),
+        2,
+        "Escape closes the viewer and leaves the screen on the Gallery tab, not Back"
+    );
 }
 
 /// (d) The content list shows the project's title over the file it installed.

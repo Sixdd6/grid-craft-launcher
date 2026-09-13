@@ -10,18 +10,22 @@ use gcl_core::content::{AddRequest, compatible_loaders};
 use gcl_core::instances::model::{ContentKind, Loader};
 use gcl_core::launcher::ProjectDetails;
 use gcl_core::sources::richtext::Block as CoreBlock;
-use gcl_core::sources::{ReleaseKind, SourceId, Version, VersionFilter};
+use gcl_core::sources::{GalleryImage, ReleaseKind, SourceId, Version, VersionFilter};
 use slint::{ComponentHandle, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 
 use crate::bridge::Bridge;
-use crate::models::{decode_description_image, short_time};
+use crate::models::{decode_description_image, gallery_row, short_time};
 use crate::screens::browser::conflict_note;
-use crate::{AppWindow, Block, ContentVersionRow, ProjectState, Screen};
+use crate::{AppWindow, Block, ContentVersionRow, GalleryImageRow, ProjectState, Screen};
 
 /// How many images one description (or one changelog) fetches, in the order its blocks name
 /// them. The rest keep the `[Image: alt]` failure text forever, per the description-rendering
 /// spec: a pathological description is a degrade to accept, not a bug to chase further.
 const MAX_IMAGES: usize = 20;
+
+/// A block's (or a gallery row's) index and the url to fetch for it, in the order
+/// [`prepare_images`]/[`prepare_gallery`] found them.
+type ImagePairs = Vec<(usize, String)>;
 
 /// Which block list an image-fetch job's completions land in.
 ///
@@ -57,6 +61,22 @@ struct Shared {
     /// The Notes modal's own counter, bumped once per `open_notes()`: a changelog's images load
     /// independently of the description's, so the two must not share one counter.
     notes_generation: Arc<AtomicU64>,
+    /// Bumped once per `open()`, guarding the Gallery tab's own thumbnail fetch: it loads
+    /// independently of the description's and the Notes modal's images, so a project opened
+    /// after this one, or a thumbnail batch left over from it, cannot paint over the new
+    /// project's grid.
+    gallery_generation: Arc<AtomicU64>,
+    /// Bumped once per `open_viewer()`/`close_viewer()`/`viewer_next()`/`viewer_prev()`: the
+    /// viewer's own full-size fetch is a second, independent job from the thumbnail grid's,
+    /// per the `slint-ui` skill's generation-counter pattern, so a fast Next/Prev discards a
+    /// slow fetch behind it rather than painting it over the image the user has since moved
+    /// to.
+    viewer_generation: Arc<AtomicU64>,
+    /// The full gallery this project's last `open()` loaded, kept so `open_viewer` (and
+    /// `viewer_next`/`viewer_prev`) can fetch a full-size image by index without threading the
+    /// whole list back out of `ProjectState.gallery`, which only carries the thumbnail-sized
+    /// `GalleryImageRow` shape.
+    gallery: Arc<std::sync::Mutex<Vec<GalleryImage>>>,
 }
 
 /// Binds the `ProjectState` global to the launcher.
@@ -127,6 +147,30 @@ pub fn wire(window: &AppWindow, bridge: &Bridge) {
         let shared = shared.clone();
         state.on_close_notes(move || close_notes(&bridge, &shared));
     }
+
+    {
+        let bridge = bridge.clone();
+        let shared = shared.clone();
+        state.on_open_viewer(move |index| open_viewer(&bridge, &shared, index as usize));
+    }
+
+    {
+        let bridge = bridge.clone();
+        let shared = shared.clone();
+        state.on_close_viewer(move || close_viewer(&bridge, &shared));
+    }
+
+    {
+        let bridge = bridge.clone();
+        let shared = shared.clone();
+        state.on_viewer_next(move || step_viewer(&bridge, &shared, 1));
+    }
+
+    {
+        let bridge = bridge.clone();
+        let shared = shared.clone();
+        state.on_viewer_prev(move || step_viewer(&bridge, &shared, -1));
+    }
 }
 
 /// The target instance's Minecraft version and loader, carried alongside a version list so a
@@ -195,6 +239,17 @@ fn open(
     state.set_notes_title("".into());
     state.set_notes_blocks(ModelRc::new(VecModel::from(Vec::<Block>::new())));
     state.set_notes_loading(false);
+    // The Gallery tab and its viewer are about this project's own images; a new project has
+    // none of those loaded yet, and the viewer (if it was open) was showing a picture of
+    // whatever project was open before.
+    state.set_gallery(ModelRc::new(VecModel::from(Vec::<GalleryImageRow>::new())));
+    state.set_viewer_open(false);
+    state.set_viewer_index(-1);
+    state.set_viewer_title("".into());
+    state.set_viewer_description("".into());
+    state.set_viewer_image(slint::Image::default());
+    state.set_viewer_image_state("".into());
+    *shared.gallery.lock().expect("gallery lock") = Vec::new();
 
     let Some(source_id) = SourceId::parse(&source) else {
         state.set_status(format!("Unknown content source: {source}").into());
@@ -209,12 +264,22 @@ fn open(
     // The Notes modal's own counter is bumped too: closing it above does not race a fetch job
     // that was already in flight for the version it was showing.
     shared.notes_generation.fetch_add(1, Ordering::SeqCst);
+    // The gallery grid's own counter, and the viewer's: a thumbnail batch or a full-size
+    // fetch left over from the project this open replaced must not paint over the new
+    // project's grid or a viewer the user has since closed.
+    let gallery_generation = shared.gallery_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    shared.viewer_generation.fetch_add(1, Ordering::SeqCst);
     let bridge_for_images = bridge.clone();
+    let bridge_for_gallery = bridge.clone();
+    let shared_for_gallery = shared.clone();
     run_reporting(
         bridge,
         bridge_for_images,
         Arc::clone(&shared.image_generation),
         generation,
+        bridge_for_gallery,
+        shared_for_gallery,
+        gallery_generation,
         "Project details",
         false,
         move |launcher| load(launcher, source_id, &project_id, &target_slug, show_all),
@@ -441,12 +506,18 @@ fn install(bridge: &Bridge, version_id: String) {
 ///
 /// `images_bridge` and `image_generation`/`generation` are what starts the description's own
 /// image-fetch job once `apply` has written the blocks it describes: `apply` returns the
-/// (already capped) list of urls to fetch, in block order.
+/// (already capped) list of urls to fetch, in block order. `gallery_bridge`/`shared_for_gallery`/
+/// `gallery_generation` do the same for the Gallery tab's thumbnails, a separate job behind its
+/// own counter.
+#[allow(clippy::too_many_arguments)]
 fn run_reporting(
     bridge: &Bridge,
     images_bridge: Bridge,
     image_generation: Arc<AtomicU64>,
     generation: u64,
+    gallery_bridge: Bridge,
+    shared_for_gallery: Shared,
+    gallery_generation: u64,
     label: &'static str,
     preserve_status: bool,
     job: impl FnOnce(&gcl_core::Launcher) -> Result<Opened, gcl_core::Error> + Send + 'static,
@@ -462,13 +533,20 @@ fn run_reporting(
         state.set_loading(false);
         match result {
             Ok(opened) => {
-                let urls = apply(window, opened, preserve_status);
+                let (urls, gallery_urls) =
+                    apply(window, opened, preserve_status, &shared_for_gallery);
                 fetch_description_images(
                     &images_bridge,
                     ImageTarget::Description,
                     image_generation,
                     generation,
                     urls,
+                );
+                fetch_gallery_images(
+                    &gallery_bridge,
+                    Arc::clone(&shared_for_gallery.gallery_generation),
+                    gallery_generation,
+                    gallery_urls,
                 );
             }
             Err(_) => state.set_status(format!("{label} failed").into()),
@@ -497,7 +575,12 @@ fn run_versions_reporting(
 /// Fills every property `open` promised, from a successful full load. Returns the block index
 /// and url of every image the caller's image-fetch job should fetch, in block order, already
 /// capped at [`MAX_IMAGES`] and marked "loading" on the blocks that were just written.
-fn apply(window: &AppWindow, opened: Opened, preserve_status: bool) -> Vec<(usize, String)> {
+fn apply(
+    window: &AppWindow,
+    opened: Opened,
+    preserve_status: bool,
+    shared_for_gallery: &Shared,
+) -> (ImagePairs, ImagePairs) {
     let state = window.global::<ProjectState>();
     let project = opened.details.project;
     let kind = project.kind;
@@ -511,6 +594,13 @@ fn apply(window: &AppWindow, opened: Opened, preserve_status: bool) -> Vec<(usiz
     let mut blocks: Vec<Block> = opened.details.blocks.iter().map(block_row).collect();
     let pairs = prepare_images(&mut blocks, MAX_IMAGES);
     state.set_blocks(ModelRc::new(VecModel::from(blocks)));
+
+    let mut gallery_rows: Vec<GalleryImageRow> = project.gallery.iter().map(gallery_row).collect();
+    let gallery_pairs = prepare_gallery(&mut gallery_rows, MAX_IMAGES);
+    state.set_gallery(ModelRc::new(VecModel::from(gallery_rows)));
+    // Kept so `open_viewer` (and `viewer_next`/`viewer_prev`) can fetch a full-size image by
+    // index: `GalleryImageRow` only carries the thumbnail-sized shape, not the full `url`.
+    *shared_for_gallery.gallery.lock().expect("gallery lock") = project.gallery;
 
     let rows = build_version_rows(
         &opened.versions,
@@ -527,7 +617,7 @@ fn apply(window: &AppWindow, opened: Opened, preserve_status: bool) -> Vec<(usiz
             state.set_status(format!("{} version(s)", opened.versions.len()).into());
         }
     }
-    pairs
+    (pairs, gallery_pairs)
 }
 
 /// Touches only `versions` and `status`, from a successful versions-only reload. `kind` comes
@@ -630,12 +720,226 @@ fn close_notes(bridge: &Bridge, shared: &Shared) {
     }
 }
 
+/// Opens the viewer overlay on `gallery`'s row at `index` and fetches its full-size image.
+///
+/// Title and description come straight from the `GalleryImage` `open`'s last full load kept in
+/// `shared.gallery`, so they show right away; only the pixels wait on the fetch. An `index`
+/// past the end of that list (a stale click racing a project the user has since navigated away
+/// from) is a no-op.
+fn open_viewer(bridge: &Bridge, shared: &Shared, index: usize) {
+    let Some(window) = bridge.weak().upgrade() else {
+        return;
+    };
+    let Some((url, title, description)) = shared
+        .gallery
+        .lock()
+        .expect("gallery lock")
+        .get(index)
+        .map(|item| {
+            (
+                item.url.clone(),
+                item.title.clone().unwrap_or_default(),
+                item.description.clone().unwrap_or_default(),
+            )
+        })
+    else {
+        return;
+    };
+
+    let state = window.global::<ProjectState>();
+    state.set_viewer_open(true);
+    state.set_viewer_index(index as i32);
+    state.set_viewer_title(title.as_str().into());
+    state.set_viewer_description(description.as_str().into());
+    state.set_viewer_image(slint::Image::default());
+    state.set_viewer_image_state("loading".into());
+
+    fetch_viewer_image(bridge, shared, url);
+}
+
+/// Closes the viewer overlay. Bumps its generation counter too, so a full-size fetch still in
+/// flight for the image it was showing paints nothing after this.
+fn close_viewer(bridge: &Bridge, shared: &Shared) {
+    shared.viewer_generation.fetch_add(1, Ordering::SeqCst);
+    if let Some(window) = bridge.weak().upgrade() {
+        let state = window.global::<ProjectState>();
+        state.set_viewer_open(false);
+        state.set_viewer_index(-1);
+        state.set_viewer_title("".into());
+        state.set_viewer_description("".into());
+        state.set_viewer_image(slint::Image::default());
+        state.set_viewer_image_state("".into());
+    }
+}
+
+/// Moves the viewer by `delta` rows (`1` for Next, `-1` for Prev), clamped to `gallery`'s
+/// bounds, and reopens on the row it lands on. A `delta` that would leave the current row (the
+/// first row and Prev, or the last and Next) is a no-op: the screen already disables that
+/// button, but a key press reaches here regardless of what is drawn.
+fn step_viewer(bridge: &Bridge, shared: &Shared, delta: i32) {
+    let Some(window) = bridge.weak().upgrade() else {
+        return;
+    };
+    let state = window.global::<ProjectState>();
+    let len = shared.gallery.lock().expect("gallery lock").len() as i32;
+    if len == 0 {
+        return;
+    }
+    let current = state.get_viewer_index();
+    let next = (current + delta).clamp(0, len - 1);
+    if next == current {
+        return;
+    }
+    open_viewer(bridge, shared, next as usize);
+}
+
+/// Fetches and decodes one gallery image's full-size bytes off the UI thread, and paints it
+/// onto the viewer once it lands — unless `shared.viewer_generation` has moved on by then,
+/// which means the user closed the viewer or stepped to another image while this fetch was in
+/// flight, per the `slint-ui` skill's generation-counter pattern.
+fn fetch_viewer_image(bridge: &Bridge, shared: &Shared, url: String) {
+    let generation = shared.viewer_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let counter = Arc::clone(&shared.viewer_generation);
+    bridge.run(
+        "Gallery image",
+        move |launcher| {
+            Ok(launcher
+                .fetch_image(&url)
+                .ok()
+                .and_then(|path| std::fs::read(path).ok())
+                .and_then(|bytes| decode_description_image(&bytes).ok())
+                .map(DecodedImage::from))
+        },
+        move |window, decoded: Option<DecodedImage>| {
+            if counter.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            let state = window.global::<ProjectState>();
+            match decoded {
+                Some(image) => {
+                    let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
+                        &image.pixels,
+                        image.width,
+                        image.height,
+                    );
+                    state.set_viewer_image(slint::Image::from_rgba8(buffer));
+                    state.set_viewer_image_state("ready".into());
+                }
+                None => state.set_viewer_image_state("failed".into()),
+            }
+        },
+    );
+}
+
+/// Marks every gallery row's initial load state: "loading" for the first `cap` rows with a
+/// non-empty `url`, "failed" for any past that cap, the same degrade [`prepare_images`] gives a
+/// pathological description. Returns each "loading" row's index and url, in order, for the
+/// fetch job to work through.
+fn prepare_gallery(rows: &mut [GalleryImageRow], cap: usize) -> ImagePairs {
+    let mut pairs = Vec::new();
+    for (index, row) in rows.iter_mut().enumerate() {
+        if row.url.is_empty() {
+            continue;
+        }
+        if pairs.len() < cap {
+            row.image_state = "loading".into();
+            pairs.push((index, row.url.to_string()));
+        } else {
+            row.image_state = "failed".into();
+        }
+    }
+    pairs
+}
+
+/// Fetches and decodes up to [`MAX_IMAGES`] gallery thumbnails sequentially in one job, the
+/// same shape [`fetch_description_images`] uses for a description: painting each one onto
+/// `ProjectState.gallery` as it arrives, deduped by url, and checked against `counter` both
+/// before a fetch starts and inside every posted closure.
+fn fetch_gallery_images(
+    bridge: &Bridge,
+    counter: Arc<AtomicU64>,
+    generation: u64,
+    pairs: ImagePairs,
+) {
+    if pairs.is_empty() {
+        return;
+    }
+    let mut order: Vec<String> = Vec::new();
+    let mut indices_by_url: std::collections::HashMap<String, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (index, url) in pairs {
+        indices_by_url
+            .entry(url.clone())
+            .or_insert_with(|| {
+                order.push(url.clone());
+                Vec::new()
+            })
+            .push(index);
+    }
+
+    let weak = bridge.weak().clone();
+    bridge.run(
+        "Gallery images",
+        move |launcher| {
+            for url in order {
+                if counter.load(Ordering::SeqCst) != generation {
+                    break;
+                }
+                let decoded = launcher
+                    .fetch_image(&url)
+                    .ok()
+                    .and_then(|path| std::fs::read(path).ok())
+                    .and_then(|bytes| decode_description_image(&bytes).ok())
+                    .map(DecodedImage::from);
+                let counter = Arc::clone(&counter);
+                let indices = indices_by_url.get(&url).cloned().unwrap_or_default();
+                let _ = weak.upgrade_in_event_loop(move |window| {
+                    if counter.load(Ordering::SeqCst) != generation {
+                        return;
+                    }
+                    let state = window.global::<ProjectState>();
+                    apply_gallery_image(&state, &indices, decoded);
+                });
+            }
+            Ok(())
+        },
+        |_window, ()| {},
+    );
+}
+
+/// Writes one decoded gallery thumbnail onto every row index in `indices`, the same in-place
+/// update [`apply_image`] does for a description block.
+fn apply_gallery_image(state: &ProjectState<'_>, indices: &[usize], decoded: Option<DecodedImage>) {
+    let model = state.get_gallery();
+    let image = decoded.as_ref().map(|image| {
+        let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
+            &image.pixels,
+            image.width,
+            image.height,
+        );
+        slint::Image::from_rgba8(buffer)
+    });
+    for &index in indices {
+        let Some(mut row) = model.row_data(index) else {
+            continue;
+        };
+        match &image {
+            Some(image) => {
+                row.image = image.clone();
+                row.image_state = "ready".into();
+            }
+            None => row.image_state = "failed".into(),
+        }
+        model.set_row_data(index, row);
+    }
+}
+
 /// Marks every image block's initial load state: "loading" for the first `cap` blocks with a
 /// non-empty `url`, in the order they appear, and "failed" for any past that cap — the
 /// permanent `[Image: alt]` degrade the description-rendering spec accepts for a pathological
 /// description rather than a bug to chase further. Returns each "loading" block's index and
 /// url, in that same order, for the fetch job to work through.
-fn prepare_images(blocks: &mut [Block], cap: usize) -> Vec<(usize, String)> {
+fn prepare_images(blocks: &mut [Block], cap: usize) -> ImagePairs {
     let mut pairs = Vec::new();
     for (index, block) in blocks.iter_mut().enumerate() {
         if block.kind.as_str() != "image" || block.url.is_empty() {
@@ -670,7 +974,7 @@ fn fetch_description_images(
     target: ImageTarget,
     counter: Arc<AtomicU64>,
     generation: u64,
-    pairs: Vec<(usize, String)>,
+    pairs: ImagePairs,
 ) {
     if pairs.is_empty() {
         return;

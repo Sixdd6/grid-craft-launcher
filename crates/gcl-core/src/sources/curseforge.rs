@@ -17,9 +17,9 @@ use crate::http::HttpClient;
 use crate::instances::model::Loader;
 
 use super::{
-    ContentKind, Dependency, DependencyKind, Error, LatestFileIndex, Project, ReleaseKind,
-    SearchHit, SearchPage, SearchQuery, Source, SourceId, Version, VersionFile, VersionFilter,
-    pack_page_url, page_url,
+    ContentKind, Dependency, DependencyKind, Error, GalleryImage, LatestFileIndex, Project,
+    ReleaseKind, SearchHit, SearchPage, SearchQuery, Source, SourceId, Version, VersionFile,
+    VersionFilter, pack_page_url, page_url,
 };
 
 /// Production base URL for the CurseForge Core API.
@@ -688,6 +688,7 @@ fn map_project(m: RawMod, classes: &ClassIds) -> Option<Project> {
         description: m.summary,
         kind,
         slug: m.slug,
+        gallery: map_gallery(m.screenshots),
     })
 }
 
@@ -840,6 +841,37 @@ struct RawMod {
     links: Option<RawLinks>,
     #[serde(default)]
     latest_files_indexes: Vec<RawLatestFileIndex>,
+    /// Images published with the mod. Absent on a mod with none.
+    #[serde(default)]
+    screenshots: Vec<RawScreenshot>,
+}
+
+/// One `screenshots` entry of `GET /v1/mods/{id}`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawScreenshot {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    description: String,
+    thumbnail_url: String,
+    url: String,
+}
+
+/// Maps a mod's `screenshots` onto [`GalleryImage`], in the order the API sent them.
+///
+/// CurseForge publishes no ordering and no featured flag, so the response order stands
+/// and `featured` is always false.
+fn map_gallery(raw: Vec<RawScreenshot>) -> Vec<GalleryImage> {
+    raw.into_iter()
+        .map(|s| GalleryImage {
+            url: s.url,
+            thumbnail_url: Some(s.thumbnail_url),
+            title: Some(s.title).filter(|t| !t.is_empty()),
+            description: Some(s.description).filter(|d| !d.is_empty()),
+            featured: false,
+        })
+        .collect()
 }
 
 /// One entry of a mod's `latestFilesIndexes`: the newest file for one game version and loader.

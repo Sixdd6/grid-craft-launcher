@@ -21,11 +21,12 @@ screen opened that dialog.
   one field a prompt collects.
 - Row controls inside a repeater: `row_open`, `row_launch`, `row_delete`, `row_select`,
   `row_refresh`, `row_toggle`, `row_install`, `row_title`, `row_icon`, `row_source_button`,
-  `pack_row`, `pack_install_button`, `version_row`, `version_install_button`. A repeater gives
-  every instance the same id, so a test takes the nth handle `find_by_element_id` yields, in
-  list order. `version_install_button`'s `accessible-label` is "Install `<number>`" or
-  "Installed `<number>`", or "Not for `<mc>` `<loader>`" for a version the target instance
-  cannot run, through `Button`'s `access_label` override, not the button's plain "Install"/
+  `pack_row`, `pack_title`, `pack_install_button`, `version_row`, `version_install_button`. A
+  repeater gives every instance the same id, so a test takes the nth handle
+  `find_by_element_id` yields, in list order. `version_install_button`'s `accessible-label`
+  is "Install `<number>`" or "Installed `<number>`", or "Not for `<mc>` `<loader>`" for a
+  version the target instance cannot run, through `Button`'s `access_label` override, not the
+  button's plain "Install"/
   "Installed" text. `ProjectScreen::version_row` is a plain `Rectangle`, not a `ListRow`: its
   click is unwired, so it carries no `accessible-role`.
   `InstanceScreen::row_source_button` is the same idea for a content row's source: its
@@ -75,7 +76,6 @@ is what a `restart()` call needs.
 ## Ids
 
 | File | Id | Element |
-| --- | --- | --- |
 | `crates/gcl-ui/ui/app.slint` | `AppWindow::nav` | `FocusScope` |
 | `crates/gcl-ui/ui/app.slint` | `AppWindow::error_dialog` | `Dialog` |
 | `crates/gcl-ui/ui/app.slint` | `AppWindow::error_text` | `TextEdit` |
@@ -154,6 +154,8 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_results_header` | `Rectangle` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_row` | `ListRow` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_layout` | `VerticalLayout` |
+| `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_title` | `Rectangle` |
+| `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_title_text` | `Text` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_action` | `VerticalLayout` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::pack_install_button` | `Button` |
 | `crates/gcl-ui/ui/screens/browser.slint` | `BrowserScreen::results_header` | `Rectangle` |
@@ -224,6 +226,13 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::version_kind_badge` | `Text` |
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::version_notes_button` | `Button` |
 | `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::version_install_button` | `Button` |
+| `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::gallery_body` | `VerticalLayout` |
+| `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::gallery_thumbnail` | `Rectangle` |
+| `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::thumb_image` | `Image` |
+| `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::viewer` | `Rectangle` |
+| `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::gallery_viewer_close_button` | `Button` |
+| `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::gallery_viewer_prev_button` | `Button` |
+| `crates/gcl-ui/ui/screens/project.slint` | `ProjectScreen::gallery_viewer_next_button` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::root_chooser` | `Chooser` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::parallel_spin` | `SpinBox` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::parallel_apply_button` | `Button` |
@@ -236,4 +245,4 @@ is what a `restart()` call needs.
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::msa_client_id_button` | `Button` |
 | `crates/gcl-ui/ui/screens/settings.slint` | `SettingsScreen::verify_button` | `Button` |
 
-Total: 159 named elements.
+Total: 168 named elements.

@@ -9,12 +9,12 @@ use gcl_core::instances::model::{ContentEntry, ContentKind, GcPreset, InstanceCo
 use gcl_core::launcher::{InstallState, LatestVersion};
 use gcl_core::loaders::LoaderVersion;
 use gcl_core::mojang::manifest::{ManifestEntry, VersionType};
-use gcl_core::sources::{ReleaseKind, SearchHit, SourceId, Version};
+use gcl_core::sources::{GalleryImage, ReleaseKind, SearchHit, SourceId, Version};
 
 use super::{
     account_row, content_row, decode_description_image, decode_icon, format_bytes,
-    format_downloads, gc_rows, instance_row, latest_row_fields, loader_version_row, search_row,
-    setting_rows, short_date, short_time, version_row,
+    format_downloads, gallery_row, gc_rows, instance_row, latest_row_fields, loader_version_row,
+    search_row, setting_rows, short_date, short_time, version_row,
 };
 
 /// A version fixture with a chosen number and id, everything else filled in with a value the
@@ -658,4 +658,36 @@ fn a_fresh_row_is_unknown_with_no_latest_number_unlike_a_failed_lookup() {
         number, "0.5.9",
         "a failed lookup still knows the latest version"
     );
+}
+
+#[test]
+fn gallery_row_prefers_the_thumbnail_url_when_the_source_has_one() {
+    let image = GalleryImage {
+        url: "https://cdn.example/full.png".into(),
+        thumbnail_url: Some("https://cdn.example/thumb.png".into()),
+        title: Some("Underwater Lighting".into()),
+        description: Some("Smooth lighting underwater.".into()),
+        featured: true,
+    };
+    let row = gallery_row(&image);
+    assert_eq!(row.url, "https://cdn.example/thumb.png");
+    assert_eq!(row.title, "Underwater Lighting");
+    assert_eq!(row.description, "Smooth lighting underwater.");
+    assert_eq!(row.image_state, "");
+}
+
+/// Modrinth serves no separate thumbnail, so a row with none falls back to the full image.
+#[test]
+fn gallery_row_falls_back_to_the_full_image_with_no_thumbnail() {
+    let image = GalleryImage {
+        url: "https://cdn.example/full.png".into(),
+        thumbnail_url: None,
+        title: None,
+        description: None,
+        featured: false,
+    };
+    let row = gallery_row(&image);
+    assert_eq!(row.url, "https://cdn.example/full.png");
+    assert_eq!(row.title, "");
+    assert_eq!(row.description, "");
 }

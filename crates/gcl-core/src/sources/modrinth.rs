@@ -13,8 +13,9 @@ use crate::http::HttpClient;
 use crate::instances::model::Loader;
 
 use super::{
-    ContentKind, Dependency, DependencyKind, Error, Project, ReleaseKind, SearchHit, SearchPage,
-    SearchQuery, Source, SourceId, Version, VersionFile, VersionFilter, pack_page_url, page_url,
+    ContentKind, Dependency, DependencyKind, Error, GalleryImage, Project, ReleaseKind, SearchHit,
+    SearchPage, SearchQuery, Source, SourceId, Version, VersionFile, VersionFilter, pack_page_url,
+    page_url,
 };
 
 /// Production base URL for the Modrinth API.
@@ -106,6 +107,7 @@ impl Modrinth {
             title: raw.title,
             description: raw.description,
             kind,
+            gallery: map_gallery(raw.gallery),
         };
         Ok((project, raw.body))
     }
@@ -519,6 +521,40 @@ struct RawProject {
     #[serde(default)]
     body: String,
     project_type: String,
+    /// Images published with the project. Absent on a project with none.
+    #[serde(default)]
+    gallery: Vec<RawGalleryImage>,
+}
+
+/// One `gallery` entry of `GET /project/{id}`.
+#[derive(Debug, Deserialize)]
+struct RawGalleryImage {
+    url: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    featured: bool,
+    /// Display position. Absent on an older entry, which then sorts first.
+    #[serde(default)]
+    ordering: i64,
+}
+
+/// Maps a project's `gallery` onto [`GalleryImage`], sorted by `ordering`.
+///
+/// Modrinth serves no separate thumbnail, so `thumbnail_url` is always `None`.
+fn map_gallery(mut raw: Vec<RawGalleryImage>) -> Vec<GalleryImage> {
+    raw.sort_by_key(|g| g.ordering);
+    raw.into_iter()
+        .map(|g| GalleryImage {
+            url: g.url,
+            thumbnail_url: None,
+            title: g.title.filter(|t| !t.is_empty()),
+            description: g.description.filter(|d| !d.is_empty()),
+            featured: g.featured,
+        })
+        .collect()
 }
 
 /// One version, from `GET /version/{id}`, `GET /project/{id}/version`, or

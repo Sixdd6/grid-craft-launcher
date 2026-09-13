@@ -748,9 +748,9 @@ fn install(
     let request = add_request(source, project_id, kind, world, version);
 
     let refresh = (bridge.clone(), shared.clone(), project_id.to_string());
-    state.set_loading(true);
+    state.set_busy(true);
     state.set_status("Installing\u{2026}".into());
-    run_reporting(
+    run_reporting_busy(
         bridge,
         "Add content",
         move |launcher| launcher.add_content(&slug, request),
@@ -810,8 +810,8 @@ fn pick_world(
         version,
     };
     let shared = shared.clone();
-    state.set_loading(true);
-    run_reporting(
+    state.set_busy(true);
+    run_reporting_busy(
         bridge,
         "List worlds",
         move |launcher| launcher.list_worlds(&slug),
@@ -867,9 +867,9 @@ fn install_pack(bridge: &Bridge, shared: &Shared, name: &str) {
         },
     };
 
-    state.set_loading(true);
+    state.set_busy(true);
     state.set_status("Installing the modpack…".into());
-    run_reporting(
+    run_reporting_busy(
         bridge,
         "Install modpack",
         move |launcher| match (&pack, source) {
@@ -1632,7 +1632,9 @@ impl From<(u32, u32, Vec<u8>)> for DecodedIcon {
 /// Runs a launcher call and clears `loading` however it ends.
 ///
 /// [`Bridge::run_with_error`] opens the error dialog and always calls back, so this only has
-/// to drop the flag the screen was left on and say which step failed.
+/// to drop the flag the screen was left on and say which step failed. Used by a search: only
+/// `search`/`search_packs` set `loading`, so this is what gates the results list, its header,
+/// and the keyboard scope while a search is in flight.
 fn run_reporting<T: Send + 'static>(
     bridge: &Bridge,
     label: &'static str,
@@ -1642,6 +1644,26 @@ fn run_reporting<T: Send + 'static>(
     bridge.run_with_error(label, job, move |window, result| {
         let state = window.global::<BrowserState>();
         state.set_loading(false);
+        match result {
+            Ok(value) => done(window, value),
+            Err(_) => state.set_status(format!("{label} failed").into()),
+        }
+    });
+}
+
+/// The same shape as [`run_reporting`], for an install: `install`, `pick_world`, and
+/// `install_pack` set `busy` instead of `loading`, so an install never unmounts the results
+/// list, its header, or the keyboard scope the way `loading` does. `busy` only disables the
+/// action buttons and feeds the status line.
+fn run_reporting_busy<T: Send + 'static>(
+    bridge: &Bridge,
+    label: &'static str,
+    job: impl FnOnce(&gcl_core::Launcher) -> Result<T, gcl_core::Error> + Send + 'static,
+    done: impl FnOnce(&AppWindow, T) + Send + 'static,
+) {
+    bridge.run_with_error(label, job, move |window, result| {
+        let state = window.global::<BrowserState>();
+        state.set_busy(false);
         match result {
             Ok(value) => done(window, value),
             Err(_) => state.set_status(format!("{label} failed").into()),
